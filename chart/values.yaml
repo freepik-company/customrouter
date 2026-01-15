@@ -1,0 +1,208 @@
+# CustomRouter Helm Chart Values
+# This chart deploys the CustomRouter operator and optionally one or more external processors
+
+# -- Global settings
+global:
+  # -- Image pull secrets for all deployments
+  imagePullSecrets: []
+  # -- Common labels to add to all resources
+  commonLabels: {}
+
+# -- Operator (controller-manager) configuration
+operator:
+  # -- Enable the operator deployment
+  enabled: true
+
+  # -- Number of replicas
+  replicaCount: 1
+
+  image:
+    repository: ghcr.io/freepik-company/customrouter/operator
+    # -- Image tag (defaults to vX.Y.Z from Chart.appVersion if empty)
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  # -- Service account configuration
+  serviceAccount:
+    # -- Create a service account
+    create: true
+    # -- Annotations to add to the service account
+    annotations: {}
+    # -- Name of the service account (auto-generated if not set)
+    name: ""
+
+  # -- Pod security context
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+
+  # -- Container security context
+  securityContext:
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+
+  # -- Resource requests and limits
+  resources:
+    limits:
+      cpu: 500m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 64Mi
+
+  # -- Arguments for the manager binary
+  # Add or remove flags as needed
+  args:
+    - --leader-elect
+    - --health-probe-bind-address=:8081
+
+  # -- Node selector
+  nodeSelector: {}
+
+  # -- Tolerations
+  tolerations: []
+
+  # -- Affinity rules
+  affinity: {}
+
+  # -- Pod annotations
+  podAnnotations: {}
+
+  # -- Pod labels
+  podLabels: {}
+
+  # -- Liveness probe configuration
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: 8081
+    initialDelaySeconds: 15
+    periodSeconds: 20
+
+  # -- Readiness probe configuration
+  readinessProbe:
+    httpGet:
+      path: /readyz
+      port: 8081
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+# -- External processors configuration
+# You can define multiple external processors with different configurations
+externalProcessors:
+  # -- Default external processor
+  default:
+    # -- Enable this external processor
+    enabled: true
+
+    # -- Number of replicas
+    replicaCount: 1
+
+    image:
+      repository: ghcr.io/freepik-company/customrouter/external-processor
+      # -- Image tag (defaults to vX.Y.Z from Chart.appVersion if empty)
+      tag: ""
+      pullPolicy: IfNotPresent
+
+    # -- Service account configuration
+    serviceAccount:
+      # -- Create a service account
+      create: true
+      # -- Annotations to add to the service account
+      annotations: {}
+      # -- Name of the service account (auto-generated if not set)
+      name: ""
+
+    # -- Arguments for the external processor binary
+    # Add or remove flags as needed
+    args:
+      - --debug=false
+      - --addr=:9001
+      - --target-name=default
+      - --access-log=true
+      - --grpc-max-recv-msg-size=4194304
+      - --grpc-max-send-msg-size=4194304
+      - --grpc-max-concurrent-streams=1000
+      - --grpc-keepalive-time=30s
+      - --grpc-keepalive-timeout=10s
+      - --grpc-max-connection-idle=5m
+      - --grpc-max-connection-age=30m
+      - --grpc-max-connection-age-grace=10s
+
+    # -- Service configuration
+    service:
+      type: ClusterIP
+      port: 9001
+
+    # -- Pod security context
+    podSecurityContext: {}
+
+    # -- Container security context
+    securityContext: {}
+
+    # -- Resource requests and limits
+    resources:
+      limits:
+        cpu: 500m
+        memory: 128Mi
+      requests:
+        cpu: 100m
+        memory: 64Mi
+
+    # -- Node selector
+    nodeSelector: {}
+
+    # -- Tolerations
+    tolerations: []
+
+    # -- Affinity rules
+    affinity: {}
+
+    # -- Pod annotations
+    podAnnotations: {}
+
+    # -- Pod labels
+    podLabels: {}
+
+    # -- Liveness probe configuration
+    livenessProbe:
+      grpc:
+        port: 9001
+      initialDelaySeconds: 5
+      periodSeconds: 10
+
+    # -- Readiness probe configuration
+    readinessProbe:
+      grpc:
+        port: 9001
+      initialDelaySeconds: 5
+      periodSeconds: 5
+
+# -- Install CRDs
+crds:
+  # -- Install CustomHTTPRoute and ExternalProcessorAttachment CRDs
+  install: true
+
+# -- Extra objects to deploy (raw manifests)
+# Useful for deploying CustomHTTPRoute, ExternalProcessorAttachment, or any other resources
+extraObjects: []
+# - apiVersion: customrouter.freepik.com/v1alpha1
+#   kind: CustomHTTPRoute
+#   metadata:
+#     name: my-routes
+#   spec:
+#     targetRef:
+#       name: default
+#     hostnames:
+#       - example.com
+#     rules:
+#       - matches:
+#           - path: /
+#         backendRefs:
+#           - name: my-service
+#             namespace: default
+#             port: 80

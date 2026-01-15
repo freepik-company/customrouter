@@ -1,0 +1,21 @@
+{{- range $name, $config := .Values.externalProcessors }}
+{{- if $config.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "customrouter.extproc.name" (dict "name" $name "root" $) }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "customrouter.extproc.labels" (dict "name" $name "root" $) | nindent 4 }}
+spec:
+  type: {{ $config.service.type }}
+  ports:
+    - name: grpc
+      port: {{ $config.service.port }}
+      targetPort: grpc
+      protocol: TCP
+  selector:
+    {{- include "customrouter.extproc.selectorLabels" (dict "name" $name "root" $) | nindent 4 }}
+{{- end }}
+{{- end }}

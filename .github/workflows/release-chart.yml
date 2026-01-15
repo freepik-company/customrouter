@@ -1,0 +1,70 @@
+name: Release Chart
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g., v1.0.0)'
+        required: true
+      checkout_from_master:
+        description: 'Checkout code from master instead of tag (useful when fix is in master)'
+        type: boolean
+        default: false
+
+env:
+  REGISTRY: ghcr.io
+  CHART_NAME: ${{ github.repository }}/helm-chart
+
+jobs:
+  release-chart:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.checkout_from_master == 'true' && 'master' || github.event.inputs.tag) || github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Get version from tag
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG=$(git describe --tags --exact-match ${{ github.event.workflow_run.head_sha }} 2>/dev/null || echo "")
+          fi
+          if [[ ! "$TAG" =~ ^v ]]; then
+            echo "No version tag found, skipping"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Update Chart.yaml version
+        run: |
+          sed -i "s/^version:.*/version: ${{ steps.version.outputs.version }}/" chart/Chart.yaml
+          sed -i "s/^appVersion:.*/appVersion: \"${{ steps.version.outputs.version }}\"/" chart/Chart.yaml
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Log in to Container Registry
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+      - name: Package chart
+        run: |
+          helm package chart
+
+      - name: Push chart to OCI registry
+        run: |
+          helm push customrouter-${{ steps.version.outputs.version }}.tgz oci://${{ env.REGISTRY }}/${{ env.CHART_NAME }}
