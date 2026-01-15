@@ -1,0 +1,26 @@
+# ServiceEntry - AUTOMATICALLY REGISTERED BY ISTIO FOR INTERNAL SERVICES IN KUBERNETES
+#
+# This file is kept as a reference only. Istio automatically
+# creates ServiceEntries internally for all backend services existing in a Kubernetes cluster.
+#
+# apiVersion: networking.istio.io/v1beta1
+# kind: ServiceEntry
+# metadata:
+#  name: customrouter-aplicacion-podinfo-aplicacion-01-9898
+#  namespace: istio  # Configured via --serviceentry-namespace flag
+#  labels:
+#    app.kubernetes.io/managed-by: customrouter-controller
+#    app.kubernetes.io/name: customrouter
+# spec:
+#    hosts:
+#      - aplicacion-podinfo.aplicacion-01.svc.cluster.local
+#    location: MESH_INTERNAL
+#    ports:
+#      - number: 9898
+#        name: http
+#        protocol: HTTP
+#    resolution: DNS
+#    endpoints:
+#      - address: aplicacion-podinfo.aplicacion-01.svc.cluster.local
+#        ports:
+#          http: 9898

@@ -1,0 +1,54 @@
+# EnvoyFilter to inject custom routes that use cluster_header for dynamic routing
+#
+# This EnvoyFilter injects a route at the beginning of each vhost that:
+# 1. Only matches if x-customrouter-cluster header is present (set by ext_proc)
+# 2. Routes to the cluster specified in that header
+#
+# This allows CustomHTTPRoutes to coexist with regular HTTPRoutes:
+# - If ext_proc sets the header → CustomHTTPRoute wins (this route matches first)
+# - If ext_proc doesn't set header → Regular HTTPRoute/VirtualService wins
+#
+# Prerequisites:
+#   1. Deploy the customrouter-external-processor
+#   2. Apply the envoyfilter.yaml (ext_proc filter)
+#   3. Apply this EnvoyFilter
+#
+# Usage:
+#   kubectl apply -f envoyfilter-routes.yaml
+
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: customrouter-routes
+  namespace: istio
+spec:
+  workloadSelector:
+    labels:
+      istio: gateway-production
+
+  configPatches:
+    # Inject route at the beginning of ALL vhosts in this Gateway
+    # This applies to all listeners (http.80, https.443, etc.)
+    - applyTo: HTTP_ROUTE
+      match:
+        context: GATEWAY
+        routeConfiguration: {}  # All route configurations (all listeners)
+      patch:
+        operation: INSERT_FIRST
+        value:
+          name: "customrouter-dynamic-route"
+          match:
+            prefix: "/"
+            headers:
+              # Only match if ext_proc set this header
+              - name: "x-customrouter-cluster"
+                present_match: true
+          route:
+            # Use the cluster name from the header
+            cluster_header: "x-customrouter-cluster"
+            timeout: 30s
+            retry_policy:
+              retry_on: "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes"
+              num_retries: 2
+              retriable_status_codes:
+                - 503

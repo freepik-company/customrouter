@@ -1,0 +1,75 @@
+{{- range $name, $config := .Values.externalProcessors }}
+{{- if $config.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "customrouter.extproc.name" (dict "name" $name "root" $) }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "customrouter.extproc.labels" (dict "name" $name "root" $) | nindent 4 }}
+spec:
+  replicas: {{ $config.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "customrouter.extproc.selectorLabels" (dict "name" $name "root" $) | nindent 6 }}
+  template:
+    metadata:
+      {{- with $config.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "customrouter.extproc.selectorLabels" (dict "name" $name "root" $) | nindent 8 }}
+        {{- with $config.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- include "customrouter.imagePullSecrets" $ | nindent 6 }}
+      serviceAccountName: {{ include "customrouter.extproc.serviceAccountName" (dict "name" $name "config" $config "root" $) }}
+      {{- with $config.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: external-processor
+          image: "{{ $config.image.repository }}:{{ $config.image.tag }}"
+          imagePullPolicy: {{ $config.image.pullPolicy }}
+          {{- with $config.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: grpc
+              containerPort: {{ $config.service.port }}
+              protocol: TCP
+          {{- with $config.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $config.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $config.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $config.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with $config.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $config.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $config.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}

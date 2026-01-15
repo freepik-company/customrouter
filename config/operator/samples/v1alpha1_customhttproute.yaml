@@ -1,0 +1,87 @@
+apiVersion: customrouter.freepik.com/v1alpha1
+kind: CustomHTTPRoute
+metadata:
+  labels:
+    app.kubernetes.io/name: customrouter
+    app.kubernetes.io/managed-by: kustomize
+  name: magnific-routes
+spec:
+  # Target identifies which external processor will handle these routes
+  # The external processor should be started with --target-name=default
+  targetRef:
+    name: default
+
+  hostnames:
+    - www.magnific.com
+    - magnific.com
+
+  # Path prefixes (languages, regions, etc.)
+  # Automatically prepended to the paths defined in the rules
+  pathPrefixes:
+    values: [es, fr, it, de, pt, ja, ko]
+    policy: Optional  # Optional | Required | Disabled
+                      # Optional = generates routes with and without prefix
+                      # Required = only generates routes with prefix
+                      # Disabled = never generates prefixes
+
+  rules:
+    # Matches with PathPrefix (default, faster)
+    - matches:
+        - path: /calendar/halloween
+        - path: /collection
+      backendRefs:
+        - name: web-en
+          namespace: web
+          port: 80
+
+    # Exact match with high priority
+    - matches:
+        - path: /health
+          type: Exact
+          priority: 2000  # High priority, evaluated first
+      backendRefs:
+        - name: health
+          namespace: infra
+          port: 8080
+      pathPrefixes:
+        policy: Disabled
+
+    # Match with regex (Go regexp syntax)
+    - matches:
+        - path: ^/users/[0-9]+/profile$
+          type: Regex
+          priority: 1500  # Medium-high priority
+      backendRefs:
+        - name: users-api
+          namespace: backend
+          port: 8080
+      pathPrefixes:
+        policy: Disabled
+
+    # Match with regex using default priority (1000)
+    - matches:
+        - path: ^/other/[0-9]+/path$
+          type: Regex
+      backendRefs:
+        - name: other-path
+          namespace: backend
+          port: 8080
+
+    # API without language prefixes
+    - matches:
+        - path: /api/v1
+      backendRefs:
+        - name: api
+          namespace: backend
+          port: 8080
+      pathPrefixes:
+        policy: Disabled
+
+    # Default with low priority
+    - matches:
+        - path: /
+          priority: 100  # Low priority, evaluated last
+      backendRefs:
+        - name: default
+          namespace: web
+          port: 80

@@ -1,0 +1,31 @@
+# ExternalProcessorAttachment automatically generates EnvoyFilters to attach
+# an external processor (ext_proc) to Istio Gateway workloads.
+#
+# When this resource is created, the controller generates two EnvoyFilters:
+#   1. <name>-extproc: Inserts the ext_proc filter into the HTTP filter chain
+#   2. <name>-routes: Injects a route that uses cluster_header for dynamic routing
+#
+# The external processor sets the header 'x-customrouter-cluster' with the target
+# cluster name, and the injected route uses this header to route traffic dynamically.
+
+apiVersion: customrouter.freepik.com/v1alpha1
+kind: ExternalProcessorAttachment
+metadata:
+  name: production-gateway
+  namespace: istio
+spec:
+  # gatewayRef specifies which Gateway workloads to attach the external processor to
+  gatewayRef:
+    # selector matches Gateway pods by their labels
+    # These labels should match the workloadSelector of your Istio Gateway
+    selector:
+      istio: gateway-production
+
+  # externalProcessorRef specifies the external processor service to use
+  externalProcessorRef:
+    service:
+      name: customrouter-external-processor
+      namespace: customrouter
+
+      # gRPC port where the external processor is listening
+      port: 9001

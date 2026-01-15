@@ -1,0 +1,35 @@
+{{- range $name, $config := .Values.externalProcessors }}
+{{- if $config.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "customrouter.extproc.name" (dict "name" $name "root" $) }}
+  labels:
+    {{- include "customrouter.extproc.labels" (dict "name" $name "root" $) | nindent 4 }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "customrouter.extproc.name" (dict "name" $name "root" $) }}
+  labels:
+    {{- include "customrouter.extproc.labels" (dict "name" $name "root" $) | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "customrouter.extproc.name" (dict "name" $name "root" $) }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "customrouter.extproc.serviceAccountName" (dict "name" $name "config" $config "root" $) }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}

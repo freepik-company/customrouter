@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: customrouter-external-processor
+  labels:
+    app.kubernetes.io/name: customrouter-external-processor
+    app.kubernetes.io/component: external-processor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: customrouter-external-processor
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: customrouter-external-processor
+        app.kubernetes.io/component: external-processor
+    spec:
+      serviceAccountName: customrouter-external-processor
+      containers:
+        - name: external-processor
+          image: ghcr.io/freepik-company/customrouter/external-processor:latest
+          args:
+            - --addr=:9001
+            - --target-name=default
+            - --access-log=true
+            # gRPC server configuration (production defaults)
+            - --grpc-max-recv-msg-size=4194304
+            - --grpc-max-send-msg-size=4194304
+            - --grpc-max-concurrent-streams=1000
+            - --grpc-keepalive-time=30s
+            - --grpc-keepalive-timeout=10s
+            - --grpc-max-connection-idle=5m
+            - --grpc-max-connection-age=30m
+            - --grpc-max-connection-age-grace=10s
+          ports:
+            - name: grpc
+              containerPort: 9001
+              protocol: TCP
+          livenessProbe:
+            grpc:
+              port: 9001
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            grpc:
+              port: 9001
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            limits:
+              cpu: 500m
+              memory: 128Mi
+            requests:
+              cpu: 100m
+              memory: 64Mi

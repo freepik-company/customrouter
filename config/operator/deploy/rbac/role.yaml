@@ -1,0 +1,59 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - customrouter.freepik.com
+  resources:
+  - customhttproutes
+  - externalprocessorattachments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - customrouter.freepik.com
+  resources:
+  - customhttproutes/finalizers
+  - externalprocessorattachments/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - customrouter.freepik.com
+  resources:
+  - customhttproutes/status
+  - externalprocessorattachments/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - networking.istio.io
+  resources:
+  - envoyfilters
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
