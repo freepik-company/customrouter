@@ -1,0 +1,21 @@
+{{- if and .Values.operator.enabled .Values.operator.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "customrouter.operator.name" . }}
+  labels:
+    {{- include "customrouter.operator.labels" . | nindent 4 }}
+spec:
+  {{- with .Values.operator.pdb.minAvailable }}
+  minAvailable: {{ . }}
+  {{- end }}
+  {{- with .Values.operator.pdb.maxUnavailable }}
+  maxUnavailable: {{ . }}
+  {{- end }}
+  {{- with .Values.operator.pdb.unhealthyPodEvictionPolicy }}
+  unhealthyPodEvictionPolicy: {{ . }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "customrouter.operator.selectorLabels" . | nindent 6 }}
+{{- end }}

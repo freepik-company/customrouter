@@ -91,6 +91,48 @@ operator:
     initialDelaySeconds: 5
     periodSeconds: 10
 
+  # -- Pod Disruption Budget configuration
+  pdb:
+    # -- Enable PDB
+    enabled: false
+    # -- Minimum number of available pods (can be number or percentage)
+    minAvailable: ""
+    # -- Maximum number of unavailable pods (can be number or percentage)
+    maxUnavailable: 1
+    # -- Unhealthy pod eviction policy (IfHealthyBudget or AlwaysAllow)
+    unhealthyPodEvictionPolicy: ""
+
+  # -- Horizontal Pod Autoscaler configuration
+  hpa:
+    # -- Enable HPA
+    enabled: false
+    # -- Minimum number of replicas
+    minReplicas: 1
+    # -- Maximum number of replicas
+    maxReplicas: 5
+    # -- Metrics for autoscaling
+    metrics:
+      - type: Resource
+        resource:
+          name: cpu
+          target:
+            type: Utilization
+            averageUtilization: 80
+    # -- Behavior for scaling (optional)
+    behavior: {}
+    # scaleDown:
+    #   stabilizationWindowSeconds: 300
+    #   policies:
+    #     - type: Percent
+    #       value: 10
+    #       periodSeconds: 60
+    # scaleUp:
+    #   stabilizationWindowSeconds: 0
+    #   policies:
+    #     - type: Percent
+    #       value: 100
+    #       periodSeconds: 15
+
 # -- External processors configuration
 # You can define multiple external processors with different configurations
 externalProcessors:
@@ -181,6 +223,48 @@ externalProcessors:
         port: 9001
       initialDelaySeconds: 5
       periodSeconds: 5
+
+    # -- Pod Disruption Budget configuration
+    pdb:
+      # -- Enable PDB
+      enabled: false
+      # -- Minimum number of available pods (can be number or percentage)
+      minAvailable: ""
+      # -- Maximum number of unavailable pods (can be number or percentage)
+      maxUnavailable: 1
+      # -- Unhealthy pod eviction policy (IfHealthyBudget or AlwaysAllow)
+      unhealthyPodEvictionPolicy: ""
+
+    # -- Horizontal Pod Autoscaler configuration
+    hpa:
+      # -- Enable HPA
+      enabled: false
+      # -- Minimum number of replicas
+      minReplicas: 1
+      # -- Maximum number of replicas
+      maxReplicas: 10
+      # -- Metrics for autoscaling
+      metrics:
+        - type: Resource
+          resource:
+            name: cpu
+            target:
+              type: Utilization
+              averageUtilization: 80
+      # -- Behavior for scaling (optional)
+      behavior: {}
+      # scaleDown:
+      #   stabilizationWindowSeconds: 300
+      #   policies:
+      #     - type: Percent
+      #       value: 10
+      #       periodSeconds: 60
+      # scaleUp:
+      #   stabilizationWindowSeconds: 0
+      #   policies:
+      #     - type: Percent
+      #       value: 100
+      #       periodSeconds: 15
 
 # -- Install CRDs
 crds:

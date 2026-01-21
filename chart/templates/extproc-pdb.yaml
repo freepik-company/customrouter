@@ -1,0 +1,24 @@
+{{- range $name, $config := .Values.externalProcessors }}
+{{- if and $config.enabled $config.pdb.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "customrouter.extproc.name" (dict "name" $name "root" $) }}
+  labels:
+    {{- include "customrouter.extproc.labels" (dict "name" $name "root" $) | nindent 4 }}
+spec:
+  {{- with $config.pdb.minAvailable }}
+  minAvailable: {{ . }}
+  {{- end }}
+  {{- with $config.pdb.maxUnavailable }}
+  maxUnavailable: {{ . }}
+  {{- end }}
+  {{- with $config.pdb.unhealthyPodEvictionPolicy }}
+  unhealthyPodEvictionPolicy: {{ . }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "customrouter.extproc.selectorLabels" (dict "name" $name "root" $) | nindent 6 }}
+{{- end }}
+{{- end }}
