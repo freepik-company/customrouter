@@ -14,6 +14,10 @@ on:
         description: 'Checkout code from master instead of tag (useful when fix is in master)'
         type: boolean
         default: false
+      preserve_app_version:
+        description: 'Keep appVersion from Chart.yaml instead of using the tag'
+        type: boolean
+        default: false
 
 env:
   REGISTRY: ghcr.io
@@ -52,7 +56,9 @@ jobs:
       - name: Update Chart.yaml version
         run: |
           sed -i "s/^version:.*/version: ${{ steps.version.outputs.version }}/" chart/Chart.yaml
-          sed -i "s/^appVersion:.*/appVersion: \"${{ steps.version.outputs.version }}\"/" chart/Chart.yaml
+          if [ "${{ github.event.inputs.preserve_app_version }}" != "true" ]; then
+            sed -i "s/^appVersion:.*/appVersion: \"${{ steps.version.outputs.version }}\"/" chart/Chart.yaml
+          fi
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
