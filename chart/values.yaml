@@ -285,7 +285,8 @@ extraObjects: []
 #       - example.com
 #     rules:
 #       - matches:
-#           - path: /
+#           - path:
+#               value: /
 #         backendRefs:
 #           - name: my-service
 #             namespace: default

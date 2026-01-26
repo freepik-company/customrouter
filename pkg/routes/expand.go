@@ -63,13 +63,13 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []Rout
 	backend := buildBackendString(rule.BackendRefs)
 
 	for _, match := range rule.Matches {
-		matchType := getMatchType(match.Type)
+		matchType := getMatchType(match.Path.Type)
 		priority := getEffectivePriority(match.Priority)
 
 		// Exact type: no expansion, use literal path
-		if match.Type == v1alpha1.MatchTypeExact {
+		if match.Path.Type == v1alpha1.MatchTypeExact {
 			routes = append(routes, Route{
-				Path:     match.Path,
+				Path:     match.Path.Value,
 				Type:     matchType,
 				Backend:  backend,
 				Priority: priority,
@@ -78,8 +78,8 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []Rout
 		}
 
 		// Regex type: expand by modifying the regex pattern
-		if match.Type == v1alpha1.MatchTypeRegex {
-			expandedPath := expandRegexWithPrefixes(match.Path, prefixes, policy)
+		if match.Path.Type == v1alpha1.MatchTypeRegex {
+			expandedPath := expandRegexWithPrefixes(match.Path.Value, prefixes, policy)
 			routes = append(routes, Route{
 				Path:     expandedPath,
 				Type:     matchType,
@@ -94,7 +94,7 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []Rout
 		case v1alpha1.PathPrefixPolicyDisabled:
 			// Only the literal path
 			routes = append(routes, Route{
-				Path:     match.Path,
+				Path:     match.Path.Value,
 				Type:     matchType,
 				Backend:  backend,
 				Priority: priority,
@@ -104,7 +104,7 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []Rout
 			// Only with prefixes, not without
 			for _, prefix := range prefixes {
 				routes = append(routes, Route{
-					Path:     "/" + prefix + match.Path,
+					Path:     "/" + prefix + match.Path.Value,
 					Type:     matchType,
 					Backend:  backend,
 					Priority: priority,
@@ -115,7 +115,7 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []Rout
 			// With prefixes AND without
 			for _, prefix := range prefixes {
 				routes = append(routes, Route{
-					Path:     "/" + prefix + match.Path,
+					Path:     "/" + prefix + match.Path.Value,
 					Type:     matchType,
 					Backend:  backend,
 					Priority: priority,
@@ -123,7 +123,7 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []Rout
 			}
 			// Also add the path without prefix
 			routes = append(routes, Route{
-				Path:     match.Path,
+				Path:     match.Path.Value,
 				Type:     matchType,
 				Backend:  backend,
 				Priority: priority,

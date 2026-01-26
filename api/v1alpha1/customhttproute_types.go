@@ -80,12 +80,9 @@ type PathPrefixes struct {
 	Policy PathPrefixPolicy `json:"policy,omitempty"`
 }
 
-// PathMatch defines a path matching rule
-type PathMatch struct {
-	// path is the value to match against the request path
-	// +required
-	Path string `json:"path"`
-
+// HTTPPathMatch describes how to select a HTTP route by matching the HTTP request path.
+// Similar format to Gateway API HTTPPathMatch.
+type HTTPPathMatch struct {
 	// type is the type of path matching
 	// PathPrefix: matches paths starting with this value (default)
 	// Exact: matches paths exactly equal to this value
@@ -93,6 +90,17 @@ type PathMatch struct {
 	// +optional
 	// +kubebuilder:default=PathPrefix
 	Type MatchType `json:"type,omitempty"`
+
+	// value is the value to match against the request path
+	// +required
+	Value string `json:"value"`
+}
+
+// PathMatch defines a path matching rule
+type PathMatch struct {
+	// path defines the HTTP path matching conditions
+	// +required
+	Path HTTPPathMatch `json:"path"`
 
 	// priority defines the order in which routes are evaluated
 	// Higher values are evaluated first. Default is 1000.

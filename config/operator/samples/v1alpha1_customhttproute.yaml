@@ -27,8 +27,10 @@ spec:
   rules:
     # Matches with PathPrefix (default, faster)
     - matches:
-        - path: /calendar/halloween
-        - path: /collection
+        - path:
+            value: /calendar/halloween
+        - path:
+            value: /collection
       backendRefs:
         - name: web-en
           namespace: web
@@ -36,8 +38,9 @@ spec:
 
     # Exact match with high priority
     - matches:
-        - path: /health
-          type: Exact
+        - path:
+            type: Exact
+            value: /health
           priority: 2000  # High priority, evaluated first
       backendRefs:
         - name: health
@@ -48,8 +51,9 @@ spec:
 
     # Match with regex (Go regexp syntax)
     - matches:
-        - path: ^/users/[0-9]+/profile$
-          type: Regex
+        - path:
+            type: Regex
+            value: ^/users/[0-9]+/profile$
           priority: 1500  # Medium-high priority
       backendRefs:
         - name: users-api
@@ -60,8 +64,9 @@ spec:
 
     # Match with regex using default priority (1000)
     - matches:
-        - path: ^/other/[0-9]+/path$
-          type: Regex
+        - path:
+            type: Regex
+            value: ^/other/[0-9]+/path$
       backendRefs:
         - name: other-path
           namespace: backend
@@ -69,7 +74,8 @@ spec:
 
     # API without language prefixes
     - matches:
-        - path: /api/v1
+        - path:
+            value: /api/v1
       backendRefs:
         - name: api
           namespace: backend
@@ -79,7 +85,8 @@ spec:
 
     # Default with low priority
     - matches:
-        - path: /
+        - path:
+            value: /
           priority: 100  # Low priority, evaluated last
       backendRefs:
         - name: default

@@ -125,9 +125,27 @@ spec:
                         description: PathMatch defines a path matching rule
                         properties:
                           path:
-                            description: path is the value to match against the request
-                              path
-                            type: string
+                            description: path defines the HTTP path matching conditions
+                            properties:
+                              type:
+                                default: PathPrefix
+                                description: |-
+                                  type is the type of path matching
+                                  PathPrefix: matches paths starting with this value (default)
+                                  Exact: matches paths exactly equal to this value
+                                  Regex: matches paths using Go regexp syntax
+                                enum:
+                                - PathPrefix
+                                - Exact
+                                - Regex
+                                type: string
+                              value:
+                                description: value is the value to match against the
+                                  request path
+                                type: string
+                            required:
+                            - value
+                            type: object
                           priority:
                             default: 1000
                             description: |-
@@ -135,18 +153,6 @@ spec:
                               Higher values are evaluated first. Default is 1000.
                             format: int32
                             type: integer
-                          type:
-                            default: PathPrefix
-                            description: |-
-                              type is the type of path matching
-                              PathPrefix: matches paths starting with this value (default)
-                              Exact: matches paths exactly equal to this value
-                              Regex: matches paths using Go regexp syntax
-                            enum:
-                            - PathPrefix
-                            - Exact
-                            - Regex
-                            type: string
                         required:
                         - path
                         type: object

@@ -95,7 +95,8 @@ spec:
   rules:
     # Simple prefix match (default)
     - matches:
-        - path: /api
+        - path:
+            value: /api
       backendRefs:
         - name: api-service
           namespace: backend
@@ -103,8 +104,9 @@ spec:
 
     # Exact match with high priority
     - matches:
-        - path: /health
-          type: Exact
+        - path:
+            type: Exact
+            value: /health
           priority: 2000
       backendRefs:
         - name: health-service
@@ -113,8 +115,9 @@ spec:
 
     # Regex match
     - matches:
-        - path: ^/users/[0-9]+/profile$
-          type: Regex
+        - path:
+            type: Regex
+            value: ^/users/[0-9]+/profile$
       backendRefs:
         - name: users-service
           namespace: backend
@@ -122,7 +125,8 @@ spec:
 
     # Default fallback (low priority)
     - matches:
-        - path: /
+        - path:
+            value: /
           priority: 100
       backendRefs:
         - name: default-service
