@@ -88,9 +88,8 @@ const (
 // PathPrefixes defines path prefixes configuration (e.g., for languages)
 type PathPrefixes struct {
 	// values is the list of prefixes to prepend to paths (e.g., ["es", "fr", "it"])
-	// +required
-	// +kubebuilder:validation:MinItems=1
-	Values []string `json:"values"`
+	// +optional
+	Values []string `json:"values,omitempty"`
 
 	// policy defines how prefixes are applied
 	// Optional: generates routes with and without prefix (default)

@@ -83,10 +83,7 @@ spec:
                       (e.g., ["es", "fr", "it"])
                     items:
                       type: string
-                    minItems: 1
                     type: array
-                required:
-                - values
                 type: object
               rules:
                 description: rules defines the routing rules
@@ -139,6 +136,9 @@ spec:
                                 description: |-
                                   path is the path to redirect to. Supports variables:
                                   ${path} - original request path
+                                  ${host} - original request host
+                                  ${method} - HTTP method (GET, POST, etc.)
+                                  ${scheme} - request scheme (http or https)
                                   ${path.segment.N} - Nth segment of the path (0-indexed)
                                 type: string
                               port:
@@ -179,6 +179,9 @@ spec:
                                 description: |-
                                   path is the new path to rewrite to. Supports variables:
                                   ${path} - original request path
+                                  ${host} - original request host
+                                  ${method} - HTTP method (GET, POST, etc.)
+                                  ${scheme} - request scheme (http or https)
                                   ${path.segment.N} - Nth segment of the path (0-indexed)
                                 type: string
                             type: object
