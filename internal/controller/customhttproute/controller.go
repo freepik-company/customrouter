@@ -106,7 +106,15 @@ func (r *CustomHTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
-	// 5. Update the status before the requeue
+	// 5. Validate the resource
+	if err = objectManifest.Validate(); err != nil {
+		r.UpdateConditionReconciled(objectManifest)
+		r.UpdateConditionConfigMapFailed(objectManifest, err.Error())
+		logger.Info(fmt.Sprintf(controller.ResourceValidationError, controller.CustomHttpRouteResourceType, req.Name, err.Error()))
+		return result, nil // Don't requeue validation errors
+	}
+
+	// 6. Update the status before the requeue
 	defer func() {
 		// Save conditions before the Get overwrites objectManifest
 		conditionsToApply := objectManifest.Status.Conditions
@@ -121,7 +129,7 @@ func (r *CustomHTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}()
 
-	// 6. The resource already exists: manage the update
+	// 7. The resource already exists: manage the update
 	err = r.ReconcileObject(ctx, watch.Modified, objectManifest)
 	if err != nil {
 		// Set Reconciled to True (manifest was processed) but ConfigMapSynced to False (ConfigMap failed)
@@ -131,7 +139,7 @@ func (r *CustomHTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return result, err
 	}
 
-	// 7. Success, update the status
+	// 8. Success, update the status
 	r.UpdateConditionReconciled(objectManifest)
 	r.UpdateConditionConfigMapSynced(objectManifest)
 

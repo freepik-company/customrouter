@@ -35,6 +35,7 @@ const (
 	ResourceFinalizersUpdateError = "Failed to update finalizer of %s '%s': %s"
 	ResourceConditionUpdateError  = "Failed to update the condition on %s '%s': %s"
 	ResourceReconcileError        = "Can not reconcile %s '%s': %s"
+	ResourceValidationError       = "Validation failed for %s '%s': %s"
 
 	//
 	ResourceFinalizer = "customrouter.freepik.com/finalizer"
