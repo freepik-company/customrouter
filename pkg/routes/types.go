@@ -24,12 +24,33 @@ import (
 	"strings"
 )
 
+// RouteAction represents an action to perform on a matched request
+type RouteAction struct {
+	Type string `json:"type"` // "redirect", "rewrite", "header-set", "header-add", "header-remove"
+
+	// For redirect
+	RedirectScheme     string `json:"redirectScheme,omitempty"`
+	RedirectHostname   string `json:"redirectHostname,omitempty"`
+	RedirectPath       string `json:"redirectPath,omitempty"`
+	RedirectPort       int32  `json:"redirectPort,omitempty"`
+	RedirectStatusCode int32  `json:"redirectStatusCode,omitempty"`
+
+	// For rewrite
+	RewritePath     string `json:"rewritePath,omitempty"`
+	RewriteHostname string `json:"rewriteHostname,omitempty"`
+
+	// For header operations
+	HeaderName string `json:"headerName,omitempty"`
+	Value      string `json:"value,omitempty"`
+}
+
 // Route represents a single expanded route for the proxy
 type Route struct {
-	Path     string `json:"path"`
-	Type     string `json:"type"` // "exact", "prefix", "regex"
-	Backend  string `json:"backend"`
-	Priority int32  `json:"priority"`
+	Path     string        `json:"path"`
+	Type     string        `json:"type"` // "exact", "prefix", "regex"
+	Backend  string        `json:"backend"`
+	Priority int32         `json:"priority"`
+	Actions  []RouteAction `json:"actions,omitempty"`
 
 	// compiledRegex is the compiled regex for regex type routes (not serialized)
 	compiledRegex *regexp.Regexp
@@ -46,6 +67,15 @@ const (
 	RouteTypeExact  = "exact"
 	RouteTypePrefix = "prefix"
 	RouteTypeRegex  = "regex"
+)
+
+// ActionType constants
+const (
+	ActionTypeRedirect     = "redirect"
+	ActionTypeRewrite      = "rewrite"
+	ActionTypeHeaderSet    = "header-set"
+	ActionTypeHeaderAdd    = "header-add"
+	ActionTypeHeaderRemove = "header-remove"
 )
 
 // ParseJSON parses a JSON byte slice into a RoutesConfig

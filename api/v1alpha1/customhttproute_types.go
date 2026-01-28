@@ -50,6 +50,27 @@ const (
 	MatchTypeRegex MatchType = "Regex"
 )
 
+// ActionType defines the type of action to perform
+// +kubebuilder:validation:Enum=redirect;rewrite;header-set;header-add;header-remove
+type ActionType string
+
+const (
+	// ActionTypeRedirect returns an HTTP redirect response to the client
+	ActionTypeRedirect ActionType = "redirect"
+
+	// ActionTypeRewrite rewrites the request path and/or hostname before forwarding
+	ActionTypeRewrite ActionType = "rewrite"
+
+	// ActionTypeHeaderSet sets a header, overwriting if it exists
+	ActionTypeHeaderSet ActionType = "header-set"
+
+	// ActionTypeHeaderAdd adds a header value, appending if it exists
+	ActionTypeHeaderAdd ActionType = "header-add"
+
+	// ActionTypeHeaderRemove removes a header
+	ActionTypeHeaderRemove ActionType = "header-remove"
+)
+
 const (
 	// DefaultPriority is the default priority for routes
 	DefaultPriority int32 = 1000
@@ -118,6 +139,96 @@ type BackendRef struct {
 	Port int32 `json:"port"`
 }
 
+// RewriteConfig defines URL rewrite configuration
+type RewriteConfig struct {
+	// path is the new path to rewrite to. Supports variables:
+	// ${path} - original request path
+	// ${host} - original request host
+	// ${method} - HTTP method (GET, POST, etc.)
+	// ${scheme} - request scheme (http or https)
+	// ${path.segment.N} - Nth segment of the path (0-indexed)
+	// +optional
+	Path string `json:"path,omitempty"`
+
+	// hostname is the new hostname to rewrite to
+	// +optional
+	Hostname string `json:"hostname,omitempty"`
+}
+
+// RedirectConfig defines HTTP redirect configuration
+type RedirectConfig struct {
+	// scheme is the scheme to redirect to (http or https)
+	// +optional
+	// +kubebuilder:validation:Enum=http;https
+	Scheme string `json:"scheme,omitempty"`
+
+	// hostname is the hostname to redirect to
+	// +optional
+	Hostname string `json:"hostname,omitempty"`
+
+	// path is the path to redirect to. Supports variables:
+	// ${path} - original request path
+	// ${host} - original request host
+	// ${method} - HTTP method (GET, POST, etc.)
+	// ${scheme} - request scheme (http or https)
+	// ${path.segment.N} - Nth segment of the path (0-indexed)
+	// +optional
+	Path string `json:"path,omitempty"`
+
+	// port is the port to redirect to
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Port *int32 `json:"port,omitempty"`
+
+	// statusCode is the HTTP status code to use for the redirect
+	// +optional
+	// +kubebuilder:default=302
+	// +kubebuilder:validation:Enum=301;302;303;307;308
+	StatusCode int32 `json:"statusCode,omitempty"`
+}
+
+// HeaderConfig defines a header name-value pair
+type HeaderConfig struct {
+	// name is the header name
+	// +required
+	Name string `json:"name"`
+
+	// value is the header value. Supports variables:
+	// ${client_ip} - client IP address from X-Forwarded-For
+	// ${request_id} - request ID from X-Request-ID header
+	// ${host} - original request host
+	// ${path} - original request path
+	// ${method} - HTTP method (GET, POST, etc.)
+	// ${scheme} - request scheme (http or https)
+	// +required
+	Value string `json:"value"`
+}
+
+// Action defines an action to perform on a matched request
+type Action struct {
+	// type is the type of action to perform
+	// +required
+	Type ActionType `json:"type"`
+
+	// redirect specifies redirect configuration (required when type is "redirect")
+	// When a redirect action is present, the request is not forwarded to the backend
+	// +optional
+	Redirect *RedirectConfig `json:"redirect,omitempty"`
+
+	// rewrite specifies URL rewrite configuration (required when type is "rewrite")
+	// +optional
+	Rewrite *RewriteConfig `json:"rewrite,omitempty"`
+
+	// header specifies header configuration (required when type is "header-set" or "header-add")
+	// +optional
+	Header *HeaderConfig `json:"header,omitempty"`
+
+	// headerName specifies the header name to remove (required when type is "header-remove")
+	// +optional
+	HeaderName string `json:"headerName,omitempty"`
+}
+
 // RulePathPrefixes defines path prefix overrides for a specific rule
 type RulePathPrefixes struct {
 	// policy overrides the spec-level pathPrefixes.policy for this rule
@@ -144,10 +255,15 @@ type Rule struct {
 	// +kubebuilder:validation:MinItems=1
 	Matches []PathMatch `json:"matches"`
 
+	// actions defines transformations to apply to matched requests
+	// Actions are applied in order: redirect (terminates), rewrite, then header modifications
+	// +optional
+	Actions []Action `json:"actions,omitempty"`
+
 	// backendRefs defines the backend services to route to
-	// +required
-	// +kubebuilder:validation:MinItems=1
-	BackendRefs []BackendRef `json:"backendRefs"`
+	// Required unless actions contains a redirect action
+	// +optional
+	BackendRefs []BackendRef `json:"backendRefs,omitempty"`
 
 	// pathPrefixes overrides the spec-level pathPrefixes configuration for this rule
 	// +optional
