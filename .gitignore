@@ -56,3 +56,6 @@ nbproject/
 
 # Debug
 .debug/
+
+# Agents
+.agents/
