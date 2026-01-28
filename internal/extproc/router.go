@@ -214,8 +214,8 @@ func (p *Processor) buildRedirectResponse(action routes.RouteAction, vars *reque
 					SetHeaders: []*corev3.HeaderValueOption{
 						{
 							Header: &corev3.HeaderValue{
-								Key:   "Location",
-								Value: redirectURL,
+								Key:      "location",
+								RawValue: []byte(redirectURL),
 							},
 						},
 					},
@@ -246,20 +246,20 @@ func (p *Processor) buildForwardResponse(route *routes.Route, vars *requestVars,
 		},
 		{
 			Header: &corev3.HeaderValue{
-				Key:   "x-original-authority",
-				Value: reqCtx.authority,
+				Key:      "x-original-authority",
+				RawValue: []byte(reqCtx.authority),
 			},
 		},
 		{
 			Header: &corev3.HeaderValue{
-				Key:   "x-customrouter-matched-path",
-				Value: route.Path,
+				Key:      "x-customrouter-matched-path",
+				RawValue: []byte(route.Path),
 			},
 		},
 		{
 			Header: &corev3.HeaderValue{
-				Key:   "x-customrouter-matched-type",
-				Value: route.Type,
+				Key:      "x-customrouter-matched-type",
+				RawValue: []byte(route.Type),
 			},
 		},
 	}
@@ -290,8 +290,8 @@ func (p *Processor) buildForwardResponse(route *routes.Route, vars *requestVars,
 				value := substituteVariables(action.Value, vars)
 				setHeaders = append(setHeaders, &corev3.HeaderValueOption{
 					Header: &corev3.HeaderValue{
-						Key:   action.HeaderName,
-						Value: value,
+						Key:      action.HeaderName,
+						RawValue: []byte(value),
 					},
 					AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 				})
@@ -306,8 +306,8 @@ func (p *Processor) buildForwardResponse(route *routes.Route, vars *requestVars,
 				value := substituteVariables(action.Value, vars)
 				setHeaders = append(setHeaders, &corev3.HeaderValueOption{
 					Header: &corev3.HeaderValue{
-						Key:   action.HeaderName,
-						Value: value,
+						Key:      action.HeaderName,
+						RawValue: []byte(value),
 					},
 					AppendAction: corev3.HeaderValueOption_APPEND_IF_EXISTS_OR_ADD,
 				})
@@ -331,15 +331,15 @@ func (p *Processor) buildForwardResponse(route *routes.Route, vars *requestVars,
 	setHeaders = append(setHeaders,
 		&corev3.HeaderValueOption{
 			Header: &corev3.HeaderValue{
-				Key:   ":authority",
-				Value: finalAuthority,
+				Key:      ":authority",
+				RawValue: []byte(finalAuthority),
 			},
 			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 		},
 		&corev3.HeaderValueOption{
 			Header: &corev3.HeaderValue{
-				Key:   "Host",
-				Value: finalAuthority,
+				Key:      "host",
+				RawValue: []byte(finalAuthority),
 			},
 			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 		},
@@ -349,8 +349,8 @@ func (p *Processor) buildForwardResponse(route *routes.Route, vars *requestVars,
 	if finalPath != vars.path {
 		setHeaders = append(setHeaders, &corev3.HeaderValueOption{
 			Header: &corev3.HeaderValue{
-				Key:   ":path",
-				Value: finalPath,
+				Key:      ":path",
+				RawValue: []byte(finalPath),
 			},
 			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 		})
