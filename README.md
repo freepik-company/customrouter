@@ -313,7 +313,8 @@ Defines routing rules for a set of hostnames. Rules are compiled into an optimiz
 | `hostnames` | List of hostnames this route applies to |
 | `pathPrefixes` | Optional prefixes to prepend to all paths |
 | `rules[].matches` | Path matching conditions |
-| `rules[].backendRefs` | Target services |
+| `rules[].actions` | Optional transformations (redirect, rewrite, headers) |
+| `rules[].backendRefs` | Target services (optional if redirect action) |
 
 ### ExternalProcessorAttachment
 
@@ -338,6 +339,87 @@ Routes are evaluated by priority (higher first). Default priority is 1000.
 
 - Use high priority (e.g., 2000) for specific routes like `/health`
 - Use low priority (e.g., 100) for catch-all routes like `/`
+
+### Actions
+
+Actions allow you to transform requests before forwarding or return immediate responses.
+
+| Action Type | Description |
+|-------------|-------------|
+| `redirect` | Return HTTP redirect (301, 302, 307, 308). No backend needed. |
+| `rewrite` | Rewrite path and/or hostname before forwarding |
+| `header-set` | Set a header (overwrite if exists) |
+| `header-add` | Add a header (append if exists) |
+| `header-remove` | Remove a header |
+
+#### Redirect Example
+
+```yaml
+rules:
+  - matches:
+      - path: /old-page
+        type: Exact
+    actions:
+      - type: redirect
+        redirect:
+          path: /new-page
+          statusCode: 301
+    # No backendRefs needed for redirects
+```
+
+#### Rewrite Example
+
+```yaml
+rules:
+  - matches:
+      - path: /blog
+    actions:
+      - type: rewrite
+        rewrite:
+          path: /cms/blog
+          hostname: cms-internal.svc.cluster.local
+    backendRefs:
+      - name: cms-service
+        namespace: backend
+        port: 8080
+```
+
+#### Header Manipulation Example
+
+```yaml
+rules:
+  - matches:
+      - path: /api
+    actions:
+      - type: header-set
+        header:
+          name: X-Real-IP
+          value: ${client_ip}
+      - type: header-add
+        header:
+          name: X-Request-ID
+          value: ${request_id}
+      - type: header-remove
+        headerName: X-Internal-Debug
+    backendRefs:
+      - name: api-service
+        namespace: backend
+        port: 8080
+```
+
+### Supported Variables
+
+Variables can be used in `redirect.path`, `rewrite.path`, and `header.value`:
+
+| Variable | Description |
+|----------|-------------|
+| `${path}` | Original request path |
+| `${host}` | Original request host |
+| `${method}` | HTTP method (GET, POST, etc.) |
+| `${scheme}` | Request scheme (http or https) |
+| `${client_ip}` | Client IP from X-Forwarded-For |
+| `${request_id}` | Request ID from X-Request-ID header |
+| `${path.segment.N}` | Nth path segment (0-indexed) |
 
 ## License
 

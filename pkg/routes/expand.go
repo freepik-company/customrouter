@@ -62,6 +62,9 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []Rout
 	// Build backend string
 	backend := buildBackendString(rule.BackendRefs)
 
+	// Convert actions from API type to routes type
+	actions := convertActions(rule.Actions)
+
 	for _, match := range rule.Matches {
 		matchType := getMatchType(match.Type)
 		priority := getEffectivePriority(match.Priority)
@@ -73,6 +76,7 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []Rout
 				Type:     matchType,
 				Backend:  backend,
 				Priority: priority,
+				Actions:  actions,
 			})
 			continue
 		}
@@ -85,6 +89,7 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []Rout
 				Type:     matchType,
 				Backend:  backend,
 				Priority: priority,
+				Actions:  actions,
 			})
 			continue
 		}
@@ -98,6 +103,7 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []Rout
 				Type:     matchType,
 				Backend:  backend,
 				Priority: priority,
+				Actions:  actions,
 			})
 
 		case v1alpha1.PathPrefixPolicyRequired:
@@ -108,6 +114,7 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []Rout
 					Type:     matchType,
 					Backend:  backend,
 					Priority: priority,
+					Actions:  actions,
 				})
 			}
 
@@ -119,6 +126,7 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []Rout
 					Type:     matchType,
 					Backend:  backend,
 					Priority: priority,
+					Actions:  actions,
 				})
 			}
 			// Also add the path without prefix
@@ -127,11 +135,58 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []Rout
 				Type:     matchType,
 				Backend:  backend,
 				Priority: priority,
+				Actions:  actions,
 			})
 		}
 	}
 
 	return routes
+}
+
+// convertActions converts API actions to route actions
+func convertActions(apiActions []v1alpha1.Action) []RouteAction {
+	if len(apiActions) == 0 {
+		return nil
+	}
+
+	actions := make([]RouteAction, 0, len(apiActions))
+	for _, a := range apiActions {
+		action := RouteAction{
+			Type: string(a.Type),
+		}
+
+		switch a.Type {
+		case v1alpha1.ActionTypeRedirect:
+			if a.Redirect != nil {
+				action.RedirectScheme = a.Redirect.Scheme
+				action.RedirectHostname = a.Redirect.Hostname
+				action.RedirectPath = a.Redirect.Path
+				if a.Redirect.Port != nil {
+					action.RedirectPort = *a.Redirect.Port
+				}
+				action.RedirectStatusCode = a.Redirect.StatusCode
+				if action.RedirectStatusCode == 0 {
+					action.RedirectStatusCode = 302
+				}
+			}
+		case v1alpha1.ActionTypeRewrite:
+			if a.Rewrite != nil {
+				action.RewritePath = a.Rewrite.Path
+				action.RewriteHostname = a.Rewrite.Hostname
+			}
+		case v1alpha1.ActionTypeHeaderSet, v1alpha1.ActionTypeHeaderAdd:
+			if a.Header != nil {
+				action.HeaderName = a.Header.Name
+				action.Value = a.Header.Value
+			}
+		case v1alpha1.ActionTypeHeaderRemove:
+			action.HeaderName = a.HeaderName
+		}
+
+		actions = append(actions, action)
+	}
+
+	return actions
 }
 
 // getEffectivePolicy returns the policy to use for a rule

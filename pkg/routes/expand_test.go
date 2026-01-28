@@ -236,3 +236,332 @@ func TestExpandedRegexMatches(t *testing.T) {
 		})
 	}
 }
+
+func TestConvertActions(t *testing.T) {
+	port := int32(443)
+	tests := []struct {
+		name     string
+		input    []v1alpha1.Action
+		expected []RouteAction
+	}{
+		{
+			name:     "nil actions",
+			input:    nil,
+			expected: nil,
+		},
+		{
+			name:     "empty actions",
+			input:    []v1alpha1.Action{},
+			expected: nil,
+		},
+		{
+			name: "redirect action",
+			input: []v1alpha1.Action{
+				{
+					Type: v1alpha1.ActionTypeRedirect,
+					Redirect: &v1alpha1.RedirectConfig{
+						Scheme:     "https",
+						Hostname:   "new.example.com",
+						Path:       "/new-path",
+						Port:       &port,
+						StatusCode: 301,
+					},
+				},
+			},
+			expected: []RouteAction{
+				{
+					Type:               "redirect",
+					RedirectScheme:     "https",
+					RedirectHostname:   "new.example.com",
+					RedirectPath:       "/new-path",
+					RedirectPort:       443,
+					RedirectStatusCode: 301,
+				},
+			},
+		},
+		{
+			name: "redirect with default status code",
+			input: []v1alpha1.Action{
+				{
+					Type: v1alpha1.ActionTypeRedirect,
+					Redirect: &v1alpha1.RedirectConfig{
+						Path: "/redirected",
+					},
+				},
+			},
+			expected: []RouteAction{
+				{
+					Type:               "redirect",
+					RedirectPath:       "/redirected",
+					RedirectStatusCode: 302,
+				},
+			},
+		},
+		{
+			name: "rewrite action with path",
+			input: []v1alpha1.Action{
+				{
+					Type:    v1alpha1.ActionTypeRewrite,
+					Rewrite: &v1alpha1.RewriteConfig{Path: "/new/path"},
+				},
+			},
+			expected: []RouteAction{
+				{Type: "rewrite", RewritePath: "/new/path"},
+			},
+		},
+		{
+			name: "rewrite action with hostname",
+			input: []v1alpha1.Action{
+				{
+					Type:    v1alpha1.ActionTypeRewrite,
+					Rewrite: &v1alpha1.RewriteConfig{Hostname: "internal.svc.local"},
+				},
+			},
+			expected: []RouteAction{
+				{Type: "rewrite", RewriteHostname: "internal.svc.local"},
+			},
+		},
+		{
+			name: "rewrite action with path and hostname",
+			input: []v1alpha1.Action{
+				{
+					Type: v1alpha1.ActionTypeRewrite,
+					Rewrite: &v1alpha1.RewriteConfig{
+						Path:     "/api/v2",
+						Hostname: "api.internal.svc.local",
+					},
+				},
+			},
+			expected: []RouteAction{
+				{
+					Type:            "rewrite",
+					RewritePath:     "/api/v2",
+					RewriteHostname: "api.internal.svc.local",
+				},
+			},
+		},
+		{
+			name: "header-set action",
+			input: []v1alpha1.Action{
+				{
+					Type:   v1alpha1.ActionTypeHeaderSet,
+					Header: &v1alpha1.HeaderConfig{Name: "X-Custom", Value: "value"},
+				},
+			},
+			expected: []RouteAction{
+				{Type: "header-set", HeaderName: "X-Custom", Value: "value"},
+			},
+		},
+		{
+			name: "header-add action",
+			input: []v1alpha1.Action{
+				{
+					Type:   v1alpha1.ActionTypeHeaderAdd,
+					Header: &v1alpha1.HeaderConfig{Name: "X-Request-ID", Value: "${request_id}"},
+				},
+			},
+			expected: []RouteAction{
+				{Type: "header-add", HeaderName: "X-Request-ID", Value: "${request_id}"},
+			},
+		},
+		{
+			name: "header-remove action",
+			input: []v1alpha1.Action{
+				{
+					Type:       v1alpha1.ActionTypeHeaderRemove,
+					HeaderName: "X-Internal",
+				},
+			},
+			expected: []RouteAction{
+				{Type: "header-remove", HeaderName: "X-Internal"},
+			},
+		},
+		{
+			name: "multiple actions",
+			input: []v1alpha1.Action{
+				{
+					Type:    v1alpha1.ActionTypeRewrite,
+					Rewrite: &v1alpha1.RewriteConfig{Path: "/cms/blog"},
+				},
+				{
+					Type:   v1alpha1.ActionTypeHeaderSet,
+					Header: &v1alpha1.HeaderConfig{Name: "X-Forwarded-Host", Value: "www.example.com"},
+				},
+				{
+					Type:   v1alpha1.ActionTypeHeaderSet,
+					Header: &v1alpha1.HeaderConfig{Name: "X-Real-IP", Value: "${client_ip}"},
+				},
+				{
+					Type:       v1alpha1.ActionTypeHeaderRemove,
+					HeaderName: "X-Internal-Only",
+				},
+			},
+			expected: []RouteAction{
+				{Type: "rewrite", RewritePath: "/cms/blog"},
+				{Type: "header-set", HeaderName: "X-Forwarded-Host", Value: "www.example.com"},
+				{Type: "header-set", HeaderName: "X-Real-IP", Value: "${client_ip}"},
+				{Type: "header-remove", HeaderName: "X-Internal-Only"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := convertActions(tt.input)
+
+			if tt.expected == nil {
+				if result != nil {
+					t.Errorf("expected nil, got %v", result)
+				}
+				return
+			}
+
+			if len(result) != len(tt.expected) {
+				t.Errorf("expected %d actions, got %d", len(tt.expected), len(result))
+				return
+			}
+
+			for i, exp := range tt.expected {
+				got := result[i]
+				if got.Type != exp.Type {
+					t.Errorf("action[%d].Type: expected %q, got %q", i, exp.Type, got.Type)
+				}
+				if got.RewritePath != exp.RewritePath {
+					t.Errorf("action[%d].RewritePath: expected %q, got %q", i, exp.RewritePath, got.RewritePath)
+				}
+				if got.RewriteHostname != exp.RewriteHostname {
+					t.Errorf("action[%d].RewriteHostname: expected %q, got %q", i, exp.RewriteHostname, got.RewriteHostname)
+				}
+				if got.RedirectScheme != exp.RedirectScheme {
+					t.Errorf("action[%d].RedirectScheme: expected %q, got %q", i, exp.RedirectScheme, got.RedirectScheme)
+				}
+				if got.RedirectHostname != exp.RedirectHostname {
+					t.Errorf("action[%d].RedirectHostname: expected %q, got %q", i, exp.RedirectHostname, got.RedirectHostname)
+				}
+				if got.RedirectPath != exp.RedirectPath {
+					t.Errorf("action[%d].RedirectPath: expected %q, got %q", i, exp.RedirectPath, got.RedirectPath)
+				}
+				if got.RedirectPort != exp.RedirectPort {
+					t.Errorf("action[%d].RedirectPort: expected %d, got %d", i, exp.RedirectPort, got.RedirectPort)
+				}
+				if got.RedirectStatusCode != exp.RedirectStatusCode {
+					t.Errorf("action[%d].RedirectStatusCode: expected %d, got %d", i, exp.RedirectStatusCode, got.RedirectStatusCode)
+				}
+				if got.HeaderName != exp.HeaderName {
+					t.Errorf("action[%d].HeaderName: expected %q, got %q", i, exp.HeaderName, got.HeaderName)
+				}
+				if got.Value != exp.Value {
+					t.Errorf("action[%d].Value: expected %q, got %q", i, exp.Value, got.Value)
+				}
+			}
+		})
+	}
+}
+
+func TestExpandRoutesWithActions(t *testing.T) {
+	cr := &v1alpha1.CustomHTTPRoute{
+		Spec: v1alpha1.CustomHTTPRouteSpec{
+			TargetRef: v1alpha1.TargetRef{Name: "default"},
+			Hostnames: []string{"example.com"},
+			Rules: []v1alpha1.Rule{
+				{
+					Matches: []v1alpha1.PathMatch{
+						{Path: "/blog", Type: v1alpha1.MatchTypePathPrefix},
+					},
+					Actions: []v1alpha1.Action{
+						{
+							Type:    v1alpha1.ActionTypeRewrite,
+							Rewrite: &v1alpha1.RewriteConfig{Path: "/cms/blog"},
+						},
+						{
+							Type:   v1alpha1.ActionTypeHeaderSet,
+							Header: &v1alpha1.HeaderConfig{Name: "X-Backend", Value: "cms"},
+						},
+					},
+					BackendRefs: []v1alpha1.BackendRef{
+						{Name: "cms-service", Namespace: "default", Port: 8080},
+					},
+				},
+			},
+		},
+	}
+
+	result := ExpandRoutes(cr)
+
+	routes, ok := result["example.com"]
+	if !ok {
+		t.Fatal("expected routes for example.com")
+	}
+
+	if len(routes) != 1 {
+		t.Fatalf("expected 1 route, got %d", len(routes))
+	}
+
+	route := routes[0]
+	if len(route.Actions) != 2 {
+		t.Fatalf("expected 2 actions, got %d", len(route.Actions))
+	}
+
+	if route.Actions[0].Type != "rewrite" || route.Actions[0].RewritePath != "/cms/blog" {
+		t.Errorf("unexpected first action: %+v", route.Actions[0])
+	}
+
+	if route.Actions[1].Type != "header-set" || route.Actions[1].HeaderName != "X-Backend" {
+		t.Errorf("unexpected second action: %+v", route.Actions[1])
+	}
+}
+
+func TestExpandRoutesWithRedirect(t *testing.T) {
+	cr := &v1alpha1.CustomHTTPRoute{
+		Spec: v1alpha1.CustomHTTPRouteSpec{
+			TargetRef: v1alpha1.TargetRef{Name: "default"},
+			Hostnames: []string{"example.com"},
+			Rules: []v1alpha1.Rule{
+				{
+					Matches: []v1alpha1.PathMatch{
+						{Path: "/old-page", Type: v1alpha1.MatchTypeExact},
+					},
+					Actions: []v1alpha1.Action{
+						{
+							Type: v1alpha1.ActionTypeRedirect,
+							Redirect: &v1alpha1.RedirectConfig{
+								Path:       "/new-page",
+								StatusCode: 301,
+							},
+						},
+					},
+					BackendRefs: []v1alpha1.BackendRef{
+						{Name: "dummy", Namespace: "default", Port: 80},
+					},
+				},
+			},
+		},
+	}
+
+	result := ExpandRoutes(cr)
+
+	routes, ok := result["example.com"]
+	if !ok {
+		t.Fatal("expected routes for example.com")
+	}
+
+	if len(routes) != 1 {
+		t.Fatalf("expected 1 route, got %d", len(routes))
+	}
+
+	route := routes[0]
+	if len(route.Actions) != 1 {
+		t.Fatalf("expected 1 action, got %d", len(route.Actions))
+	}
+
+	action := route.Actions[0]
+	if action.Type != "redirect" {
+		t.Errorf("expected redirect action, got %s", action.Type)
+	}
+	if action.RedirectPath != "/new-page" {
+		t.Errorf("expected redirect path /new-page, got %s", action.RedirectPath)
+	}
+	if action.RedirectStatusCode != 301 {
+		t.Errorf("expected status 301, got %d", action.RedirectStatusCode)
+	}
+}

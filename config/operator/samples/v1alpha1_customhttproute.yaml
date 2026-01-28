@@ -20,12 +20,13 @@ spec:
   pathPrefixes:
     values: [es, fr, it, de, pt, ja, ko]
     policy: Optional  # Optional | Required | Disabled
-                      # Optional = generates routes with and without prefix
-                      # Required = only generates routes with prefix
-                      # Disabled = never generates prefixes
 
   rules:
-    # Matches with PathPrefix (default, faster)
+    # ====================
+    # BASIC ROUTING
+    # ====================
+
+    # Simple PathPrefix match (default, fastest)
     - matches:
         - path: /calendar/halloween
         - path: /collection
@@ -38,7 +39,7 @@ spec:
     - matches:
         - path: /health
           type: Exact
-          priority: 2000  # High priority, evaluated first
+          priority: 2000
       backendRefs:
         - name: health
           namespace: infra
@@ -46,11 +47,11 @@ spec:
       pathPrefixes:
         policy: Disabled
 
-    # Match with regex (Go regexp syntax)
+    # Regex match (Go regexp syntax)
     - matches:
         - path: ^/users/[0-9]+/profile$
           type: Regex
-          priority: 1500  # Medium-high priority
+          priority: 1500
       backendRefs:
         - name: users-api
           namespace: backend
@@ -58,18 +59,130 @@ spec:
       pathPrefixes:
         policy: Disabled
 
-    # Match with regex using default priority (1000)
+    # ====================
+    # REDIRECTS (SEO, migrations)
+    # ====================
+    # Note: backendRefs is not required for redirect rules
+
+    # Permanent redirect (301) - old URL to new URL
     - matches:
-        - path: ^/other/[0-9]+/path$
+        - path: /old-page
+          type: Exact
+          priority: 2000
+      actions:
+        - type: redirect
+          redirect:
+            path: /new-page
+            statusCode: 301
+      pathPrefixes:
+        policy: Disabled
+
+    # Redirect HTTP to HTTPS
+    - matches:
+        - path: /secure
+          priority: 1800
+      actions:
+        - type: redirect
+          redirect:
+            scheme: https
+            statusCode: 301
+      pathPrefixes:
+        policy: Disabled
+
+    # Redirect to different domain
+    - matches:
+        - path: /blog
+          type: PathPrefix
+          priority: 1700
+      actions:
+        - type: redirect
+          redirect:
+            hostname: blog.example.com
+            path: ${path}
+            statusCode: 302
+      pathPrefixes:
+        policy: Disabled
+
+    # Redirect with path transformation using segments
+    # /products/123/reviews -> /v2/items/123/feedback
+    - matches:
+        - path: ^/products/([0-9]+)/reviews$
           type: Regex
+          priority: 1600
+      actions:
+        - type: redirect
+          redirect:
+            path: /v2/items/${path.segment.1}/feedback
+            statusCode: 301
+      pathPrefixes:
+        policy: Disabled
+
+    # ====================
+    # URL REWRITES
+    # ====================
+
+    # Simple path rewrite: /public-blog/* -> /internal/cms/blog/*
+    - matches:
+        - path: /public-blog
+          type: PathPrefix
+      actions:
+        - type: rewrite
+          rewrite:
+            path: /internal/cms/blog
       backendRefs:
-        - name: other-path
+        - name: cms
           namespace: backend
           port: 8080
+      pathPrefixes:
+        policy: Disabled
 
-    # API without language prefixes
+    # Rewrite path and hostname
+    - matches:
+        - path: /legacy-api
+          type: PathPrefix
+      actions:
+        - type: rewrite
+          rewrite:
+            path: /v2/api
+            hostname: api-internal.example.svc.cluster.local
+      backendRefs:
+        - name: api-v2
+          namespace: backend
+          port: 8080
+      pathPrefixes:
+        policy: Disabled
+
+    # ====================
+    # HEADER MANIPULATION
+    # ====================
+
+    # Add tracing and authentication headers
     - matches:
         - path: /api/v1
+          type: PathPrefix
+      actions:
+        - type: header-set
+          header:
+            name: X-Forwarded-Host
+            value: ${host}
+        - type: header-set
+          header:
+            name: X-Real-IP
+            value: ${client_ip}
+        - type: header-add
+          header:
+            name: X-Request-ID
+            value: ${request_id}
+        - type: header-set
+          header:
+            name: X-Original-URI
+            value: ${path}
+        - type: header-set
+          header:
+            name: X-Forwarded-Proto
+            value: ${scheme}
+        - type: header-remove
+          headerName: X-Internal-Debug
       backendRefs:
         - name: api
           namespace: backend
@@ -77,10 +190,45 @@ spec:
       pathPrefixes:
         policy: Disabled
 
-    # Default with low priority
+    # ====================
+    # COMBINED ACTIONS
+    # ====================
+
+    # Rewrite + Headers: Internal service routing with full context
+    - matches:
+        - path: /checkout
+          type: PathPrefix
+      actions:
+        - type: rewrite
+          rewrite:
+            path: /api/checkout
+        - type: header-set
+          header:
+            name: X-Service-Name
+            value: checkout-processor
+        - type: header-set
+          header:
+            name: X-Original-Path
+            value: ${path}
+        - type: header-set
+          header:
+            name: X-Client-IP
+            value: ${client_ip}
+      backendRefs:
+        - name: checkout-service
+          namespace: commerce
+          port: 8080
+      pathPrefixes:
+        policy: Disabled
+
+    # ====================
+    # DEFAULT FALLBACK
+    # ====================
+
+    # Catch-all with low priority
     - matches:
         - path: /
-          priority: 100  # Low priority, evaluated last
+          priority: 100
       backendRefs:
         - name: default
           namespace: web

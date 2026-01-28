@@ -93,9 +93,112 @@ spec:
                 items:
                   description: Rule defines a routing rule
                   properties:
+                    actions:
+                      description: |-
+                        actions defines transformations to apply to matched requests
+                        Actions are applied in order: redirect (terminates), rewrite, then header modifications
+                      items:
+                        description: Action defines an action to perform on a matched
+                          request
+                        properties:
+                          header:
+                            description: header specifies header configuration (required
+                              when type is "header-set" or "header-add")
+                            properties:
+                              name:
+                                description: name is the header name
+                                type: string
+                              value:
+                                description: |-
+                                  value is the header value. Supports variables:
+                                  ${client_ip} - client IP address from X-Forwarded-For
+                                  ${request_id} - request ID from X-Request-ID header
+                                  ${host} - original request host
+                                  ${path} - original request path
+                                  ${method} - HTTP method (GET, POST, etc.)
+                                  ${scheme} - request scheme (http or https)
+                                type: string
+                            required:
+                            - name
+                            - value
+                            type: object
+                          headerName:
+                            description: headerName specifies the header name to remove
+                              (required when type is "header-remove")
+                            type: string
+                          redirect:
+                            description: |-
+                              redirect specifies redirect configuration (required when type is "redirect")
+                              When a redirect action is present, the request is not forwarded to the backend
+                            properties:
+                              hostname:
+                                description: hostname is the hostname to redirect
+                                  to
+                                type: string
+                              path:
+                                description: |-
+                                  path is the path to redirect to. Supports variables:
+                                  ${path} - original request path
+                                  ${path.segment.N} - Nth segment of the path (0-indexed)
+                                type: string
+                              port:
+                                description: port is the port to redirect to
+                                format: int32
+                                maximum: 65535
+                                minimum: 1
+                                type: integer
+                              scheme:
+                                description: scheme is the scheme to redirect to (http
+                                  or https)
+                                enum:
+                                - http
+                                - https
+                                type: string
+                              statusCode:
+                                default: 302
+                                description: statusCode is the HTTP status code to
+                                  use for the redirect
+                                enum:
+                                - 301
+                                - 302
+                                - 303
+                                - 307
+                                - 308
+                                format: int32
+                                type: integer
+                            type: object
+                          rewrite:
+                            description: rewrite specifies URL rewrite configuration
+                              (required when type is "rewrite")
+                            properties:
+                              hostname:
+                                description: hostname is the new hostname to rewrite
+                                  to
+                                type: string
+                              path:
+                                description: |-
+                                  path is the new path to rewrite to. Supports variables:
+                                  ${path} - original request path
+                                  ${path.segment.N} - Nth segment of the path (0-indexed)
+                                type: string
+                            type: object
+                          type:
+                            description: type is the type of action to perform
+                            enum:
+                            - redirect
+                            - rewrite
+                            - header-set
+                            - header-add
+                            - header-remove
+                            type: string
+                        required:
+                        - type
+                        type: object
+                      type: array
                     backendRefs:
-                      description: backendRefs defines the backend services to route
-                        to
+                      description: |-
+                        backendRefs defines the backend services to route to
+                        Required unless actions contains a redirect action
                       items:
                         description: BackendRef defines a reference to a backend service
                         properties:
@@ -116,7 +219,6 @@ spec:
                         - namespace
                         - port
                         type: object
-                      minItems: 1
                       type: array
                     matches:
                       description: matches defines the conditions for matching this
@@ -168,7 +270,6 @@ spec:
                       - policy
                       type: object
                   required:
-                  - backendRefs
                   - matches
                   type: object
                 minItems: 1
