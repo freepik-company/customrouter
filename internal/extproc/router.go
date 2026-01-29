@@ -327,23 +327,26 @@ func (p *Processor) buildForwardResponse(route *routes.Route, vars *requestVars,
 		}
 	}
 
-	// Add authority headers
-	setHeaders = append(setHeaders,
-		&corev3.HeaderValueOption{
-			Header: &corev3.HeaderValue{
-				Key:      ":authority",
-				RawValue: []byte(finalAuthority),
+	// Only rewrite authority/host if explicitly requested via RewriteHostname action
+	// Otherwise, keep the original authority so Istio can match the virtual host correctly
+	if finalAuthority != route.Backend {
+		setHeaders = append(setHeaders,
+			&corev3.HeaderValueOption{
+				Header: &corev3.HeaderValue{
+					Key:      ":authority",
+					RawValue: []byte(finalAuthority),
+				},
+				AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 			},
-			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
-		},
-		&corev3.HeaderValueOption{
-			Header: &corev3.HeaderValue{
-				Key:      "host",
-				RawValue: []byte(finalAuthority),
+			&corev3.HeaderValueOption{
+				Header: &corev3.HeaderValue{
+					Key:      "host",
+					RawValue: []byte(finalAuthority),
+				},
+				AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 			},
-			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
-		},
-	)
+		)
+	}
 
 	// Add path rewrite if path was changed
 	if finalPath != vars.path {
