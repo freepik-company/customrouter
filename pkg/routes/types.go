@@ -87,9 +87,10 @@ func ParseJSON(data []byte) (*RoutesConfig, error) {
 	return &config, nil
 }
 
-// ToJSON serializes the routes config to JSON
+// ToJSON serializes the routes config to compact JSON (no indentation)
+// to minimize ConfigMap size and ensure accurate size calculations
 func (rc *RoutesConfig) ToJSON() ([]byte, error) {
-	return json.MarshalIndent(rc, "", "  ")
+	return json.Marshal(rc)
 }
 
 // CompileRegexes compiles all regex patterns in the routes config.
