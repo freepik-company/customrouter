@@ -53,6 +53,22 @@ type ExternalProcessorRef struct {
 	// service is the reference to the external processor Kubernetes Service
 	// +required
 	Service ServiceRef `json:"service"`
+
+	// timeout is the gRPC timeout for the external processor service.
+	// This is the timeout for establishing the gRPC connection.
+	// Must be a valid duration string (e.g., "1s", "500ms", "2s").
+	// Defaults to "5s" if not specified.
+	// +optional
+	// +kubebuilder:default="5s"
+	Timeout string `json:"timeout,omitempty"`
+
+	// messageTimeout is the timeout for individual messages sent to the external processor.
+	// This applies to each request/response exchange with the ext_proc service.
+	// Must be a valid duration string (e.g., "1s", "500ms", "5s").
+	// Defaults to "5s" if not specified.
+	// +optional
+	// +kubebuilder:default="5s"
+	MessageTimeout string `json:"messageTimeout,omitempty"`
 }
 
 // ExternalProcessorAttachmentSpec defines the desired state of ExternalProcessorAttachment

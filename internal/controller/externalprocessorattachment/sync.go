@@ -139,9 +139,10 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileExtProcEnvoyFilter(
 								"envoy_grpc": map[string]interface{}{
 									"cluster_name": clusterName,
 								},
-								"timeout": "1s",
+								"timeout": getTimeout(attachment),
 							},
 							"failure_mode_allow": false,
+							"message_timeout":    getMessageTimeout(attachment),
 							"processing_mode": map[string]interface{}{
 								"request_header_mode":   "SEND",
 								"response_header_mode":  "SKIP",
@@ -313,4 +314,20 @@ func (r *ExternalProcessorAttachmentReconciler) deleteEnvoyFilters(
 
 func boolPtr(b bool) *bool {
 	return &b
+}
+
+// getTimeout returns the configured timeout or the default "5s"
+func getTimeout(attachment *v1alpha1.ExternalProcessorAttachment) string {
+	if attachment.Spec.ExternalProcessorRef.Timeout != "" {
+		return attachment.Spec.ExternalProcessorRef.Timeout
+	}
+	return "5s"
+}
+
+// getMessageTimeout returns the configured message timeout or the default "5s"
+func getMessageTimeout(attachment *v1alpha1.ExternalProcessorAttachment) string {
+	if attachment.Spec.ExternalProcessorRef.MessageTimeout != "" {
+		return attachment.Spec.ExternalProcessorRef.MessageTimeout
+	}
+	return "5s"
 }

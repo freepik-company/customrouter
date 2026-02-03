@@ -57,6 +57,14 @@ spec:
                 description: externalProcessorRef identifies the external processor
                   service to use
                 properties:
+                  messageTimeout:
+                    default: 5s
+                    description: |-
+                      messageTimeout is the timeout for individual messages sent to the external processor.
+                      This applies to each request/response exchange with the ext_proc service.
+                      Must be a valid duration string (e.g., "1s", "500ms", "5s").
+                      Defaults to "5s" if not specified.
+                    type: string
                   service:
                     description: service is the reference to the external processor
                       Kubernetes Service
@@ -80,6 +88,14 @@ spec:
                     - namespace
                     - port
                     type: object
+                  timeout:
+                    default: 5s
+                    description: |-
+                      timeout is the gRPC timeout for the external processor service.
+                      This is the timeout for establishing the gRPC connection.
+                      Must be a valid duration string (e.g., "1s", "500ms", "2s").
+                      Defaults to "5s" if not specified.
+                    type: string
                 required:
                 - service
                 type: object

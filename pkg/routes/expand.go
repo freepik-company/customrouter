@@ -232,6 +232,11 @@ func buildBackendString(refs []v1alpha1.BackendRef) string {
 	}
 	// For now, use the first backend ref
 	ref := refs[0]
+	// If the name contains a dot, treat it as an external hostname
+	// and don't append the .svc.cluster.local suffix
+	if strings.Contains(ref.Name, ".") {
+		return ref.Name + ":" + strconv.Itoa(int(ref.Port))
+	}
 	return ref.Name + "." + ref.Namespace + ".svc.cluster.local:" + strconv.Itoa(int(ref.Port))
 }
 

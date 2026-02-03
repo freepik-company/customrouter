@@ -106,7 +106,7 @@ func NewServer(config *ServerConfig, logger *zap.Logger) (*Server, error) {
 func (s *Server) Start(ctx context.Context) error {
 	// Start watching for ConfigMap changes
 	if err := s.loader.Watch(func(config *routes.RoutesConfig) {
-		s.logger.Info("routes configuration reloaded from ConfigMaps",
+		s.logger.Debug("routes configuration reloaded from ConfigMaps",
 			zap.Int("hosts", len(config.Hosts)),
 		)
 	}); err != nil {
