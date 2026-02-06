@@ -71,6 +71,21 @@ type ExternalProcessorRef struct {
 	MessageTimeout string `json:"messageTimeout,omitempty"`
 }
 
+// CatchAllRouteConfig defines the configuration for the catch-all route
+type CatchAllRouteConfig struct {
+	// hostnames is a list of hostnames that the catch-all route should match.
+	// When specified, the catch-all route will only be generated for these hostnames.
+	// If empty, no catch-all route will be generated.
+	// +required
+	// +kubebuilder:validation:MinItems=1
+	Hostnames []string `json:"hostnames"`
+
+	// backendRef defines the default backend service to route unmatched requests to.
+	// This is used when no CustomHTTPRoute matches the request.
+	// +required
+	BackendRef BackendRef `json:"backendRef"`
+}
+
 // ExternalProcessorAttachmentSpec defines the desired state of ExternalProcessorAttachment
 type ExternalProcessorAttachmentSpec struct {
 	// gatewayRef identifies the Gateway workload to attach the external processor to
@@ -80,6 +95,13 @@ type ExternalProcessorAttachmentSpec struct {
 	// externalProcessorRef identifies the external processor service to use
 	// +required
 	ExternalProcessorRef ExternalProcessorRef `json:"externalProcessorRef"`
+
+	// catchAllRoute configures automatic generation of a catch-all route.
+	// When specified, the operator generates an EnvoyFilter that creates a default route
+	// for the specified hostnames, allowing CustomHTTPRoute to handle requests
+	// without requiring a base HTTPRoute to be configured separately.
+	// +optional
+	CatchAllRoute *CatchAllRouteConfig `json:"catchAllRoute,omitempty"`
 }
 
 // ExternalProcessorAttachmentStatus defines the observed state of ExternalProcessorAttachment.

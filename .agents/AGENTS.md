@@ -223,7 +223,29 @@ spec:
       name: customrouter-extproc
       namespace: customrouter
       port: 9001
+    timeout: 5s          # gRPC connection timeout (default: "5s")
+    messageTimeout: 5s   # Message exchange timeout (default: "5s")
+
+  # Optional: generate catch-all routes for hostnames without HTTPRoute
+  catchAllRoute:
+    hostnames:
+      - example.com
+      - www.example.com
+    backendRef:
+      name: default-backend
+      namespace: web
+      port: 80
 ```
+
+#### Catch-All Routes
+
+By default, CustomHTTPRoute requires a base HTTPRoute to be configured at the Istio Gateway level. Without it, Envoy rejects requests with 404 before the ext_proc filter can process them.
+
+The `catchAllRoute` field solves this by generating an additional EnvoyFilter that creates virtual hosts for the specified hostnames. When configured, the operator generates three EnvoyFilters:
+
+1. `<name>-extproc`: Inserts the ext_proc filter into the HTTP filter chain
+2. `<name>-routes`: Adds dynamic routing based on `x-customrouter-cluster` header
+3. `<name>-catchall`: Creates catch-all virtual hosts for specified hostnames
 
 ---
 
@@ -649,6 +671,8 @@ const configMapPartLabel = "customrouter.freepik.com/part"
 7. **EnvoyFilter Generation**: `ExternalProcessorAttachment` creates EnvoyFilters in the same namespace as the attachment resource, not the gateway's namespace.
 
 8. **Backend Format**: Backends are always formatted as `service.namespace.svc.cluster.local:port` for Kubernetes DNS resolution.
+
+9. **Catch-All Route Requirement**: Without `catchAllRoute` or a base HTTPRoute, requests to hostnames handled only by CustomHTTPRoute will receive 404 from Envoy before reaching the ext_proc filter.
 
 ---
 

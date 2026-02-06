@@ -53,10 +53,60 @@ spec:
           spec:
             description: spec defines the desired state of ExternalProcessorAttachment
             properties:
+              catchAllRoute:
+                description: |-
+                  catchAllRoute configures automatic generation of a catch-all route.
+                  When specified, the operator generates an EnvoyFilter that creates a default route
+                  for the specified hostnames, allowing CustomHTTPRoute to handle requests
+                  without requiring a base HTTPRoute to be configured separately.
+                properties:
+                  backendRef:
+                    description: |-
+                      backendRef defines the default backend service to route unmatched requests to.
+                      This is used when no CustomHTTPRoute matches the request.
+                    properties:
+                      name:
+                        description: name is the name of the Service
+                        type: string
+                      namespace:
+                        description: namespace is the namespace of the Service
+                        type: string
+                      port:
+                        description: port is the port of the Service
+                        format: int32
+                        maximum: 65535
+                        minimum: 1
+                        type: integer
+                    required:
+                    - name
+                    - namespace
+                    - port
+                    type: object
+                  hostnames:
+                    description: |-
+                      hostnames is a list of hostnames that the catch-all route should match.
+                      When specified, the catch-all route will only be generated for these hostnames.
+                      If empty, no catch-all route will be generated.
+                    items:
+                      type: string
+                    minItems: 1
+                    type: array
+                required:
+                - backendRef
+                - hostnames
+                type: object
               externalProcessorRef:
                 description: externalProcessorRef identifies the external processor
                   service to use
                 properties:
+                  messageTimeout:
+                    default: 5s
+                    description: |-
+                      messageTimeout is the timeout for individual messages sent to the external processor.
+                      This applies to each request/response exchange with the ext_proc service.
+                      Must be a valid duration string (e.g., "1s", "500ms", "5s").
+                      Defaults to "5s" if not specified.
+                    type: string
                   service:
                     description: service is the reference to the external processor
                       Kubernetes Service
@@ -80,6 +130,14 @@ spec:
                     - namespace
                     - port
                     type: object
+                  timeout:
+                    default: 5s
+                    description: |-
+                      timeout is the gRPC timeout for the external processor service.
+                      This is the timeout for establishing the gRPC connection.
+                      Must be a valid duration string (e.g., "1s", "500ms", "2s").
+                      Defaults to "5s" if not specified.
+                    type: string
                 required:
                 - service
                 type: object

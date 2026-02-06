@@ -150,6 +150,18 @@ spec:
       name: customrouter-extproc
       namespace: customrouter
       port: 9001
+
+  # Optional: Generate catch-all routes for hostnames without HTTPRoute
+  # This allows CustomHTTPRoute to handle requests without requiring
+  # a base HTTPRoute to be configured separately
+  catchAllRoute:
+    hostnames:
+      - example.com
+      - www.example.com
+    backendRef:
+      name: default-backend
+      namespace: web
+      port: 80
 ```
 
 ## Helm Chart Configuration
@@ -324,6 +336,33 @@ Connects an external processor to Istio gateway pods by generating EnvoyFilters.
 |-------|-------------|
 | `gatewayRef.selector` | Labels to match gateway pods |
 | `externalProcessorRef.service` | External processor service reference |
+| `externalProcessorRef.timeout` | gRPC connection timeout (default: "5s") |
+| `externalProcessorRef.messageTimeout` | Message exchange timeout (default: "5s") |
+| `catchAllRoute.hostnames` | Hostnames to generate catch-all routes for |
+| `catchAllRoute.backendRef` | Default backend for unmatched requests |
+
+#### Catch-All Routes
+
+By default, CustomHTTPRoute requires a base HTTPRoute to be configured at the Istio Gateway level. Without it, requests are rejected with 404 before reaching the external processor.
+
+The `catchAllRoute` field solves this by generating an EnvoyFilter that creates virtual hosts for the specified hostnames:
+
+```yaml
+spec:
+  catchAllRoute:
+    hostnames:
+      - example.com
+      - api.example.com
+    backendRef:
+      name: default-backend
+      namespace: default
+      port: 80
+```
+
+When configured, the operator generates three EnvoyFilters:
+1. `<name>-extproc`: Inserts the ext_proc filter
+2. `<name>-routes`: Adds dynamic routing based on ext_proc headers
+3. `<name>-catchall`: Creates catch-all virtual hosts for the specified hostnames
 
 ### Match Types
 
