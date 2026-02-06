@@ -53,6 +53,48 @@ spec:
           spec:
             description: spec defines the desired state of ExternalProcessorAttachment
             properties:
+              catchAllRoute:
+                description: |-
+                  catchAllRoute configures automatic generation of a catch-all route.
+                  When specified, the operator generates an EnvoyFilter that creates a default route
+                  for the specified hostnames, allowing CustomHTTPRoute to handle requests
+                  without requiring a base HTTPRoute to be configured separately.
+                properties:
+                  backendRef:
+                    description: |-
+                      backendRef defines the default backend service to route unmatched requests to.
+                      This is used when no CustomHTTPRoute matches the request.
+                    properties:
+                      name:
+                        description: name is the name of the Service
+                        type: string
+                      namespace:
+                        description: namespace is the namespace of the Service
+                        type: string
+                      port:
+                        description: port is the port of the Service
+                        format: int32
+                        maximum: 65535
+                        minimum: 1
+                        type: integer
+                    required:
+                    - name
+                    - namespace
+                    - port
+                    type: object
+                  hostnames:
+                    description: |-
+                      hostnames is a list of hostnames that the catch-all route should match.
+                      When specified, the catch-all route will only be generated for these hostnames.
+                      If empty, no catch-all route will be generated.
+                    items:
+                      type: string
+                    minItems: 1
+                    type: array
+                required:
+                - backendRef
+                - hostnames
+                type: object
               externalProcessorRef:
                 description: externalProcessorRef identifies the external processor
                   service to use
