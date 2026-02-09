@@ -7,12 +7,14 @@
 #   1. Deploy the customrouter-external-processor Deployment and Service
 #   2. Apply this EnvoyFilter (ext_proc filter)
 #   3. Apply envoyfilter-routes.yaml (route injection)
-#   4. Create ServiceEntry for each backend service (registers cluster in Envoy)
+#   4. Either:
+#      a. Create HTTPRoute resources for your hostnames, OR
+#      b. Apply envoyfilter-catchall.yaml to create catch-all virtual hosts
 #
 # Usage:
 #   kubectl apply -f envoyfilter.yaml
 #   kubectl apply -f envoyfilter-routes.yaml
-#   kubectl apply -f serviceentry.yaml
+#   kubectl apply -f envoyfilter-catchall.yaml  # Optional: if no HTTPRoute exists
 
 apiVersion: networking.istio.io/v1alpha3
 kind: EnvoyFilter
