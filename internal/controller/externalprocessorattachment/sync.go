@@ -324,6 +324,29 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileCatchAllEnvoyFilter(
 					"name":    fmt.Sprintf("customrouter-catchall-%s", hostname),
 					"domains": []interface{}{hostname},
 					"routes": []interface{}{
+						// Dynamic route - matches when ext_proc sets the cluster header
+						map[string]interface{}{
+							"name": "customrouter-dynamic-route",
+							"match": map[string]interface{}{
+								"prefix": "/",
+								"headers": []interface{}{
+									map[string]interface{}{
+										"name":          "x-customrouter-cluster",
+										"present_match": true,
+									},
+								},
+							},
+							"route": map[string]interface{}{
+								"cluster_header": "x-customrouter-cluster",
+								"timeout":        "30s",
+								"retry_policy": map[string]interface{}{
+									"retry_on":               "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes",
+									"num_retries":            int64(2),
+									"retriable_status_codes": []interface{}{int64(503)},
+								},
+							},
+						},
+						// Default fallback route
 						map[string]interface{}{
 							"name": "default",
 							"match": map[string]interface{}{

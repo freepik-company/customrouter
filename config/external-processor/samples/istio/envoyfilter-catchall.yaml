@@ -17,6 +17,10 @@
 #
 # Note: If using ExternalProcessorAttachment CRD, this is generated automatically
 # when catchAllRoute is configured. This file is for manual configuration only.
+#
+# IMPORTANT: Each virtual host includes TWO routes:
+#   1. customrouter-dynamic-route: Matches when ext_proc sets x-customrouter-cluster header
+#   2. default: Fallback to default backend when no CustomHTTPRoute matches
 
 apiVersion: networking.istio.io/v1alpha3
 kind: EnvoyFilter
@@ -40,6 +44,22 @@ spec:
           domains:
             - "example.com"
           routes:
+            # Dynamic route - matches when ext_proc sets the cluster header
+            - name: "customrouter-dynamic-route"
+              match:
+                prefix: "/"
+                headers:
+                  - name: "x-customrouter-cluster"
+                    present_match: true
+              route:
+                cluster_header: "x-customrouter-cluster"
+                timeout: 30s
+                retry_policy:
+                  retry_on: "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes"
+                  num_retries: 2
+                  retriable_status_codes:
+                    - 503
+            # Default fallback route
             - name: "default"
               match:
                 prefix: "/"
@@ -60,6 +80,22 @@ spec:
           domains:
             - "api.example.com"
           routes:
+            # Dynamic route - matches when ext_proc sets the cluster header
+            - name: "customrouter-dynamic-route"
+              match:
+                prefix: "/"
+                headers:
+                  - name: "x-customrouter-cluster"
+                    present_match: true
+              route:
+                cluster_header: "x-customrouter-cluster"
+                timeout: 30s
+                retry_policy:
+                  retry_on: "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes"
+                  num_retries: 2
+                  retriable_status_codes:
+                    - 503
+            # Default fallback route
             - name: "default"
               match:
                 prefix: "/"
