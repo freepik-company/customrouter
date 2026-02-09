@@ -1,0 +1,104 @@
+# EnvoyFilter to create catch-all virtual hosts for hostnames without HTTPRoute
+#
+# This EnvoyFilter creates virtual hosts that accept all requests for the specified
+# hostnames, allowing CustomHTTPRoute to handle them without requiring a base HTTPRoute.
+#
+# Without this (or a base HTTPRoute), Envoy rejects requests with 404 before the
+# ext_proc filter can process them.
+#
+# Prerequisites:
+#   1. Deploy the customrouter-external-processor
+#   2. Apply envoyfilter.yaml (ext_proc filter)
+#   3. Apply envoyfilter-routes.yaml (route injection)
+#   4. Apply this EnvoyFilter (catch-all virtual hosts)
+#
+# Usage:
+#   kubectl apply -f envoyfilter-catchall.yaml
+#
+# Note: If using ExternalProcessorAttachment CRD, this is generated automatically
+# when catchAllRoute is configured. This file is for manual configuration only.
+#
+# IMPORTANT: Each virtual host includes TWO routes:
+#   1. customrouter-dynamic-route: Matches when ext_proc sets x-customrouter-cluster header
+#   2. default: Fallback to default backend when no CustomHTTPRoute matches
+
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: customrouter-catchall
+  namespace: istio
+spec:
+  workloadSelector:
+    labels:
+      istio: gateway-production
+
+  configPatches:
+    # Add a catch-all virtual host for example.com
+    - applyTo: VIRTUAL_HOST
+      match:
+        context: GATEWAY
+      patch:
+        operation: ADD
+        value:
+          name: "customrouter-catchall-example.com"
+          domains:
+            - "example.com"
+          routes:
+            # Dynamic route - matches when ext_proc sets the cluster header
+            - name: "customrouter-dynamic-route"
+              match:
+                prefix: "/"
+                headers:
+                  - name: "x-customrouter-cluster"
+                    present_match: true
+              route:
+                cluster_header: "x-customrouter-cluster"
+                timeout: 30s
+                retry_policy:
+                  retry_on: "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes"
+                  num_retries: 2
+                  retriable_status_codes:
+                    - 503
+            # Default fallback route
+            - name: "default"
+              match:
+                prefix: "/"
+              route:
+                # Default backend cluster - change to your service
+                cluster: outbound|80||default-backend.default.svc.cluster.local
+                timeout: 30s
+
+    # Add another virtual host for api.example.com
+    # Duplicate this block for each hostname you need
+    - applyTo: VIRTUAL_HOST
+      match:
+        context: GATEWAY
+      patch:
+        operation: ADD
+        value:
+          name: "customrouter-catchall-api.example.com"
+          domains:
+            - "api.example.com"
+          routes:
+            # Dynamic route - matches when ext_proc sets the cluster header
+            - name: "customrouter-dynamic-route"
+              match:
+                prefix: "/"
+                headers:
+                  - name: "x-customrouter-cluster"
+                    present_match: true
+              route:
+                cluster_header: "x-customrouter-cluster"
+                timeout: 30s
+                retry_policy:
+                  retry_on: "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes"
+                  num_retries: 2
+                  retriable_status_codes:
+                    - 503
+            # Default fallback route
+            - name: "default"
+              match:
+                prefix: "/"
+              route:
+                cluster: outbound|80||default-backend.default.svc.cluster.local
+                timeout: 30s

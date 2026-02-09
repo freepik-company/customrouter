@@ -37,8 +37,9 @@ const (
 	envoyFilterOwnerLabel     = "customrouter.freepik.com/attachment"
 
 	// EnvoyFilter name suffixes
-	extProcFilterSuffix = "-extproc"
-	routesFilterSuffix  = "-routes"
+	extProcFilterSuffix     = "-extproc"
+	routesFilterSuffix      = "-routes"
+	catchAllFilterSuffix    = "-catchall"
 )
 
 var envoyFilterGVK = schema.GroupVersionKind{
@@ -64,9 +65,24 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileEnvoyFilters(
 		return fmt.Errorf("failed to reconcile routes EnvoyFilter: %w", err)
 	}
 
-	logger.Info("EnvoyFilters reconciled successfully",
-		"extproc", attachment.Name+extProcFilterSuffix,
-		"routes", attachment.Name+routesFilterSuffix)
+	// Create catch-all EnvoyFilter if configured
+	if attachment.Spec.CatchAllRoute != nil {
+		if err := r.reconcileCatchAllEnvoyFilter(ctx, attachment); err != nil {
+			return fmt.Errorf("failed to reconcile catch-all EnvoyFilter: %w", err)
+		}
+		logger.Info("EnvoyFilters reconciled successfully",
+			"extproc", attachment.Name+extProcFilterSuffix,
+			"routes", attachment.Name+routesFilterSuffix,
+			"catchall", attachment.Name+catchAllFilterSuffix)
+	} else {
+		// Delete catch-all EnvoyFilter if it exists but is no longer configured
+		if err := r.deleteCatchAllEnvoyFilter(ctx, attachment); err != nil {
+			return fmt.Errorf("failed to delete catch-all EnvoyFilter: %w", err)
+		}
+		logger.Info("EnvoyFilters reconciled successfully",
+			"extproc", attachment.Name+extProcFilterSuffix,
+			"routes", attachment.Name+routesFilterSuffix)
+	}
 
 	return nil
 }
@@ -248,6 +264,150 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileRoutesEnvoyFilter(
 	return r.upsertUnstructured(ctx, ef)
 }
 
+// reconcileCatchAllEnvoyFilter creates or updates the catch-all EnvoyFilter
+// This EnvoyFilter creates virtual hosts for the specified hostnames with a catch-all route
+// that allows requests to be processed by the ext_proc filter even when no base HTTPRoute exists.
+func (r *ExternalProcessorAttachmentReconciler) reconcileCatchAllEnvoyFilter(
+	ctx context.Context,
+	attachment *v1alpha1.ExternalProcessorAttachment,
+) error {
+	if attachment.Spec.CatchAllRoute == nil {
+		return nil
+	}
+
+	filterName := attachment.Name + catchAllFilterSuffix
+	catchAllConfig := attachment.Spec.CatchAllRoute
+
+	// Build Istio cluster name for the default backend
+	clusterName := fmt.Sprintf("outbound|%d||%s.%s.svc.cluster.local",
+		catchAllConfig.BackendRef.Port,
+		catchAllConfig.BackendRef.Name,
+		catchAllConfig.BackendRef.Namespace)
+
+	// Build EnvoyFilter as unstructured
+	ef := &unstructured.Unstructured{}
+	ef.SetGroupVersionKind(envoyFilterGVK)
+	ef.SetName(filterName)
+	ef.SetNamespace(attachment.Namespace)
+	ef.SetLabels(map[string]string{
+		"app.kubernetes.io/name":  "customrouter",
+		envoyFilterManagedByLabel: envoyFilterManagedByValue,
+		envoyFilterOwnerLabel:     attachment.Name,
+	})
+	ef.SetOwnerReferences([]metav1.OwnerReference{
+		{
+			APIVersion: attachment.APIVersion,
+			Kind:       attachment.Kind,
+			Name:       attachment.Name,
+			UID:        attachment.UID,
+			Controller: boolPtr(true),
+		},
+	})
+
+	// Convert selector map[string]string to map[string]interface{}
+	selectorInterface := make(map[string]interface{})
+	for k, v := range attachment.Spec.GatewayRef.Selector {
+		selectorInterface[k] = v
+	}
+
+	// Build config patches - one VIRTUAL_HOST patch per hostname
+	configPatches := make([]interface{}, 0, len(catchAllConfig.Hostnames))
+	for _, hostname := range catchAllConfig.Hostnames {
+		patch := map[string]interface{}{
+			"applyTo": "VIRTUAL_HOST",
+			"match": map[string]interface{}{
+				"context": "GATEWAY",
+			},
+			"patch": map[string]interface{}{
+				"operation": "ADD",
+				"value": map[string]interface{}{
+					"name":    fmt.Sprintf("customrouter-catchall-%s", hostname),
+					"domains": []interface{}{hostname},
+					"routes": []interface{}{
+						// Dynamic route - matches when ext_proc sets the cluster header
+						map[string]interface{}{
+							"name": "customrouter-dynamic-route",
+							"match": map[string]interface{}{
+								"prefix": "/",
+								"headers": []interface{}{
+									map[string]interface{}{
+										"name":          "x-customrouter-cluster",
+										"present_match": true,
+									},
+								},
+							},
+							"route": map[string]interface{}{
+								"cluster_header": "x-customrouter-cluster",
+								"timeout":        "30s",
+								"retry_policy": map[string]interface{}{
+									"retry_on":               "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes",
+									"num_retries":            int64(2),
+									"retriable_status_codes": []interface{}{int64(503)},
+								},
+							},
+						},
+						// Default fallback route
+						map[string]interface{}{
+							"name": "default",
+							"match": map[string]interface{}{
+								"prefix": "/",
+							},
+							"route": map[string]interface{}{
+								"cluster": clusterName,
+								"timeout": "30s",
+							},
+						},
+					},
+				},
+			},
+		}
+		configPatches = append(configPatches, patch)
+	}
+
+	spec := map[string]interface{}{
+		"workloadSelector": map[string]interface{}{
+			"labels": selectorInterface,
+		},
+		"configPatches": configPatches,
+	}
+
+	if err := unstructured.SetNestedField(ef.Object, spec, "spec"); err != nil {
+		return fmt.Errorf("failed to set spec: %w", err)
+	}
+
+	return r.upsertUnstructured(ctx, ef)
+}
+
+// deleteCatchAllEnvoyFilter deletes the catch-all EnvoyFilter if it exists
+func (r *ExternalProcessorAttachmentReconciler) deleteCatchAllEnvoyFilter(
+	ctx context.Context,
+	attachment *v1alpha1.ExternalProcessorAttachment,
+) error {
+	logger := log.FromContext(ctx)
+
+	catchAllFilter := &unstructured.Unstructured{}
+	catchAllFilter.SetGroupVersionKind(envoyFilterGVK)
+	catchAllKey := types.NamespacedName{
+		Name:      attachment.Name + catchAllFilterSuffix,
+		Namespace: attachment.Namespace,
+	}
+
+	err := r.Get(ctx, catchAllKey, catchAllFilter)
+	if errors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to get catch-all EnvoyFilter: %w", err)
+	}
+
+	if err := r.Delete(ctx, catchAllFilter); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete catch-all EnvoyFilter: %w", err)
+	}
+	logger.Info("Deleted catch-all EnvoyFilter", "name", catchAllKey.Name)
+
+	return nil
+}
+
 // upsertUnstructured creates or updates an unstructured object
 func (r *ExternalProcessorAttachmentReconciler) upsertUnstructured(
 	ctx context.Context,
@@ -307,6 +467,20 @@ func (r *ExternalProcessorAttachmentReconciler) deleteEnvoyFilters(
 			return fmt.Errorf("failed to delete routes EnvoyFilter: %w", err)
 		}
 		logger.Info("Deleted routes EnvoyFilter", "name", routesKey.Name)
+	}
+
+	// Delete catch-all EnvoyFilter
+	catchAllFilter := &unstructured.Unstructured{}
+	catchAllFilter.SetGroupVersionKind(envoyFilterGVK)
+	catchAllKey := types.NamespacedName{
+		Name:      attachment.Name + catchAllFilterSuffix,
+		Namespace: attachment.Namespace,
+	}
+	if err := r.Get(ctx, catchAllKey, catchAllFilter); err == nil {
+		if err := r.Delete(ctx, catchAllFilter); err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete catch-all EnvoyFilter: %w", err)
+		}
+		logger.Info("Deleted catch-all EnvoyFilter", "name", catchAllKey.Name)
 	}
 
 	return nil

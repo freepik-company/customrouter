@@ -76,13 +76,10 @@ func (r *ExternalProcessorAttachmentReconciler) Reconcile(ctx context.Context, r
 				return result, err
 			}
 
-			// Remove the finalizer
+			// Remove the finalizer using Patch
+			patch := client.MergeFrom(attachment.DeepCopy())
 			controllerutil.RemoveFinalizer(attachment, controller.ResourceFinalizer)
-			err = controller.UpdateWithRetry(ctx, r.Client, attachment, func(object client.Object) error {
-				controllerutil.RemoveFinalizer(object, controller.ResourceFinalizer)
-				return nil
-			})
-			if err != nil {
+			if err = r.Patch(ctx, attachment, patch); err != nil {
 				logger.Info(fmt.Sprintf(controller.ResourceFinalizersUpdateError, ExternalProcessorAttachmentResourceType, req.Name, err.Error()))
 			}
 		}
@@ -91,11 +88,9 @@ func (r *ExternalProcessorAttachmentReconciler) Reconcile(ctx context.Context, r
 
 	// 4. Add a finalizer to the resource
 	if !controllerutil.ContainsFinalizer(attachment, controller.ResourceFinalizer) {
-		err = controller.UpdateWithRetry(ctx, r.Client, attachment, func(object client.Object) error {
-			controllerutil.AddFinalizer(object, controller.ResourceFinalizer)
-			return nil
-		})
-		if err != nil {
+		patch := client.MergeFrom(attachment.DeepCopy())
+		controllerutil.AddFinalizer(attachment, controller.ResourceFinalizer)
+		if err = r.Patch(ctx, attachment, patch); err != nil {
 			return result, err
 		}
 	}

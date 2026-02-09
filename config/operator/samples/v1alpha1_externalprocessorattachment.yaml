@@ -5,6 +5,10 @@
 #   1. <name>-extproc: Inserts the ext_proc filter into the HTTP filter chain
 #   2. <name>-routes: Injects a route that uses cluster_header for dynamic routing
 #
+# Optionally, a third EnvoyFilter (<name>-catchall) can be generated to create
+# catch-all virtual hosts for specified hostnames, allowing CustomHTTPRoutes to
+# handle requests without requiring a base HTTPRoute.
+#
 # The external processor sets the header 'x-customrouter-cluster' with the target
 # cluster name, and the injected route uses this header to route traffic dynamically.
 
@@ -32,3 +36,23 @@ spec:
 
       # gRPC port where the external processor is listening
       port: 9001
+
+  # catchAllRoute (optional) configures automatic generation of catch-all routes.
+  # When specified, the controller generates an EnvoyFilter that creates default
+  # virtual hosts for the specified hostnames, allowing CustomHTTPRoutes to handle
+  # requests without requiring a base HTTPRoute to be configured separately.
+  #
+  # This is useful when you want CustomHTTPRoutes to be the primary routing
+  # mechanism for certain hostnames, without needing to create HTTPRoute resources.
+  #
+  # catchAllRoute:
+  #   # hostnames lists the domains that should have catch-all routes generated
+  #   hostnames:
+  #     - example.com
+  #     - api.example.com
+  #
+  #   # backendRef specifies the default backend service for unmatched requests
+  #   backendRef:
+  #     name: default-backend
+  #     namespace: default
+  #     port: 80
