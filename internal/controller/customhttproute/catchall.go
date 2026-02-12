@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -196,10 +197,7 @@ func (r *CustomHTTPRouteReconciler) reconcileCatchAllEnvoyFilter(
 
 	configPatches := make([]interface{}, 0, len(entries))
 	for _, entry := range entries {
-		clusterName := fmt.Sprintf("outbound|%d||%s.%s.svc.cluster.local",
-			entry.BackendRef.Port,
-			entry.BackendRef.Name,
-			entry.BackendRef.Namespace)
+		clusterName := buildClusterName(entry.BackendRef)
 
 		patch := map[string]interface{}{
 			"applyTo": "VIRTUAL_HOST",
@@ -317,4 +315,11 @@ func (r *CustomHTTPRouteReconciler) upsertUnstructured(
 
 func boolPtr(b bool) *bool {
 	return &b
+}
+
+func buildClusterName(ref v1alpha1.BackendRef) string {
+	if strings.Contains(ref.Name, ".") {
+		return fmt.Sprintf("outbound|%d||%s", ref.Port, ref.Name)
+	}
+	return fmt.Sprintf("outbound|%d||%s.%s.svc.cluster.local", ref.Port, ref.Name, ref.Namespace)
 }

@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -363,10 +364,7 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileCatchAllEnvoyFilter(
 	// Build config patches - one VIRTUAL_HOST patch per hostname
 	configPatches := make([]interface{}, 0, len(entries))
 	for _, entry := range entries {
-		clusterName := fmt.Sprintf("outbound|%d||%s.%s.svc.cluster.local",
-			entry.backendRef.Port,
-			entry.backendRef.Name,
-			entry.backendRef.Namespace)
+		clusterName := buildCatchAllClusterName(entry.backendRef)
 
 		patch := map[string]interface{}{
 			"applyTo": "VIRTUAL_HOST",
@@ -543,6 +541,13 @@ func (r *ExternalProcessorAttachmentReconciler) deleteEnvoyFilters(
 
 func boolPtr(b bool) *bool {
 	return &b
+}
+
+func buildCatchAllClusterName(ref v1alpha1.BackendRef) string {
+	if strings.Contains(ref.Name, ".") {
+		return fmt.Sprintf("outbound|%d||%s", ref.Port, ref.Name)
+	}
+	return fmt.Sprintf("outbound|%d||%s.%s.svc.cluster.local", ref.Port, ref.Name, ref.Namespace)
 }
 
 // getTimeout returns the configured timeout or the default "5s"

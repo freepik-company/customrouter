@@ -22,13 +22,16 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -349,7 +352,9 @@ func (r *CustomHTTPRouteReconciler) upsertConfigMaps(
 	return nil
 }
 
-// upsertSingleConfigMap creates or updates a single ConfigMap
+// upsertSingleConfigMap creates or updates a single ConfigMap with retry-on-conflict.
+// Multiple CustomHTTPRoute reconciliations run concurrently and all update the same
+// ConfigMaps, so conflicts are expected. We retry with a fresh Get on each attempt.
 func (r *CustomHTTPRouteReconciler) upsertSingleConfigMap(
 	ctx context.Context,
 	partition ConfigMapPartition,
@@ -359,7 +364,6 @@ func (r *CustomHTTPRouteReconciler) upsertSingleConfigMap(
 		Namespace: r.ConfigMapNamespace,
 	}
 
-	// Extract part number from name (e.g., "customrouter-routes-gateway-public-0" -> "0")
 	partNumber := "0"
 	parts := strings.Split(partition.Name, "-")
 	if len(parts) > 0 {
@@ -373,35 +377,41 @@ func (r *CustomHTTPRouteReconciler) upsertSingleConfigMap(
 		configMapPartLabel:       partNumber,
 	}
 
-	// Try to get existing ConfigMap
-	existingCM := &corev1.ConfigMap{}
-	err := r.Get(ctx, configMapKey, existingCM)
+	backoff := wait.Backoff{
+		Steps:    5,
+		Duration: 200 * time.Millisecond,
+		Factor:   2.0,
+		Jitter:   0.2,
+	}
 
-	if errors.IsNotFound(err) {
-		// Create new ConfigMap
-		cm := &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      partition.Name,
-				Namespace: r.ConfigMapNamespace,
-				Labels:    configMapLabels,
-			},
-			Data: map[string]string{
-				"routes.json": partition.Data,
-			},
+	return retry.RetryOnConflict(backoff, func() error {
+		existingCM := &corev1.ConfigMap{}
+		err := r.Get(ctx, configMapKey, existingCM)
+
+		if errors.IsNotFound(err) {
+			cm := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      partition.Name,
+					Namespace: r.ConfigMapNamespace,
+					Labels:    configMapLabels,
+				},
+				Data: map[string]string{
+					"routes.json": partition.Data,
+				},
+			}
+			return r.Create(ctx, cm)
 		}
-		return r.Create(ctx, cm)
-	}
 
-	if err != nil {
-		return err
-	}
+		if err != nil {
+			return err
+		}
 
-	// Update existing ConfigMap
-	existingCM.Labels = configMapLabels
-	existingCM.Data = map[string]string{
-		"routes.json": partition.Data,
-	}
-	return r.Update(ctx, existingCM)
+		existingCM.Labels = configMapLabels
+		existingCM.Data = map[string]string{
+			"routes.json": partition.Data,
+		}
+		return r.Update(ctx, existingCM)
+	})
 }
 
 // deleteStaleConfigMaps removes ConfigMaps that are no longer needed
