@@ -43,7 +43,9 @@ type CustomHTTPRouteReconciler struct {
 // +kubebuilder:rbac:groups=customrouter.freepik.com,resources=customhttproutes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=customrouter.freepik.com,resources=customhttproutes/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=customrouter.freepik.com,resources=customhttproutes/finalizers,verbs=update
+// +kubebuilder:rbac:groups=customrouter.freepik.com,resources=externalprocessorattachments,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.

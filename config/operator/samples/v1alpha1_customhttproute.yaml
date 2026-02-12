@@ -21,6 +21,18 @@ spec:
     values: [es, fr, it, de, pt, ja, ko]
     policy: Optional  # Optional | Required | Disabled
 
+  # catchAllRoute (optional) configures automatic generation of catch-all virtual hosts
+  # for this route's hostnames. When specified, the operator generates an EnvoyFilter that
+  # creates default routes, allowing CustomHTTPRoute to handle requests without requiring
+  # a base HTTPRoute to be configured separately.
+  #
+  # The hostnames are taken from spec.hostnames above.
+  catchAllRoute:
+    backendRef:
+      name: default
+      namespace: web
+      port: 80
+
   rules:
     # ====================
     # BASIC ROUTING

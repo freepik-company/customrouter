@@ -19,6 +19,7 @@ package externalprocessorattachment
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -65,17 +66,20 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileEnvoyFilters(
 		return fmt.Errorf("failed to reconcile routes EnvoyFilter: %w", err)
 	}
 
-	// Create catch-all EnvoyFilter if configured
-	if attachment.Spec.CatchAllRoute != nil {
-		if err := r.reconcileCatchAllEnvoyFilter(ctx, attachment); err != nil {
+	// Collect catch-all entries from CustomHTTPRoutes and merge with EPA config
+	mergedEntries := r.collectMergedCatchAllEntries(ctx, attachment)
+
+	if len(mergedEntries) > 0 {
+		if err := r.reconcileCatchAllEnvoyFilter(ctx, attachment, mergedEntries); err != nil {
 			return fmt.Errorf("failed to reconcile catch-all EnvoyFilter: %w", err)
 		}
 		logger.Info("EnvoyFilters reconciled successfully",
 			"extproc", attachment.Name+extProcFilterSuffix,
 			"routes", attachment.Name+routesFilterSuffix,
-			"catchall", attachment.Name+catchAllFilterSuffix)
+			"catchall", attachment.Name+catchAllFilterSuffix,
+			"catchallHostnames", len(mergedEntries))
 	} else {
-		// Delete catch-all EnvoyFilter if it exists but is no longer configured
+		// Delete catch-all EnvoyFilter if it exists but is no longer needed
 		if err := r.deleteCatchAllEnvoyFilter(ctx, attachment); err != nil {
 			return fmt.Errorf("failed to delete catch-all EnvoyFilter: %w", err)
 		}
@@ -85,6 +89,63 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileEnvoyFilters(
 	}
 
 	return nil
+}
+
+// catchAllEntry represents a hostname with its default backend
+type catchAllEntry struct {
+	hostname   string
+	backendRef v1alpha1.BackendRef
+}
+
+// collectMergedCatchAllEntries lists CustomHTTPRoutes, collects their catchAllRoute entries,
+// and merges with the EPA's own catchAllRoute config. EPA entries override route entries for same hostname.
+func (r *ExternalProcessorAttachmentReconciler) collectMergedCatchAllEntries(
+	ctx context.Context,
+	attachment *v1alpha1.ExternalProcessorAttachment,
+) []catchAllEntry {
+	logger := log.FromContext(ctx)
+
+	merged := make(map[string]v1alpha1.BackendRef)
+
+	// Collect from CustomHTTPRoutes
+	routeList := &v1alpha1.CustomHTTPRouteList{}
+	if err := r.List(ctx, routeList); err != nil {
+		logger.Error(err, "Failed to list CustomHTTPRoutes for catch-all aggregation")
+	} else {
+		for i := range routeList.Items {
+			route := &routeList.Items[i]
+			if route.DeletionTimestamp != nil && !route.DeletionTimestamp.IsZero() {
+				continue
+			}
+			if route.Spec.CatchAllRoute == nil {
+				continue
+			}
+			for _, hostname := range route.Spec.Hostnames {
+				merged[hostname] = route.Spec.CatchAllRoute.BackendRef
+			}
+		}
+	}
+
+	// EPA's own catchAllRoute overrides
+	if attachment.Spec.CatchAllRoute != nil {
+		for _, hostname := range attachment.Spec.CatchAllRoute.Hostnames {
+			merged[hostname] = attachment.Spec.CatchAllRoute.BackendRef
+		}
+	}
+
+	entries := make([]catchAllEntry, 0, len(merged))
+	for hostname, backendRef := range merged {
+		entries = append(entries, catchAllEntry{
+			hostname:   hostname,
+			backendRef: backendRef,
+		})
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].hostname < entries[j].hostname
+	})
+
+	return entries
 }
 
 // reconcileExtProcEnvoyFilter creates or updates the ext_proc EnvoyFilter
@@ -265,24 +326,13 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileRoutesEnvoyFilter(
 }
 
 // reconcileCatchAllEnvoyFilter creates or updates the catch-all EnvoyFilter
-// This EnvoyFilter creates virtual hosts for the specified hostnames with a catch-all route
-// that allows requests to be processed by the ext_proc filter even when no base HTTPRoute exists.
+// using the merged catch-all entries from both EPA config and CustomHTTPRoutes.
 func (r *ExternalProcessorAttachmentReconciler) reconcileCatchAllEnvoyFilter(
 	ctx context.Context,
 	attachment *v1alpha1.ExternalProcessorAttachment,
+	entries []catchAllEntry,
 ) error {
-	if attachment.Spec.CatchAllRoute == nil {
-		return nil
-	}
-
 	filterName := attachment.Name + catchAllFilterSuffix
-	catchAllConfig := attachment.Spec.CatchAllRoute
-
-	// Build Istio cluster name for the default backend
-	clusterName := fmt.Sprintf("outbound|%d||%s.%s.svc.cluster.local",
-		catchAllConfig.BackendRef.Port,
-		catchAllConfig.BackendRef.Name,
-		catchAllConfig.BackendRef.Namespace)
 
 	// Build EnvoyFilter as unstructured
 	ef := &unstructured.Unstructured{}
@@ -311,8 +361,13 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileCatchAllEnvoyFilter(
 	}
 
 	// Build config patches - one VIRTUAL_HOST patch per hostname
-	configPatches := make([]interface{}, 0, len(catchAllConfig.Hostnames))
-	for _, hostname := range catchAllConfig.Hostnames {
+	configPatches := make([]interface{}, 0, len(entries))
+	for _, entry := range entries {
+		clusterName := fmt.Sprintf("outbound|%d||%s.%s.svc.cluster.local",
+			entry.backendRef.Port,
+			entry.backendRef.Name,
+			entry.backendRef.Namespace)
+
 		patch := map[string]interface{}{
 			"applyTo": "VIRTUAL_HOST",
 			"match": map[string]interface{}{
@@ -321,8 +376,8 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileCatchAllEnvoyFilter(
 			"patch": map[string]interface{}{
 				"operation": "ADD",
 				"value": map[string]interface{}{
-					"name":    fmt.Sprintf("customrouter-catchall-%s", hostname),
-					"domains": []interface{}{hostname},
+					"name":    fmt.Sprintf("customrouter-catchall-%s", entry.hostname),
+					"domains": []interface{}{entry.hostname},
 					"routes": []interface{}{
 						// Dynamic route - matches when ext_proc sets the cluster header
 						map[string]interface{}{

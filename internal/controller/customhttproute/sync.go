@@ -141,6 +141,11 @@ func (r *CustomHTTPRouteReconciler) rebuildAllConfigMaps(ctx context.Context) er
 		return err
 	}
 
+	// Reconcile catch-all EnvoyFilter from aggregated catchAllRoute declarations
+	if err := r.reconcileCatchAllFromRoutes(ctx, routeList); err != nil {
+		return fmt.Errorf("failed to reconcile catch-all routes: %w", err)
+	}
+
 	return nil
 }
 

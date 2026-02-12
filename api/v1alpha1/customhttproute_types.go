@@ -269,6 +269,15 @@ type Rule struct {
 	PathPrefixes *RulePathPrefixes `json:"pathPrefixes,omitempty"`
 }
 
+// CatchAllBackendRef defines the default backend for catch-all route generation.
+// When specified on a CustomHTTPRoute, the operator will generate catch-all virtual hosts
+// for the route's hostnames, allowing requests to be processed without requiring a base HTTPRoute.
+type CatchAllBackendRef struct {
+	// backendRef defines the default backend service to route unmatched requests to.
+	// +required
+	BackendRef BackendRef `json:"backendRef"`
+}
+
 // CustomHTTPRouteSpec defines the desired state of CustomHTTPRoute
 type CustomHTTPRouteSpec struct {
 	// targetRef identifies the target external processor for this route.
@@ -284,6 +293,13 @@ type CustomHTTPRouteSpec struct {
 	// pathPrefixes defines prefixes to prepend to paths (e.g., language prefixes)
 	// +optional
 	PathPrefixes *PathPrefixes `json:"pathPrefixes,omitempty"`
+
+	// catchAllRoute configures automatic generation of catch-all virtual hosts for this route's hostnames.
+	// When specified, the operator generates an EnvoyFilter that creates default routes for the hostnames,
+	// allowing CustomHTTPRoute to handle requests without requiring a base HTTPRoute.
+	// The hostnames are taken from spec.hostnames; the backendRef defines the default backend.
+	// +optional
+	CatchAllRoute *CatchAllBackendRef `json:"catchAllRoute,omitempty"`
 
 	// rules defines the routing rules
 	// +required

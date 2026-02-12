@@ -85,6 +85,37 @@ spec:
                       type: string
                     type: array
                 type: object
+              catchAllRoute:
+                description: |-
+                  catchAllRoute configures automatic generation of catch-all virtual hosts for this route's hostnames.
+                  When specified, the operator generates an EnvoyFilter that creates default routes for the hostnames,
+                  allowing CustomHTTPRoute to handle requests without requiring a base HTTPRoute.
+                  The hostnames are taken from spec.hostnames; the backendRef defines the default backend.
+                properties:
+                  backendRef:
+                    description: backendRef defines the default backend service to route
+                      unmatched requests to.
+                    properties:
+                      name:
+                        description: name is the name of the Service
+                        type: string
+                      namespace:
+                        description: namespace is the namespace of the Service
+                        type: string
+                      port:
+                        description: port is the port of the Service
+                        format: int32
+                        maximum: 65535
+                        minimum: 1
+                        type: integer
+                    required:
+                    - name
+                    - namespace
+                    - port
+                    type: object
+                required:
+                - backendRef
+                type: object
               rules:
                 description: rules defines the routing rules
                 items:
