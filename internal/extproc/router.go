@@ -31,12 +31,12 @@ import (
 
 // requestVars holds extracted values for variable substitution
 type requestVars struct {
-	clientIP   string
-	requestID  string
-	host       string
-	path       string
-	method     string
-	scheme     string
+	clientIP     string
+	requestID    string
+	host         string
+	path         string
+	method       string
+	scheme       string
 	pathSegments []string
 }
 

@@ -91,6 +91,8 @@ spec:
   pathPrefixes:
     values: [es, fr, de]
     policy: Optional  # Optional | Required | Disabled
+    # Control which match types get prefix expansion (default: all)
+    expandMatchTypes: [PathPrefix, Exact]  # Only expand these types
 
   rules:
     # Simple prefix match (default)
@@ -324,6 +326,7 @@ Defines routing rules for a set of hostnames. Rules are compiled into an optimiz
 | `targetRef.name` | Which external processor handles these routes |
 | `hostnames` | List of hostnames this route applies to |
 | `pathPrefixes` | Optional prefixes to prepend to all paths |
+| `pathPrefixes.expandMatchTypes` | Which match types are expanded with prefixes (default: all) |
 | `rules[].matches` | Path matching conditions |
 | `rules[].actions` | Optional transformations (redirect, rewrite, headers) |
 | `rules[].backendRefs` | Target services (optional if redirect action) |
@@ -371,6 +374,33 @@ When configured, the operator generates three EnvoyFilters:
 | `PathPrefix` | Matches path prefix (default) | `/api` matches `/api/users` |
 | `Exact` | Matches exact path | `/health` only matches `/health` |
 | `Regex` | Go regexp syntax | `^/users/[0-9]+$` |
+
+### Expand Match Types
+
+By default, all match types (`PathPrefix`, `Exact`, `Regex`) are expanded with path prefixes. You can control which types are expanded using `expandMatchTypes`:
+
+```yaml
+pathPrefixes:
+  values: [es, fr]
+  policy: Optional
+  expandMatchTypes: [PathPrefix]  # Only expand PathPrefix, leave Exact and Regex as-is
+```
+
+This can also be overridden at the rule level:
+
+```yaml
+rules:
+  - matches:
+      - path: /user/me
+        type: Exact
+    backendRefs:
+      - name: user-service
+        namespace: backend
+        port: 8080
+    pathPrefixes:
+      policy: Optional
+      expandMatchTypes: [PathPrefix]  # This rule won't expand Exact matches
+```
 
 ### Priority
 

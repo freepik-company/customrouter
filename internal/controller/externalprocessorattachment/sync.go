@@ -39,9 +39,9 @@ const (
 	envoyFilterOwnerLabel     = "customrouter.freepik.com/attachment"
 
 	// EnvoyFilter name suffixes
-	extProcFilterSuffix     = "-extproc"
-	routesFilterSuffix      = "-routes"
-	catchAllFilterSuffix    = "-catchall"
+	extProcFilterSuffix  = "-extproc"
+	routesFilterSuffix   = "-routes"
+	catchAllFilterSuffix = "-catchall"
 )
 
 var envoyFilterGVK = schema.GroupVersionKind{

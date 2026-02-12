@@ -50,27 +50,24 @@ func ExpandRoutes(cr *v1alpha1.CustomHTTPRoute) map[string][]Route {
 func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []Route {
 	var routes []Route
 
-	// Determine the effective policy for this rule
 	policy := getEffectivePolicy(specPrefixes, rule)
+	expandTypes := getEffectiveExpandMatchTypes(specPrefixes, rule)
 
-	// Get prefixes to apply
 	var prefixes []string
 	if specPrefixes != nil {
 		prefixes = specPrefixes.Values
 	}
 
-	// Build backend string
 	backend := buildBackendString(rule.BackendRefs)
-
-	// Convert actions from API type to routes type
 	actions := convertActions(rule.Actions)
 
 	for _, match := range rule.Matches {
 		matchType := getMatchType(match.Type)
 		priority := getEffectivePriority(match.Priority)
 
-		// Exact type: no expansion, use literal path
-		if match.Type == v1alpha1.MatchTypeExact {
+		shouldExpand := shouldExpandMatchType(match.Type, expandTypes)
+
+		if !shouldExpand {
 			routes = append(routes, Route{
 				Path:     match.Path,
 				Type:     matchType,
@@ -81,7 +78,6 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []Rout
 			continue
 		}
 
-		// Regex type: expand by modifying the regex pattern
 		if match.Type == v1alpha1.MatchTypeRegex {
 			expandedPath := expandRegexWithPrefixes(match.Path, prefixes, policy)
 			routes = append(routes, Route{
@@ -94,10 +90,9 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []Rout
 			continue
 		}
 
-		// PathPrefix: expand based on policy
+		// Exact and PathPrefix: expand by generating separate routes per prefix
 		switch policy {
 		case v1alpha1.PathPrefixPolicyDisabled:
-			// Only the literal path
 			routes = append(routes, Route{
 				Path:     match.Path,
 				Type:     matchType,
@@ -107,7 +102,6 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []Rout
 			})
 
 		case v1alpha1.PathPrefixPolicyRequired:
-			// Only with prefixes, not without
 			for _, prefix := range prefixes {
 				routes = append(routes, Route{
 					Path:     "/" + prefix + match.Path,
@@ -119,7 +113,6 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []Rout
 			}
 
 		case v1alpha1.PathPrefixPolicyOptional:
-			// With prefixes AND without
 			for _, prefix := range prefixes {
 				routes = append(routes, Route{
 					Path:     "/" + prefix + match.Path,
@@ -129,7 +122,6 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []Rout
 					Actions:  actions,
 				})
 			}
-			// Also add the path without prefix
 			routes = append(routes, Route{
 				Path:     match.Path,
 				Type:     matchType,
@@ -203,6 +195,34 @@ func getEffectivePolicy(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule
 
 	// Default is Optional
 	return v1alpha1.PathPrefixPolicyOptional
+}
+
+// getEffectiveExpandMatchTypes returns the list of match types that should be expanded.
+// Rule-level overrides spec-level. Empty list means expand all types (default).
+func getEffectiveExpandMatchTypes(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []v1alpha1.MatchType {
+	if rule.PathPrefixes != nil && len(rule.PathPrefixes.ExpandMatchTypes) > 0 {
+		return rule.PathPrefixes.ExpandMatchTypes
+	}
+
+	if specPrefixes != nil && len(specPrefixes.ExpandMatchTypes) > 0 {
+		return specPrefixes.ExpandMatchTypes
+	}
+
+	return nil
+}
+
+// shouldExpandMatchType returns true if the given match type should be expanded with prefixes.
+// When expandTypes is nil/empty, all types are expanded (default behavior).
+func shouldExpandMatchType(matchType v1alpha1.MatchType, expandTypes []v1alpha1.MatchType) bool {
+	if len(expandTypes) == 0 {
+		return true
+	}
+	for _, t := range expandTypes {
+		if t == matchType {
+			return true
+		}
+	}
+	return false
 }
 
 // getMatchType converts the API MatchType to string for JSON

@@ -20,6 +20,9 @@ spec:
   pathPrefixes:
     values: [es, fr, it, de, pt, ja, ko]
     policy: Optional  # Optional | Required | Disabled
+    # expandMatchTypes controls which match types are expanded with path prefixes.
+    # When omitted, all types are expanded. Example: only expand PathPrefix and Exact:
+    # expandMatchTypes: [PathPrefix, Exact]
 
   # catchAllRoute (optional) configures automatic generation of catch-all virtual hosts
   # for this route's hostnames. When specified, the operator generates an EnvoyFilter that
@@ -58,6 +61,20 @@ spec:
           port: 8080
       pathPrefixes:
         policy: Disabled
+
+    # Exact match with expandMatchTypes override at rule level
+    # This rule only expands PathPrefix matches; Exact matches stay literal
+    - matches:
+        - path: /user/me
+          type: Exact
+        - path: /user
+      backendRefs:
+        - name: users-api
+          namespace: backend
+          port: 8080
+      pathPrefixes:
+        policy: Optional
+        expandMatchTypes: [PathPrefix]
 
     # Regex match (Go regexp syntax)
     - matches:

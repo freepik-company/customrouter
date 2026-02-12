@@ -98,6 +98,13 @@ type PathPrefixes struct {
 	// +optional
 	// +kubebuilder:default=Optional
 	Policy PathPrefixPolicy `json:"policy,omitempty"`
+
+	// expandMatchTypes controls which match types are expanded with path prefixes.
+	// Accepts a list of match types: "PathPrefix", "Exact", "Regex".
+	// When empty or not specified, all match types are expanded (default behavior).
+	// Example: ["PathPrefix", "Exact"] expands only PathPrefix and Exact matches.
+	// +optional
+	ExpandMatchTypes []MatchType `json:"expandMatchTypes,omitempty"`
 }
 
 // PathMatch defines a path matching rule
@@ -233,6 +240,12 @@ type RulePathPrefixes struct {
 	// policy overrides the spec-level pathPrefixes.policy for this rule
 	// +required
 	Policy PathPrefixPolicy `json:"policy"`
+
+	// expandMatchTypes overrides the spec-level pathPrefixes.expandMatchTypes for this rule.
+	// Accepts a list of match types: "PathPrefix", "Exact", "Regex".
+	// When not specified, inherits from spec-level pathPrefixes.expandMatchTypes.
+	// +optional
+	ExpandMatchTypes []MatchType `json:"expandMatchTypes,omitempty"`
 }
 
 // TargetRef identifies the target external processor for this route

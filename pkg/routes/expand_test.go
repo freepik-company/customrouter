@@ -565,3 +565,311 @@ func TestExpandRoutesWithRedirect(t *testing.T) {
 		t.Errorf("expected status 301, got %d", action.RedirectStatusCode)
 	}
 }
+
+func TestExpandExactWithPrefixesOptional(t *testing.T) {
+	cr := &v1alpha1.CustomHTTPRoute{
+		Spec: v1alpha1.CustomHTTPRouteSpec{
+			TargetRef: v1alpha1.TargetRef{Name: "default"},
+			Hostnames: []string{"magnific.com"},
+			PathPrefixes: &v1alpha1.PathPrefixes{
+				Values: []string{"es", "fr", "de"},
+				Policy: v1alpha1.PathPrefixPolicyOptional,
+			},
+			Rules: []v1alpha1.Rule{
+				{
+					Matches: []v1alpha1.PathMatch{
+						{Path: "/user/me", Type: v1alpha1.MatchTypeExact},
+					},
+					BackendRefs: []v1alpha1.BackendRef{
+						{Name: "user", Namespace: "user", Port: 80},
+					},
+				},
+			},
+		},
+	}
+
+	result := ExpandRoutes(cr)
+	routes := result["magnific.com"]
+
+	// 3 prefixed + 1 unprefixed = 4
+	if len(routes) != 4 {
+		t.Fatalf("expected 4 routes, got %d: %+v", len(routes), routes)
+	}
+
+	paths := make(map[string]bool)
+	for _, r := range routes {
+		paths[r.Path] = true
+		if r.Type != RouteTypeExact {
+			t.Errorf("expected exact type, got %s for path %s", r.Type, r.Path)
+		}
+	}
+
+	for _, expected := range []string{"/user/me", "/es/user/me", "/fr/user/me", "/de/user/me"} {
+		if !paths[expected] {
+			t.Errorf("missing expected path %s", expected)
+		}
+	}
+}
+
+func TestExpandExactWithPrefixesRequired(t *testing.T) {
+	cr := &v1alpha1.CustomHTTPRoute{
+		Spec: v1alpha1.CustomHTTPRouteSpec{
+			TargetRef: v1alpha1.TargetRef{Name: "default"},
+			Hostnames: []string{"magnific.com"},
+			PathPrefixes: &v1alpha1.PathPrefixes{
+				Values: []string{"es", "fr"},
+				Policy: v1alpha1.PathPrefixPolicyRequired,
+			},
+			Rules: []v1alpha1.Rule{
+				{
+					Matches: []v1alpha1.PathMatch{
+						{Path: "/user/me", Type: v1alpha1.MatchTypeExact},
+					},
+					BackendRefs: []v1alpha1.BackendRef{
+						{Name: "user", Namespace: "user", Port: 80},
+					},
+				},
+			},
+		},
+	}
+
+	result := ExpandRoutes(cr)
+	routes := result["magnific.com"]
+
+	if len(routes) != 2 {
+		t.Fatalf("expected 2 routes, got %d: %+v", len(routes), routes)
+	}
+
+	paths := make(map[string]bool)
+	for _, r := range routes {
+		paths[r.Path] = true
+	}
+
+	if paths["/user/me"] {
+		t.Error("unprefixed /user/me should NOT be present with Required policy")
+	}
+	for _, expected := range []string{"/es/user/me", "/fr/user/me"} {
+		if !paths[expected] {
+			t.Errorf("missing expected path %s", expected)
+		}
+	}
+}
+
+func TestExpandExactWithPrefixesDisabled(t *testing.T) {
+	cr := &v1alpha1.CustomHTTPRoute{
+		Spec: v1alpha1.CustomHTTPRouteSpec{
+			TargetRef: v1alpha1.TargetRef{Name: "default"},
+			Hostnames: []string{"magnific.com"},
+			PathPrefixes: &v1alpha1.PathPrefixes{
+				Values: []string{"es", "fr"},
+				Policy: v1alpha1.PathPrefixPolicyDisabled,
+			},
+			Rules: []v1alpha1.Rule{
+				{
+					Matches: []v1alpha1.PathMatch{
+						{Path: "/user/me", Type: v1alpha1.MatchTypeExact},
+					},
+					BackendRefs: []v1alpha1.BackendRef{
+						{Name: "user", Namespace: "user", Port: 80},
+					},
+				},
+			},
+		},
+	}
+
+	result := ExpandRoutes(cr)
+	routes := result["magnific.com"]
+
+	if len(routes) != 1 {
+		t.Fatalf("expected 1 route, got %d", len(routes))
+	}
+	if routes[0].Path != "/user/me" {
+		t.Errorf("expected /user/me, got %s", routes[0].Path)
+	}
+}
+
+func TestExpandMatchTypesPathPrefixOnly(t *testing.T) {
+	cr := &v1alpha1.CustomHTTPRoute{
+		Spec: v1alpha1.CustomHTTPRouteSpec{
+			TargetRef: v1alpha1.TargetRef{Name: "default"},
+			Hostnames: []string{"example.com"},
+			PathPrefixes: &v1alpha1.PathPrefixes{
+				Values:           []string{"es", "fr"},
+				Policy:           v1alpha1.PathPrefixPolicyOptional,
+				ExpandMatchTypes: []v1alpha1.MatchType{v1alpha1.MatchTypePathPrefix},
+			},
+			Rules: []v1alpha1.Rule{
+				{
+					Matches: []v1alpha1.PathMatch{
+						{Path: "/user/me", Type: v1alpha1.MatchTypeExact},
+						{Path: "/app", Type: v1alpha1.MatchTypePathPrefix},
+					},
+					BackendRefs: []v1alpha1.BackendRef{
+						{Name: "svc", Namespace: "default", Port: 80},
+					},
+				},
+			},
+		},
+	}
+
+	result := ExpandRoutes(cr)
+	routes := result["example.com"]
+
+	// Exact: 1 (not expanded), PathPrefix: 3 (es + fr + unprefixed) = 4
+	if len(routes) != 4 {
+		t.Fatalf("expected 4 routes, got %d: %+v", len(routes), routes)
+	}
+
+	exactCount := 0
+	prefixCount := 0
+	for _, r := range routes {
+		if r.Type == RouteTypeExact {
+			exactCount++
+			if r.Path != "/user/me" {
+				t.Errorf("exact route should be /user/me, got %s", r.Path)
+			}
+		}
+		if r.Type == RouteTypePrefix {
+			prefixCount++
+		}
+	}
+	if exactCount != 1 {
+		t.Errorf("expected 1 exact route, got %d", exactCount)
+	}
+	if prefixCount != 3 {
+		t.Errorf("expected 3 prefix routes, got %d", prefixCount)
+	}
+}
+
+func TestExpandMatchTypesExactAndPathPrefix(t *testing.T) {
+	cr := &v1alpha1.CustomHTTPRoute{
+		Spec: v1alpha1.CustomHTTPRouteSpec{
+			TargetRef: v1alpha1.TargetRef{Name: "default"},
+			Hostnames: []string{"example.com"},
+			PathPrefixes: &v1alpha1.PathPrefixes{
+				Values:           []string{"es"},
+				Policy:           v1alpha1.PathPrefixPolicyOptional,
+				ExpandMatchTypes: []v1alpha1.MatchType{v1alpha1.MatchTypeExact, v1alpha1.MatchTypePathPrefix},
+			},
+			Rules: []v1alpha1.Rule{
+				{
+					Matches: []v1alpha1.PathMatch{
+						{Path: "/user/me", Type: v1alpha1.MatchTypeExact},
+						{Path: "/app", Type: v1alpha1.MatchTypePathPrefix},
+						{Path: "^/api/[0-9]+$", Type: v1alpha1.MatchTypeRegex},
+					},
+					BackendRefs: []v1alpha1.BackendRef{
+						{Name: "svc", Namespace: "default", Port: 80},
+					},
+				},
+			},
+		},
+	}
+
+	result := ExpandRoutes(cr)
+	routes := result["example.com"]
+
+	// Exact: 2 (es + unprefixed), PathPrefix: 2 (es + unprefixed), Regex: 1 (not expanded) = 5
+	if len(routes) != 5 {
+		t.Fatalf("expected 5 routes, got %d: %+v", len(routes), routes)
+	}
+
+	var exactPaths, prefixPaths, regexPaths []string
+	for _, r := range routes {
+		switch r.Type {
+		case RouteTypeExact:
+			exactPaths = append(exactPaths, r.Path)
+		case RouteTypePrefix:
+			prefixPaths = append(prefixPaths, r.Path)
+		case RouteTypeRegex:
+			regexPaths = append(regexPaths, r.Path)
+		}
+	}
+
+	if len(exactPaths) != 2 {
+		t.Errorf("expected 2 exact routes, got %d: %v", len(exactPaths), exactPaths)
+	}
+	if len(prefixPaths) != 2 {
+		t.Errorf("expected 2 prefix routes, got %d: %v", len(prefixPaths), prefixPaths)
+	}
+	if len(regexPaths) != 1 {
+		t.Errorf("expected 1 regex route (not expanded), got %d: %v", len(regexPaths), regexPaths)
+	}
+	if len(regexPaths) == 1 && regexPaths[0] != "^/api/[0-9]+$" {
+		t.Errorf("regex should not be modified, got %s", regexPaths[0])
+	}
+}
+
+func TestExpandMatchTypesRuleLevelOverride(t *testing.T) {
+	cr := &v1alpha1.CustomHTTPRoute{
+		Spec: v1alpha1.CustomHTTPRouteSpec{
+			TargetRef: v1alpha1.TargetRef{Name: "default"},
+			Hostnames: []string{"example.com"},
+			PathPrefixes: &v1alpha1.PathPrefixes{
+				Values: []string{"es", "fr"},
+				Policy: v1alpha1.PathPrefixPolicyOptional,
+			},
+			Rules: []v1alpha1.Rule{
+				{
+					Matches: []v1alpha1.PathMatch{
+						{Path: "/user/me", Type: v1alpha1.MatchTypeExact},
+					},
+					BackendRefs: []v1alpha1.BackendRef{
+						{Name: "svc", Namespace: "default", Port: 80},
+					},
+					PathPrefixes: &v1alpha1.RulePathPrefixes{
+						Policy:           v1alpha1.PathPrefixPolicyOptional,
+						ExpandMatchTypes: []v1alpha1.MatchType{v1alpha1.MatchTypePathPrefix},
+					},
+				},
+			},
+		},
+	}
+
+	result := ExpandRoutes(cr)
+	routes := result["example.com"]
+
+	// Rule overrides to PathPrefixOnly, so Exact should NOT expand = 1 route
+	if len(routes) != 1 {
+		t.Fatalf("expected 1 route (rule override to PathPrefixOnly), got %d: %+v", len(routes), routes)
+	}
+	if routes[0].Path != "/user/me" {
+		t.Errorf("expected /user/me, got %s", routes[0].Path)
+	}
+}
+
+func TestExpandMatchTypesDefaultExpandsAll(t *testing.T) {
+	cr := &v1alpha1.CustomHTTPRoute{
+		Spec: v1alpha1.CustomHTTPRouteSpec{
+			TargetRef: v1alpha1.TargetRef{Name: "default"},
+			Hostnames: []string{"example.com"},
+			PathPrefixes: &v1alpha1.PathPrefixes{
+				Values: []string{"es"},
+				Policy: v1alpha1.PathPrefixPolicyOptional,
+			},
+			Rules: []v1alpha1.Rule{
+				{
+					Matches: []v1alpha1.PathMatch{
+						{Path: "/exact", Type: v1alpha1.MatchTypeExact},
+						{Path: "/prefix", Type: v1alpha1.MatchTypePathPrefix},
+						{Path: "^/regex$", Type: v1alpha1.MatchTypeRegex},
+					},
+					BackendRefs: []v1alpha1.BackendRef{
+						{Name: "svc", Namespace: "default", Port: 80},
+					},
+				},
+			},
+		},
+	}
+
+	result := ExpandRoutes(cr)
+	routes := result["example.com"]
+
+	// Default (no expandMatchTypes): all types expanded
+	// Exact: /es/exact + /exact = 2
+	// PathPrefix: /es/prefix + /prefix = 2
+	// Regex: 1 (modified regex with optional prefix)
+	if len(routes) != 5 {
+		t.Fatalf("expected 5 routes (all types expanded by default), got %d: %+v", len(routes), routes)
+	}
+}

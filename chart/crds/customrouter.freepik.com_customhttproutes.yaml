@@ -55,36 +55,6 @@ spec:
           spec:
             description: spec defines the desired state of CustomHTTPRoute
             properties:
-              hostnames:
-                description: hostnames is a list of hostnames that this route applies
-                  to
-                items:
-                  type: string
-                minItems: 1
-                type: array
-              pathPrefixes:
-                description: pathPrefixes defines prefixes to prepend to paths (e.g.,
-                  language prefixes)
-                properties:
-                  policy:
-                    default: Optional
-                    description: |-
-                      policy defines how prefixes are applied
-                      Optional: generates routes with and without prefix (default)
-                      Required: generates routes only with prefix
-                      Disabled: generates routes without any prefix
-                    enum:
-                    - Optional
-                    - Required
-                    - Disabled
-                    type: string
-                  values:
-                    description: values is the list of prefixes to prepend to paths
-                      (e.g., ["es", "fr", "it"])
-                    items:
-                      type: string
-                    type: array
-                type: object
               catchAllRoute:
                 description: |-
                   catchAllRoute configures automatic generation of catch-all virtual hosts for this route's hostnames.
@@ -93,8 +63,8 @@ spec:
                   The hostnames are taken from spec.hostnames; the backendRef defines the default backend.
                 properties:
                   backendRef:
-                    description: backendRef defines the default backend service to route
-                      unmatched requests to.
+                    description: backendRef defines the default backend service to
+                      route unmatched requests to.
                     properties:
                       name:
                         description: name is the name of the Service
@@ -115,6 +85,50 @@ spec:
                     type: object
                 required:
                 - backendRef
+                type: object
+              hostnames:
+                description: hostnames is a list of hostnames that this route applies
+                  to
+                items:
+                  type: string
+                minItems: 1
+                type: array
+              pathPrefixes:
+                description: pathPrefixes defines prefixes to prepend to paths (e.g.,
+                  language prefixes)
+                properties:
+                  expandMatchTypes:
+                    description: |-
+                      expandMatchTypes controls which match types are expanded with path prefixes.
+                      Accepts a list of match types: "PathPrefix", "Exact", "Regex".
+                      When empty or not specified, all match types are expanded (default behavior).
+                      Example: ["PathPrefix", "Exact"] expands only PathPrefix and Exact matches.
+                    items:
+                      description: MatchType defines the type of path matching
+                      enum:
+                      - PathPrefix
+                      - Exact
+                      - Regex
+                      type: string
+                    type: array
+                  policy:
+                    default: Optional
+                    description: |-
+                      policy defines how prefixes are applied
+                      Optional: generates routes with and without prefix (default)
+                      Required: generates routes only with prefix
+                      Disabled: generates routes without any prefix
+                    enum:
+                    - Optional
+                    - Required
+                    - Disabled
+                    type: string
+                  values:
+                    description: values is the list of prefixes to prepend to paths
+                      (e.g., ["es", "fr", "it"])
+                    items:
+                      type: string
+                    type: array
                 type: object
               rules:
                 description: rules defines the routing rules
@@ -292,6 +306,19 @@ spec:
                       description: pathPrefixes overrides the spec-level pathPrefixes
                         configuration for this rule
                       properties:
+                        expandMatchTypes:
+                          description: |-
+                            expandMatchTypes overrides the spec-level pathPrefixes.expandMatchTypes for this rule.
+                            Accepts a list of match types: "PathPrefix", "Exact", "Regex".
+                            When not specified, inherits from spec-level pathPrefixes.expandMatchTypes.
+                          items:
+                            description: MatchType defines the type of path matching
+                            enum:
+                            - PathPrefix
+                            - Exact
+                            - Regex
+                            type: string
+                          type: array
                         policy:
                           description: policy overrides the spec-level pathPrefixes.policy
                             for this rule
