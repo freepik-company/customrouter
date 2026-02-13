@@ -165,6 +165,7 @@ externalProcessors:
       - --debug=false
       - --addr=:9001
       - --target-name=default
+      - --routes-configmap-namespace=default
       - --access-log=true
       - --grpc-max-recv-msg-size=4194304
       - --grpc-max-send-msg-size=4194304

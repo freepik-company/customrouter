@@ -23,6 +23,7 @@ spec:
           args:
             - --addr=:9001
             - --target-name=default
+            - --routes-configmap-namespace=default
             - --access-log=true
             # gRPC server configuration (production defaults)
             - --grpc-max-recv-msg-size=4194304

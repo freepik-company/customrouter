@@ -187,6 +187,7 @@ externalProcessors:
     args:
       - --addr=:9001
       - --target-name=default
+      - --routes-configmap-namespace=default
       - --access-log=true
 
   # Additional processor for different routes
@@ -196,6 +197,7 @@ externalProcessors:
     args:
       - --addr=:9001
       - --target-name=internal
+      - --routes-configmap-namespace=default
       - --access-log=false
 
 # Deploy additional resources
@@ -317,9 +319,34 @@ Deployment:
 
 ## Architecture
 
+### Operator
+
+The operator watches `CustomHTTPRoute` resources, compiles routing rules, and writes them to ConfigMaps in the namespace configured by `--routes-configmap-namespace` (default: `default`).
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--routes-configmap-namespace` | `default` | Namespace where route ConfigMaps are written |
+| `--leader-elect` | `false` | Enable leader election for HA |
+| `--health-probe-bind-address` | `:8081` | Address for health probes |
+
+### External Processor
+
+The external processor reads route ConfigMaps and makes routing decisions for Envoy.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--addr` | `:9001` | gRPC listen address |
+| `--target-name` | `""` | Target name to filter ConfigMaps (matches `spec.targetRef.name`) |
+| `--routes-configmap-namespace` | `""` | Namespace to read ConfigMaps from (empty = all namespaces) |
+| `--access-log` | `true` | Enable access logging |
+| `--debug` | `false` | Enable debug logging |
+| `--kubeconfig` | `""` | Path to kubeconfig (uses in-cluster config if not set) |
+
+> **Important**: Set `--routes-configmap-namespace` on the external processor to match the operator's `--routes-configmap-namespace`. This prevents stale ConfigMaps in other namespaces from causing route conflicts.
+
 ### CustomHTTPRoute
 
-Defines routing rules for a set of hostnames. Rules are compiled into an optimized trie structure stored in ConfigMaps.
+Defines routing rules for a set of hostnames. Rules are compiled into an optimized routing table stored in ConfigMaps.
 
 | Field | Description |
 |-------|-------------|
