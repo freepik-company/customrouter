@@ -251,6 +251,43 @@ spec:
         policy: Disabled
 
     # ====================
+    # INLINE {prefix} PLACEHOLDER
+    # ====================
+    # Use {prefix} anywhere in a Regex pattern to insert the language
+    # alternation group at that position instead of at the start of the path.
+    # Useful when the locale segment is not the first path component.
+
+    # Framework data routes — locale appears after a dynamic buildId segment
+    # With prefixes [es, fr, de] this expands to: ^/_next/data/[^/]+/(es|fr|de)/
+    - matches:
+        - path: ^/_next/data/[^/]+/{prefix}/
+          type: Regex
+      backendRefs:
+        - name: web-frontend
+          namespace: web
+          port: 80
+
+    # Static asset locale routes
+    # With prefixes [es, fr, de] this expands to: ^/static/locales/(es|fr|de)/
+    - matches:
+        - path: ^/static/locales/{prefix}/
+          type: Regex
+      backendRefs:
+        - name: cdn
+          namespace: assets
+          port: 8080
+
+    # Multiple {prefix} placeholders in the same pattern
+    # Expands to: ^/(es|fr|de)/data/[^/]+/(es|fr|de)/
+    - matches:
+        - path: ^/{prefix}/data/[^/]+/{prefix}/
+          type: Regex
+      backendRefs:
+        - name: web-frontend
+          namespace: web
+          port: 80
+
+    # ====================
     # DEFAULT FALLBACK
     # ====================
 

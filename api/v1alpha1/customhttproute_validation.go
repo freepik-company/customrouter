@@ -18,6 +18,8 @@ package v1alpha1
 
 import (
 	"fmt"
+	"regexp"
+	"strings"
 )
 
 // ValidateCustomHTTPRoute validates the CustomHTTPRoute spec
@@ -49,6 +51,17 @@ func validateRule(index int, rule *Rule) error {
 	for j, action := range rule.Actions {
 		if err := validateAction(index, j, &action); err != nil {
 			return err
+		}
+	}
+
+	// Validate regex patterns with {prefix} placeholder
+	for j, match := range rule.Matches {
+		if match.Type == MatchTypeRegex && strings.Contains(match.Path, "{prefix}") {
+			testPattern := strings.ReplaceAll(match.Path, "{prefix}", "(test)")
+			if _, err := regexp.Compile(testPattern); err != nil {
+				return fmt.Errorf("rules[%d].matches[%d]: regex with {prefix} placeholder produces invalid pattern: %s → %s: %v",
+					index, j, match.Path, testPattern, err)
+			}
 		}
 	}
 

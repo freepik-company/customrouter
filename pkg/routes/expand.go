@@ -320,6 +320,18 @@ func expandRegexWithPrefixes(pattern string, prefixes []string, policy v1alpha1.
 	// Build the language alternation group
 	langGroup := "(" + strings.Join(prefixes, "|") + ")"
 
+	// If the pattern contains {prefix}, substitute it inline
+	if strings.Contains(pattern, "{prefix}") {
+		switch policy {
+		case v1alpha1.PathPrefixPolicyRequired:
+			return strings.ReplaceAll(pattern, "{prefix}", langGroup)
+		case v1alpha1.PathPrefixPolicyOptional:
+			return strings.ReplaceAll(pattern, "{prefix}", langGroup+"?")
+		default:
+			return pattern
+		}
+	}
+
 	// Find where to insert the language prefix pattern
 	// We need to insert after ^ (if present) and before the first /
 	hasStartAnchor := strings.HasPrefix(pattern, "^")
