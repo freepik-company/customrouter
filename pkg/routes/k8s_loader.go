@@ -47,6 +47,7 @@ const (
 type K8sLoader struct {
 	client     kubernetes.Interface
 	targetName string
+	namespace  string
 
 	config   *RoutesConfig
 	mu       sync.RWMutex
@@ -61,6 +62,10 @@ type K8sLoaderConfig struct {
 	// TargetName is the target external processor name to filter ConfigMaps
 	// Only ConfigMaps with label customrouter.freepik.com/target=<TargetName> will be loaded
 	TargetName string
+
+	// Namespace restricts ConfigMap loading to a specific namespace.
+	// Empty string means all namespaces (backward compatible).
+	Namespace string
 }
 
 // NewK8sLoader creates a new Kubernetes ConfigMap loader
@@ -69,6 +74,7 @@ func NewK8sLoader(client kubernetes.Interface, config K8sLoaderConfig) *K8sLoade
 	return &K8sLoader{
 		client:     client,
 		targetName: config.TargetName,
+		namespace:  config.Namespace,
 		config: &RoutesConfig{
 			Version: 1,
 			Hosts:   make(map[string][]Route),
@@ -88,13 +94,13 @@ func (l *K8sLoader) Load() error {
 
 // loadLocked loads ConfigMaps (caller must hold lock)
 func (l *K8sLoader) loadLocked() error {
-	// List all ConfigMaps with our labels (managed-by and target) across all namespaces
+	// List all ConfigMaps with our labels (managed-by and target)
 	labelSelector := labels.SelectorFromSet(map[string]string{
 		configMapManagedByLabel: configMapManagedByValue,
 		configMapTargetLabel:    l.targetName,
 	})
 
-	configMaps, err := l.client.CoreV1().ConfigMaps("").List(l.ctx, metav1.ListOptions{
+	configMaps, err := l.client.CoreV1().ConfigMaps(l.namespace).List(l.ctx, metav1.ListOptions{
 		LabelSelector: labelSelector.String(),
 	})
 	if err != nil {
@@ -221,7 +227,7 @@ func (l *K8sLoader) watchLoop() {
 		default:
 		}
 
-		watcher, err := l.client.CoreV1().ConfigMaps("").Watch(l.ctx, metav1.ListOptions{
+		watcher, err := l.client.CoreV1().ConfigMaps(l.namespace).Watch(l.ctx, metav1.ListOptions{
 			LabelSelector: labelSelector.String(),
 		})
 		if err != nil {

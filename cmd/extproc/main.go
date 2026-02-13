@@ -45,6 +45,8 @@ func main() {
 	flag.StringVar(&kubeconfig, "kubeconfig", "", "Path to kubeconfig file (optional, uses in-cluster config if not set)")
 	flag.BoolVar(&debug, "debug", false, "Enable debug logging")
 	flag.BoolVar(&config.AccessLogEnabled, "access-log", config.AccessLogEnabled, "Enable access logging")
+	flag.StringVar(&config.RoutesNamespace, "routes-configmap-namespace", config.RoutesNamespace,
+		"Namespace to read route ConfigMaps from (empty = all namespaces)")
 
 	// gRPC server configuration flags
 	flag.IntVar(&config.MaxRecvMsgSize, "grpc-max-recv-msg-size", config.MaxRecvMsgSize, "Maximum message size the server can receive (bytes)")

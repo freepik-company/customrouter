@@ -62,6 +62,10 @@ type ServerConfig struct {
 
 	// AccessLogEnabled enables access logging
 	AccessLogEnabled bool
+
+	// RoutesNamespace restricts ConfigMap loading to a specific namespace.
+	// Empty string means all namespaces (backward compatible).
+	RoutesNamespace string
 }
 
 // DefaultServerConfig returns a ServerConfig with production-ready defaults
