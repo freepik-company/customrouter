@@ -2,6 +2,7 @@ package routes
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/freepik-company/customrouter/api/v1alpha1"
@@ -871,5 +872,291 @@ func TestExpandMatchTypesDefaultExpandsAll(t *testing.T) {
 	// Regex: 1 (modified regex with optional prefix)
 	if len(routes) != 5 {
 		t.Fatalf("expected 5 routes (all types expanded by default), got %d: %+v", len(routes), routes)
+	}
+}
+
+func TestExpandRegexWithInlinePrefix(t *testing.T) {
+	langPrefixes := []string{"es", "fr", "it"}
+
+	tests := []struct {
+		name     string
+		input    string
+		policy   v1alpha1.PathPrefixPolicy
+		prefixes []string
+		expected string
+	}{
+		{
+			name:     "inline prefix required",
+			input:    "^/_app/data/[^/]+/{prefix}/",
+			policy:   v1alpha1.PathPrefixPolicyRequired,
+			prefixes: langPrefixes,
+			expected: "^/_app/data/[^/]+/(es|fr|it)/",
+		},
+		{
+			name:     "inline prefix optional",
+			input:    "^/_app/data/[^/]+/{prefix}/",
+			policy:   v1alpha1.PathPrefixPolicyOptional,
+			prefixes: langPrefixes,
+			expected: "^/_app/data/[^/]+/(es|fr|it)?/",
+		},
+		{
+			name:     "static assets with inline prefix required",
+			input:    "^/static/locales/{prefix}/",
+			policy:   v1alpha1.PathPrefixPolicyRequired,
+			prefixes: langPrefixes,
+			expected: "^/static/locales/(es|fr|it)/",
+		},
+		{
+			name:     "inline prefix disabled returns original",
+			input:    "^/_app/data/[^/]+/{prefix}/",
+			policy:   v1alpha1.PathPrefixPolicyDisabled,
+			prefixes: langPrefixes,
+			expected: "^/_app/data/[^/]+/{prefix}/",
+		},
+		{
+			name:     "inline prefix with empty prefixes returns original",
+			input:    "^/_app/data/[^/]+/{prefix}/",
+			policy:   v1alpha1.PathPrefixPolicyRequired,
+			prefixes: []string{},
+			expected: "^/_app/data/[^/]+/{prefix}/",
+		},
+		{
+			name:     "multiple inline prefix placeholders",
+			input:    "^/{prefix}/data/[^/]+/{prefix}/",
+			policy:   v1alpha1.PathPrefixPolicyRequired,
+			prefixes: langPrefixes,
+			expected: "^/(es|fr|it)/data/[^/]+/(es|fr|it)/",
+		},
+		{
+			name:     "inline prefix without anchors",
+			input:    "/_app/data/[^/]+/{prefix}/",
+			policy:   v1alpha1.PathPrefixPolicyRequired,
+			prefixes: langPrefixes,
+			expected: "/_app/data/[^/]+/(es|fr|it)/",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := expandRegexWithPrefixes(tt.input, tt.prefixes, tt.policy)
+			if result != tt.expected {
+				t.Errorf("\ninput:    %s\nexpected: %s\ngot:      %s", tt.input, tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestExpandedInlinePrefixRegexCompiles(t *testing.T) {
+	langPrefixes := []string{"es", "fr", "it", "de", "pt", "ja", "ko", "zh-CN", "af-ZA"}
+
+	regexes := []string{
+		"^/_app/data/[^/]+/{prefix}/",
+		"^/static/locales/{prefix}/",
+		"^/_app/data/[^/]+/{prefix}/[^/]+\\.json$",
+		"/_app/data/[^/]+/{prefix}/",
+	}
+
+	for _, regex := range regexes {
+		for _, policy := range []v1alpha1.PathPrefixPolicy{
+			v1alpha1.PathPrefixPolicyRequired,
+			v1alpha1.PathPrefixPolicyOptional,
+		} {
+			t.Run(regex+"_"+string(policy), func(t *testing.T) {
+				result := expandRegexWithPrefixes(regex, langPrefixes, policy)
+				if !IsValidRegex(result) {
+					t.Errorf("expanded regex does not compile:\ninput:  %s\noutput: %s", regex, result)
+				}
+			})
+		}
+	}
+}
+
+func TestExpandedInlinePrefixRegexMatches(t *testing.T) {
+	tests := []struct {
+		name           string
+		regex          string
+		prefixes       []string
+		policy         v1alpha1.PathPrefixPolicy
+		shouldMatch    []string
+		shouldNotMatch []string
+	}{
+		{
+			name:     "app data required - language in path segment",
+			regex:    "^/_app/data/[^/]+/{prefix}/",
+			prefixes: []string{"es", "fr", "it"},
+			policy:   v1alpha1.PathPrefixPolicyRequired,
+			shouldMatch: []string{
+				"/_app/data/RFc13G_JcDvFt-Ny5bOt-/es/products.json",
+				"/_app/data/lXR99BKHpJAoi5tBMoMFo/fr/search.json",
+				"/_app/data/nyhijxIqNASNgJgmnMRz7/it/user.json",
+			},
+			shouldNotMatch: []string{
+				"/_app/data/abc123/en/user.json",
+				"/_app/data/abc123/de/search.json",
+				"/_app/static/chunks/main-abc123.js",
+				"/es/_app/data/abc123/es/products.json",
+			},
+		},
+		{
+			name:     "app data required - asian locales",
+			regex:    "^/_app/data/[^/]+/{prefix}/",
+			prefixes: []string{"cn", "kr", "tw", "zh"},
+			policy:   v1alpha1.PathPrefixPolicyRequired,
+			shouldMatch: []string{
+				"/_app/data/wA5C_aviBGrejK0XWJwbo/kr/%EC%8A%A4%ED%86%A1.json",
+				"/_app/data/abc123/zh/search.json",
+				"/_app/data/abc123/cn/search.json",
+			},
+			shouldNotMatch: []string{
+				"/_app/data/abc123/en/user.json",
+				"/_app/data/abc123/es/products.json",
+			},
+		},
+		{
+			name:     "static assets required - full locale codes",
+			regex:    "^/static/locales/{prefix}/",
+			prefixes: []string{"af-ZA", "zh-CN", "es-ES", "fr-FR"},
+			policy:   v1alpha1.PathPrefixPolicyRequired,
+			shouldMatch: []string{
+				"/static/locales/af-ZA/common.json",
+				"/static/locales/zh-CN/common.json",
+				"/static/locales/es-ES/common.json",
+			},
+			shouldNotMatch: []string{
+				"/static/locales/en-US/common.json",
+				"/static/locales/de-DE/common.json",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			expanded := expandRegexWithPrefixes(tt.regex, tt.prefixes, tt.policy)
+
+			for _, path := range tt.shouldMatch {
+				if !matchesRegex(expanded, path) {
+					t.Errorf("expected %q to match expanded regex %q (from %q)",
+						path, expanded, tt.regex)
+				}
+			}
+
+			for _, path := range tt.shouldNotMatch {
+				if matchesRegex(expanded, path) {
+					t.Errorf("expected %q NOT to match expanded regex %q (from %q)",
+						path, expanded, tt.regex)
+				}
+			}
+		})
+	}
+}
+
+func TestExpandRoutesWithInlinePrefixPlaceholder(t *testing.T) {
+	cr := &v1alpha1.CustomHTTPRoute{
+		Spec: v1alpha1.CustomHTTPRouteSpec{
+			TargetRef: v1alpha1.TargetRef{Name: "default"},
+			Hostnames: []string{"app.example.com"},
+			PathPrefixes: &v1alpha1.PathPrefixes{
+				Values: []string{"es", "fr", "de"},
+				Policy: v1alpha1.PathPrefixPolicyRequired,
+			},
+			Rules: []v1alpha1.Rule{
+				{
+					Matches: []v1alpha1.PathMatch{
+						{
+							Path: "^/_app/data/[^/]+/{prefix}/",
+							Type: v1alpha1.MatchTypeRegex,
+						},
+					},
+					BackendRefs: []v1alpha1.BackendRef{
+						{Name: "web-europe", Namespace: "web", Port: 80},
+					},
+				},
+				{
+					Matches: []v1alpha1.PathMatch{
+						{
+							Path: "^/users/[0-9]+$",
+							Type: v1alpha1.MatchTypeRegex,
+						},
+					},
+					BackendRefs: []v1alpha1.BackendRef{
+						{Name: "web-europe", Namespace: "web", Port: 80},
+					},
+				},
+			},
+		},
+	}
+
+	result := ExpandRoutes(cr)
+	routes := result["app.example.com"]
+
+	if len(routes) != 2 {
+		t.Fatalf("expected 2 routes, got %d: %+v", len(routes), routes)
+	}
+
+	var inlineRoute, normalRoute *Route
+	for i := range routes {
+		if strings.Contains(routes[i].Path, "_app") {
+			inlineRoute = &routes[i]
+		} else {
+			normalRoute = &routes[i]
+		}
+	}
+
+	if inlineRoute == nil {
+		t.Fatal("inline prefix route not found")
+	}
+	if normalRoute == nil {
+		t.Fatal("normal route not found")
+	}
+
+	expectedInline := "^/_app/data/[^/]+/(es|fr|de)/"
+	if inlineRoute.Path != expectedInline {
+		t.Errorf("inline route:\nexpected: %s\ngot:      %s", expectedInline, inlineRoute.Path)
+	}
+
+	expectedNormal := "^/(es|fr|de)/users/[0-9]+$"
+	if normalRoute.Path != expectedNormal {
+		t.Errorf("normal route:\nexpected: %s\ngot:      %s", expectedNormal, normalRoute.Path)
+	}
+}
+
+func TestExpandRegexWithoutPlaceholderUnchanged(t *testing.T) {
+	langPrefixes := []string{"es", "fr", "it"}
+
+	tests := []struct {
+		input    string
+		policy   v1alpha1.PathPrefixPolicy
+		expected string
+	}{
+		{
+			input:    "^/other/[0-9]+/path$",
+			policy:   v1alpha1.PathPrefixPolicyOptional,
+			expected: "^(?:/(es|fr|it))?/other/[0-9]+/path$",
+		},
+		{
+			input:    "^/other/[0-9]+/path$",
+			policy:   v1alpha1.PathPrefixPolicyRequired,
+			expected: "^/(es|fr|it)/other/[0-9]+/path$",
+		},
+		{
+			input:    "^/other/[0-9]+/path$",
+			policy:   v1alpha1.PathPrefixPolicyDisabled,
+			expected: "^/other/[0-9]+/path$",
+		},
+		{
+			input:    "^/$",
+			policy:   v1alpha1.PathPrefixPolicyOptional,
+			expected: "^(?:/(es|fr|it))?/$",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input+"_"+string(tt.policy), func(t *testing.T) {
+			result := expandRegexWithPrefixes(tt.input, langPrefixes, tt.policy)
+			if result != tt.expected {
+				t.Errorf("backwards compat broken:\ninput:    %s\nexpected: %s\ngot:      %s",
+					tt.input, tt.expected, result)
+			}
+		})
 	}
 }
