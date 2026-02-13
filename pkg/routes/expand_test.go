@@ -8,6 +8,8 @@ import (
 	"github.com/freepik-company/customrouter/api/v1alpha1"
 )
 
+const testPathUserMe = "/user/me"
+
 // matchesRegex is a test helper that checks if a path matches a regex pattern
 func matchesRegex(pattern, path string) bool {
 	re, err := regexp.Compile(pattern)
@@ -579,7 +581,7 @@ func TestExpandExactWithPrefixesOptional(t *testing.T) {
 			Rules: []v1alpha1.Rule{
 				{
 					Matches: []v1alpha1.PathMatch{
-						{Path: "/user/me", Type: v1alpha1.MatchTypeExact},
+						{Path: testPathUserMe, Type: v1alpha1.MatchTypeExact},
 					},
 					BackendRefs: []v1alpha1.BackendRef{
 						{Name: "user", Namespace: "user", Port: 80},
@@ -605,7 +607,7 @@ func TestExpandExactWithPrefixesOptional(t *testing.T) {
 		}
 	}
 
-	for _, expected := range []string{"/user/me", "/es/user/me", "/fr/user/me", "/de/user/me"} {
+	for _, expected := range []string{testPathUserMe, "/es/user/me", "/fr/user/me", "/de/user/me"} {
 		if !paths[expected] {
 			t.Errorf("missing expected path %s", expected)
 		}
@@ -624,7 +626,7 @@ func TestExpandExactWithPrefixesRequired(t *testing.T) {
 			Rules: []v1alpha1.Rule{
 				{
 					Matches: []v1alpha1.PathMatch{
-						{Path: "/user/me", Type: v1alpha1.MatchTypeExact},
+						{Path: testPathUserMe, Type: v1alpha1.MatchTypeExact},
 					},
 					BackendRefs: []v1alpha1.BackendRef{
 						{Name: "user", Namespace: "user", Port: 80},
@@ -646,7 +648,7 @@ func TestExpandExactWithPrefixesRequired(t *testing.T) {
 		paths[r.Path] = true
 	}
 
-	if paths["/user/me"] {
+	if paths[testPathUserMe] {
 		t.Error("unprefixed /user/me should NOT be present with Required policy")
 	}
 	for _, expected := range []string{"/es/user/me", "/fr/user/me"} {
@@ -668,7 +670,7 @@ func TestExpandExactWithPrefixesDisabled(t *testing.T) {
 			Rules: []v1alpha1.Rule{
 				{
 					Matches: []v1alpha1.PathMatch{
-						{Path: "/user/me", Type: v1alpha1.MatchTypeExact},
+						{Path: testPathUserMe, Type: v1alpha1.MatchTypeExact},
 					},
 					BackendRefs: []v1alpha1.BackendRef{
 						{Name: "user", Namespace: "user", Port: 80},
@@ -684,7 +686,7 @@ func TestExpandExactWithPrefixesDisabled(t *testing.T) {
 	if len(routes) != 1 {
 		t.Fatalf("expected 1 route, got %d", len(routes))
 	}
-	if routes[0].Path != "/user/me" {
+	if routes[0].Path != testPathUserMe {
 		t.Errorf("expected /user/me, got %s", routes[0].Path)
 	}
 }
@@ -702,7 +704,7 @@ func TestExpandMatchTypesPathPrefixOnly(t *testing.T) {
 			Rules: []v1alpha1.Rule{
 				{
 					Matches: []v1alpha1.PathMatch{
-						{Path: "/user/me", Type: v1alpha1.MatchTypeExact},
+						{Path: testPathUserMe, Type: v1alpha1.MatchTypeExact},
 						{Path: "/app", Type: v1alpha1.MatchTypePathPrefix},
 					},
 					BackendRefs: []v1alpha1.BackendRef{
@@ -726,7 +728,7 @@ func TestExpandMatchTypesPathPrefixOnly(t *testing.T) {
 	for _, r := range routes {
 		if r.Type == RouteTypeExact {
 			exactCount++
-			if r.Path != "/user/me" {
+			if r.Path != testPathUserMe {
 				t.Errorf("exact route should be /user/me, got %s", r.Path)
 			}
 		}
@@ -755,7 +757,7 @@ func TestExpandMatchTypesExactAndPathPrefix(t *testing.T) {
 			Rules: []v1alpha1.Rule{
 				{
 					Matches: []v1alpha1.PathMatch{
-						{Path: "/user/me", Type: v1alpha1.MatchTypeExact},
+						{Path: testPathUserMe, Type: v1alpha1.MatchTypeExact},
 						{Path: "/app", Type: v1alpha1.MatchTypePathPrefix},
 						{Path: "^/api/[0-9]+$", Type: v1alpha1.MatchTypeRegex},
 					},
@@ -813,7 +815,7 @@ func TestExpandMatchTypesRuleLevelOverride(t *testing.T) {
 			Rules: []v1alpha1.Rule{
 				{
 					Matches: []v1alpha1.PathMatch{
-						{Path: "/user/me", Type: v1alpha1.MatchTypeExact},
+						{Path: testPathUserMe, Type: v1alpha1.MatchTypeExact},
 					},
 					BackendRefs: []v1alpha1.BackendRef{
 						{Name: "svc", Namespace: "default", Port: 80},
@@ -834,7 +836,7 @@ func TestExpandMatchTypesRuleLevelOverride(t *testing.T) {
 	if len(routes) != 1 {
 		t.Fatalf("expected 1 route (rule override to PathPrefixOnly), got %d: %+v", len(routes), routes)
 	}
-	if routes[0].Path != "/user/me" {
+	if routes[0].Path != testPathUserMe {
 		t.Errorf("expected /user/me, got %s", routes[0].Path)
 	}
 }
