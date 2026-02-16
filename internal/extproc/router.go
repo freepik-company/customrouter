@@ -271,7 +271,13 @@ func (p *Processor) buildForwardResponse(route *routes.Route, vars *requestVars,
 		switch action.Type {
 		case routes.ActionTypeRewrite:
 			if action.RewritePath != "" {
-				finalPath = substituteVariables(action.RewritePath, vars)
+				rewrittenBase := substituteVariables(action.RewritePath, vars)
+				if shouldReplacePrefixMatch(action, route, rewrittenBase) {
+					suffix := strings.TrimPrefix(vars.path, route.Path)
+					finalPath = rewrittenBase + suffix
+				} else {
+					finalPath = rewrittenBase
+				}
 				p.logger.Debug("rewriting path",
 					zap.String("original", vars.path),
 					zap.String("rewritten", finalPath),
@@ -425,6 +431,16 @@ func splitPath(path string) []string {
 		}
 	}
 	return segments
+}
+
+// shouldReplacePrefixMatch determines whether a rewrite should use prefix replacement.
+// Explicit field takes precedence. Otherwise, convention: prefix rewrite for PathPrefix
+// routes whose rewritePath contains no variables (${...}); full rewrite otherwise.
+func shouldReplacePrefixMatch(action routes.RouteAction, route *routes.Route, rewrittenBase string) bool {
+	if action.RewriteReplacePrefixMatch != nil {
+		return *action.RewriteReplacePrefixMatch
+	}
+	return route.Type == routes.RouteTypePrefix && !strings.Contains(action.RewritePath, "${")
 }
 
 // substituteVariables replaces ${var} placeholders with actual values

@@ -153,8 +153,23 @@ type RewriteConfig struct {
 	// ${method} - HTTP method (GET, POST, etc.)
 	// ${scheme} - request scheme (http or https)
 	// ${path.segment.N} - Nth segment of the path (0-indexed)
+	//
+	// For PathPrefix matches: if the path does not contain variables (${...}),
+	// only the matched prefix is replaced and the remaining suffix and query
+	// parameters are preserved (prefix rewrite). If the path contains variables,
+	// the entire path is replaced (full rewrite).
+	//
+	// This automatic behavior can be overridden with replacePrefixMatch.
 	// +optional
 	Path string `json:"path,omitempty"`
+
+	// replacePrefixMatch explicitly controls whether prefix rewrite is used.
+	// When true, only the matched prefix is replaced and the remaining path
+	// suffix and query parameters are preserved. When false, the entire path
+	// is replaced. When not set, the behavior is inferred automatically:
+	// prefix rewrite for PathPrefix matches without variables, full rewrite otherwise.
+	// +optional
+	ReplacePrefixMatch *bool `json:"replacePrefixMatch,omitempty"`
 
 	// hostname is the new hostname to rewrite to
 	// +optional

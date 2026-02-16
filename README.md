@@ -465,8 +465,23 @@ rules:
 
 #### Rewrite Example
 
+For `PathPrefix` matches, the rewrite replaces only the matched prefix and **preserves the remaining path suffix and query parameters**. For `Exact` and `Regex` matches, the rewrite replaces the entire path.
+
 ```yaml
 rules:
+  # Prefix rewrite: /mockup-editor-api/unity?page=1 -> /api/v1/unity?page=1
+  - matches:
+      - path: /mockup-editor-api
+    actions:
+      - type: rewrite
+        rewrite:
+          path: /api/v1
+    backendRefs:
+      - name: backend-api
+        namespace: backend
+        port: 80
+
+  # Rewrite with hostname change
   - matches:
       - path: /blog
     actions:
@@ -476,6 +491,32 @@ rules:
           hostname: cms-internal.svc.cluster.local
     backendRefs:
       - name: cms-service
+        namespace: backend
+        port: 8080
+
+  # Full rewrite with variables: /users/42 -> /api/v2/profile/42
+  - matches:
+      - path: /users
+    actions:
+      - type: rewrite
+        rewrite:
+          path: /api/v2/profile/${path.segment.1}
+    backendRefs:
+      - name: user-service
+        namespace: backend
+        port: 8080
+
+  # Explicit replacePrefixMatch override:
+  # Force full rewrite even on a PathPrefix match
+  - matches:
+      - path: /old-api
+    actions:
+      - type: rewrite
+        rewrite:
+          path: /v2
+          replacePrefixMatch: false
+    backendRefs:
+      - name: api-service
         namespace: backend
         port: 8080
 ```

@@ -149,8 +149,11 @@ spec:
     # ====================
     # URL REWRITES
     # ====================
+    # For PathPrefix matches, rewrite replaces only the matched prefix
+    # and preserves the remaining path suffix and query parameters.
+    # For Exact/Regex matches, rewrite replaces the entire path.
 
-    # Simple path rewrite: /public-blog/* -> /internal/cms/blog/*
+    # Prefix rewrite: /public-blog/post/42?v=2 -> /internal/cms/blog/post/42?v=2
     - matches:
         - path: /public-blog
           type: PathPrefix
@@ -165,7 +168,7 @@ spec:
       pathPrefixes:
         policy: Disabled
 
-    # Rewrite path and hostname
+    # Prefix rewrite with hostname: /legacy-api/users/1 -> /v2/api/users/1
     - matches:
         - path: /legacy-api
           type: PathPrefix
@@ -176,6 +179,23 @@ spec:
             hostname: api-internal.example.svc.cluster.local
       backendRefs:
         - name: api-v2
+          namespace: backend
+          port: 8080
+      pathPrefixes:
+        policy: Disabled
+
+    # Explicit replacePrefixMatch: force full rewrite on a PathPrefix match
+    # /old-service/anything -> /v2 (suffix discarded)
+    - matches:
+        - path: /old-service
+          type: PathPrefix
+      actions:
+        - type: rewrite
+          rewrite:
+            path: /v2
+            replacePrefixMatch: false
+      backendRefs:
+        - name: new-service
           namespace: backend
           port: 8080
       pathPrefixes:

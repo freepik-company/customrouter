@@ -1162,3 +1162,48 @@ func TestExpandRegexWithoutPlaceholderUnchanged(t *testing.T) {
 		})
 	}
 }
+
+func boolPtr(v bool) *bool { return &v }
+
+func TestConvertActionsPassesReplacePrefixMatch(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   *bool
+		wantNil bool
+		wantVal bool
+	}{
+		{"nil stays nil", nil, true, false},
+		{"true is passed", boolPtr(true), false, true},
+		{"false is passed", boolPtr(false), false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actions := convertActions([]v1alpha1.Action{
+				{
+					Type: v1alpha1.ActionTypeRewrite,
+					Rewrite: &v1alpha1.RewriteConfig{
+						Path:               "/api/v1",
+						ReplacePrefixMatch: tt.input,
+					},
+				},
+			})
+			if len(actions) != 1 {
+				t.Fatalf("expected 1 action, got %d", len(actions))
+			}
+			got := actions[0].RewriteReplacePrefixMatch
+			if tt.wantNil {
+				if got != nil {
+					t.Errorf("expected nil, got %v", *got)
+				}
+			} else {
+				if got == nil {
+					t.Fatalf("expected non-nil, got nil")
+				}
+				if *got != tt.wantVal {
+					t.Errorf("expected %v, got %v", tt.wantVal, *got)
+				}
+			}
+		})
+	}
+}

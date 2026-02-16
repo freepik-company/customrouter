@@ -165,6 +165,7 @@ func convertActions(apiActions []v1alpha1.Action) []RouteAction {
 			if a.Rewrite != nil {
 				action.RewritePath = a.Rewrite.Path
 				action.RewriteHostname = a.Rewrite.Hostname
+				action.RewriteReplacePrefixMatch = a.Rewrite.ReplacePrefixMatch
 			}
 		case v1alpha1.ActionTypeHeaderSet, v1alpha1.ActionTypeHeaderAdd:
 			if a.Header != nil {
