@@ -67,10 +67,17 @@ spec:
                       route unmatched requests to.
                     properties:
                       name:
-                        description: name is the name of the Service
+                        description: 'name is the name of the Service (must be a valid
+                          RFC 1123 label: lowercase alphanumeric or ''-'')'
+                        maxLength: 63
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                         type: string
                       namespace:
                         description: namespace is the namespace of the Service
+                        maxLength: 63
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                         type: string
                       port:
                         description: port is the port of the Service
@@ -91,6 +98,7 @@ spec:
                   to
                 items:
                   type: string
+                maxItems: 50
                 minItems: 1
                 type: array
               pathPrefixes:
@@ -128,6 +136,7 @@ spec:
                       (e.g., ["es", "fr", "it"])
                     items:
                       type: string
+                    maxItems: 30
                     type: array
                 type: object
               rules:
@@ -228,7 +237,22 @@ spec:
                                   ${method} - HTTP method (GET, POST, etc.)
                                   ${scheme} - request scheme (http or https)
                                   ${path.segment.N} - Nth segment of the path (0-indexed)
+
+                                  For PathPrefix matches: if the path does not contain variables (${...}),
+                                  only the matched prefix is replaced and the remaining suffix and query
+                                  parameters are preserved (prefix rewrite). If the path contains variables,
+                                  the entire path is replaced (full rewrite).
+
+                                  This automatic behavior can be overridden with replacePrefixMatch.
                                 type: string
+                              replacePrefixMatch:
+                                description: |-
+                                  replacePrefixMatch explicitly controls whether prefix rewrite is used.
+                                  When true, only the matched prefix is replaced and the remaining path
+                                  suffix and query parameters are preserved. When false, the entire path
+                                  is replaced. When not set, the behavior is inferred automatically:
+                                  prefix rewrite for PathPrefix matches without variables, full rewrite otherwise.
+                                type: boolean
                             type: object
                           type:
                             description: type is the type of action to perform
@@ -251,10 +275,17 @@ spec:
                         description: BackendRef defines a reference to a backend service
                         properties:
                           name:
-                            description: name is the name of the Service
+                            description: 'name is the name of the Service (must be
+                              a valid RFC 1123 label: lowercase alphanumeric or ''-'')'
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                             type: string
                           namespace:
                             description: namespace is the namespace of the Service
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                             type: string
                           port:
                             description: port is the port of the Service
@@ -284,6 +315,8 @@ spec:
                               priority defines the order in which routes are evaluated
                               Higher values are evaluated first. Default is 1000.
                             format: int32
+                            maximum: 10000
+                            minimum: 1
                             type: integer
                           type:
                             default: PathPrefix
@@ -300,6 +333,7 @@ spec:
                         required:
                         - path
                         type: object
+                      maxItems: 50
                       minItems: 1
                       type: array
                     pathPrefixes:
@@ -333,6 +367,7 @@ spec:
                   required:
                   - matches
                   type: object
+                maxItems: 100
                 minItems: 1
                 type: array
               targetRef:

@@ -89,6 +89,7 @@ const (
 type PathPrefixes struct {
 	// values is the list of prefixes to prepend to paths (e.g., ["es", "fr", "it"])
 	// +optional
+	// +kubebuilder:validation:MaxItems=30
 	Values []string `json:"values,omitempty"`
 
 	// policy defines how prefixes are applied
@@ -125,17 +126,25 @@ type PathMatch struct {
 	// Higher values are evaluated first. Default is 1000.
 	// +optional
 	// +kubebuilder:default=1000
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=10000
 	Priority int32 `json:"priority,omitempty"`
 }
 
 // BackendRef defines a reference to a backend service
 type BackendRef struct {
-	// name is the name of the Service
+	// name is the name of the Service (must be a valid RFC 1123 label: lowercase alphanumeric or '-')
 	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	Name string `json:"name"`
 
 	// namespace is the namespace of the Service
 	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	Namespace string `json:"namespace"`
 
 	// port is the port of the Service
@@ -280,6 +289,7 @@ type Rule struct {
 	// matches defines the conditions for matching this rule
 	// +required
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=50
 	Matches []PathMatch `json:"matches"`
 
 	// actions defines transformations to apply to matched requests
@@ -316,6 +326,7 @@ type CustomHTTPRouteSpec struct {
 	// hostnames is a list of hostnames that this route applies to
 	// +required
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=50
 	Hostnames []string `json:"hostnames"`
 
 	// pathPrefixes defines prefixes to prepend to paths (e.g., language prefixes)
@@ -332,6 +343,7 @@ type CustomHTTPRouteSpec struct {
 	// rules defines the routing rules
 	// +required
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=100
 	Rules []Rule `json:"rules"`
 }
 

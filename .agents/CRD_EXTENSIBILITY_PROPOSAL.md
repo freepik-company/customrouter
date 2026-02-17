@@ -91,9 +91,9 @@ spec:
 
 ## Priority System
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `priority` | int32 | 1000 | Higher value = evaluated first |
+| Field | Type | Default | Range | Description |
+|-------|------|---------|-------|-------------|
+| `priority` | int32 | 1000 | 1–10000 | Higher value = evaluated first |
 
 **Usage examples:**
 - `priority: 2000` - Critical routes (health checks, auth)
@@ -271,3 +271,15 @@ spec:
 | `PathPrefix` | Static routes | Yes (multiple entries) | 1000 |
 | `Exact` | Health checks, unique endpoints | No | 1000 |
 | `Regex` | Dynamic IDs, complex patterns | Yes (modifies the regex) | 1000 |
+
+## Validation Limits
+
+| Field | Constraint |
+|-------|------------|
+| `spec.hostnames[]` | Max 50 |
+| `spec.rules[]` | Max 100 |
+| `rules[].matches[]` | Max 50 |
+| `pathPrefixes.values[]` | Max 30 |
+| `matches[].priority` | 1–10000 |
+| `backendRefs[].name` | RFC 1123 label (no dots, max 63) |
+| `backendRefs[].namespace` | RFC 1123 label (no dots, max 63) |

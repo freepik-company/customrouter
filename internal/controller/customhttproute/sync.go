@@ -109,10 +109,44 @@ func (r *CustomHTTPRouteReconciler) rebuildAllConfigMaps(ctx context.Context) er
 
 	// Process each target
 	for target, targetRoutes := range routesByTarget {
+		// Build hostname-to-namespace ownership map.
+		// Each hostname is owned by the namespace that appears first alphabetically
+		// among all CustomHTTPRoutes that declare it. Routes from non-owning
+		// namespaces are dropped to prevent cross-namespace priority hijacking.
+		hostnameOwner := make(map[string]string)
+		for _, route := range targetRoutes {
+			for _, hostname := range route.Spec.Hostnames {
+				if owner, exists := hostnameOwner[hostname]; !exists || route.Namespace < owner {
+					hostnameOwner[hostname] = route.Namespace
+				}
+			}
+		}
+
 		// Expand routes from all CustomHTTPRoutes for this target
 		allRoutes := make([]map[string][]routes.Route, 0, len(targetRoutes))
 		for _, route := range targetRoutes {
-			expanded := routes.ExpandRoutes(route)
+			expanded, err := routes.ExpandRoutes(route)
+			if err != nil {
+				logger.Error(err, "skipping CustomHTTPRoute due to route expansion limit",
+					"name", route.Name,
+					"namespace", route.Namespace,
+					"target", target)
+				continue
+			}
+
+			// Filter out hostnames not owned by this route's namespace
+			for hostname := range expanded {
+				if hostnameOwner[hostname] != route.Namespace {
+					logger.Info("dropping routes for hostname from non-owning namespace",
+						"hostname", hostname,
+						"routeNamespace", route.Namespace,
+						"ownerNamespace", hostnameOwner[hostname],
+						"routeName", route.Name,
+						"target", target)
+					delete(expanded, hostname)
+				}
+			}
+
 			allRoutes = append(allRoutes, expanded)
 		}
 

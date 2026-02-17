@@ -130,7 +130,13 @@ func (p *Processor) processRequestHeaders(headers *extprocv3.HttpHeaders) (*extp
 		reqCtx.routeFound = false
 		return &extprocv3.ProcessingResponse{
 			Response: &extprocv3.ProcessingResponse_RequestHeaders{
-				RequestHeaders: &extprocv3.HeadersResponse{},
+				RequestHeaders: &extprocv3.HeadersResponse{
+					Response: &extprocv3.CommonResponse{
+						HeaderMutation: &extprocv3.HeaderMutation{
+							RemoveHeaders: []string{"x-customrouter-cluster"},
+						},
+					},
+				},
 			},
 		}, reqCtx, nil
 	}

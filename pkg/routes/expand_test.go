@@ -489,7 +489,10 @@ func TestExpandRoutesWithActions(t *testing.T) {
 		},
 	}
 
-	result := ExpandRoutes(cr)
+	result, err := ExpandRoutes(cr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 	routes, ok := result["example.com"]
 	if !ok {
@@ -541,7 +544,10 @@ func TestExpandRoutesWithRedirect(t *testing.T) {
 		},
 	}
 
-	result := ExpandRoutes(cr)
+	result, err := ExpandRoutes(cr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 	routes, ok := result["example.com"]
 	if !ok {
@@ -591,7 +597,10 @@ func TestExpandExactWithPrefixesOptional(t *testing.T) {
 		},
 	}
 
-	result := ExpandRoutes(cr)
+	result, err := ExpandRoutes(cr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 	routes := result["magnific.com"]
 
 	// 3 prefixed + 1 unprefixed = 4
@@ -636,7 +645,10 @@ func TestExpandExactWithPrefixesRequired(t *testing.T) {
 		},
 	}
 
-	result := ExpandRoutes(cr)
+	result, err := ExpandRoutes(cr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 	routes := result["magnific.com"]
 
 	if len(routes) != 2 {
@@ -680,7 +692,10 @@ func TestExpandExactWithPrefixesDisabled(t *testing.T) {
 		},
 	}
 
-	result := ExpandRoutes(cr)
+	result, err := ExpandRoutes(cr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 	routes := result["magnific.com"]
 
 	if len(routes) != 1 {
@@ -715,7 +730,10 @@ func TestExpandMatchTypesPathPrefixOnly(t *testing.T) {
 		},
 	}
 
-	result := ExpandRoutes(cr)
+	result, err := ExpandRoutes(cr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 	routes := result["example.com"]
 
 	// Exact: 1 (not expanded), PathPrefix: 3 (es + fr + unprefixed) = 4
@@ -769,7 +787,10 @@ func TestExpandMatchTypesExactAndPathPrefix(t *testing.T) {
 		},
 	}
 
-	result := ExpandRoutes(cr)
+	result, err := ExpandRoutes(cr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 	routes := result["example.com"]
 
 	// Exact: 2 (es + unprefixed), PathPrefix: 2 (es + unprefixed), Regex: 1 (not expanded) = 5
@@ -829,7 +850,10 @@ func TestExpandMatchTypesRuleLevelOverride(t *testing.T) {
 		},
 	}
 
-	result := ExpandRoutes(cr)
+	result, err := ExpandRoutes(cr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 	routes := result["example.com"]
 
 	// Rule overrides to PathPrefixOnly, so Exact should NOT expand = 1 route
@@ -865,7 +889,10 @@ func TestExpandMatchTypesDefaultExpandsAll(t *testing.T) {
 		},
 	}
 
-	result := ExpandRoutes(cr)
+	result, err := ExpandRoutes(cr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 	routes := result["example.com"]
 
 	// Default (no expandMatchTypes): all types expanded
@@ -1088,7 +1115,10 @@ func TestExpandRoutesWithInlinePrefixPlaceholder(t *testing.T) {
 		},
 	}
 
-	result := ExpandRoutes(cr)
+	result, err := ExpandRoutes(cr)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 	routes := result["app.example.com"]
 
 	if len(routes) != 2 {

@@ -17,6 +17,7 @@ limitations under the License.
 package routes
 
 import (
+	"fmt"
 	"regexp"
 	"sort"
 	"strconv"
@@ -25,9 +26,32 @@ import (
 	"github.com/freepik-company/customrouter/api/v1alpha1"
 )
 
-// ExpandRoutes expands a CustomHTTPRoute into a list of routes per host
-func ExpandRoutes(cr *v1alpha1.CustomHTTPRoute) map[string][]Route {
+const (
+	MaxRoutesPerCRD = 500_000
+)
+
+// ExpandRoutes expands a CustomHTTPRoute into a list of routes per host.
+// It caps the total number of generated routes to MaxRoutesPerCRD to prevent
+// resource exhaustion from overly large CRDs.
+func ExpandRoutes(cr *v1alpha1.CustomHTTPRoute) (map[string][]Route, error) {
 	hosts := make(map[string][]Route)
+
+	numPrefixes := 0
+	if cr.Spec.PathPrefixes != nil {
+		numPrefixes = len(cr.Spec.PathPrefixes.Values)
+	}
+	var totalMatches int
+	for _, rule := range cr.Spec.Rules {
+		totalMatches += len(rule.Matches)
+	}
+	multiplier := numPrefixes + 1
+	estimatedRoutes := len(cr.Spec.Hostnames) * totalMatches * multiplier
+	if estimatedRoutes > MaxRoutesPerCRD {
+		return nil, fmt.Errorf(
+			"CustomHTTPRoute %s/%s would generate ~%d routes (limit %d): reduce hostnames, rules, matches, or prefixes",
+			cr.Namespace, cr.Name, estimatedRoutes, MaxRoutesPerCRD,
+		)
+	}
 
 	for _, hostname := range cr.Spec.Hostnames {
 		var routes []Route
@@ -37,13 +61,12 @@ func ExpandRoutes(cr *v1alpha1.CustomHTTPRoute) map[string][]Route {
 			routes = append(routes, ruleRoutes...)
 		}
 
-		// Sort routes by specificity: Exact > Regex > Prefix, then by path length desc
 		SortRoutes(routes)
 
 		hosts[hostname] = routes
 	}
 
-	return hosts
+	return hosts, nil
 }
 
 // expandRule expands a single rule into multiple routes based on path prefixes

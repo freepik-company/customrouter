@@ -17,6 +17,7 @@ spec:
 
   # Path prefixes (languages, regions, etc.)
   # Automatically prepended to the paths defined in the rules
+  # max 30 values
   pathPrefixes:
     values: [es, fr, it, de, pt, ja, ko]
     policy: Optional  # Optional | Required | Disabled
@@ -36,12 +37,14 @@ spec:
       namespace: web
       port: 80
 
+  # Routing rules (max 100 rules per CustomHTTPRoute)
   rules:
     # ====================
     # BASIC ROUTING
     # ====================
 
     # Simple PathPrefix match (default, fastest)
+    # max 50 matches per rule
     - matches:
         - path: /calendar/halloween
         - path: /collection

@@ -179,25 +179,25 @@ spec:
   targetRef:
     name: default  # Must match --target-name flag on extproc
 
-  # Required: hostnames this route applies to
+  # Required: hostnames this route applies to (max 50)
   hostnames:
     - www.example.com
     - example.com
 
-  # Optional: path prefixes (e.g., for i18n)
+  # Optional: path prefixes (e.g., for i18n, max 30 values)
   pathPrefixes:
     values: [es, fr, it]
     policy: Optional  # Optional | Required | Disabled
 
-  # Required: routing rules
+  # Required: routing rules (max 100)
   rules:
-    - matches:
+    - matches:  # max 50 matches per rule
         - path: /api
           type: PathPrefix   # PathPrefix (default) | Exact | Regex
-          priority: 1000     # Higher = evaluated first (default: 1000)
+          priority: 1000     # Higher = evaluated first (default: 1000, range: 1-10000)
       backendRefs:
-        - name: api-service
-          namespace: backend
+        - name: api-service   # RFC 1123 label (no dots, max 63 chars)
+          namespace: backend  # RFC 1123 label (no dots, max 63 chars)
           port: 8080
       pathPrefixes:          # Optional: override spec-level policy
         policy: Disabled
@@ -246,6 +246,19 @@ The `catchAllRoute` field solves this by generating an additional EnvoyFilter th
 1. `<name>-extproc`: Inserts the ext_proc filter into the HTTP filter chain
 2. `<name>-routes`: Adds dynamic routing based on `x-customrouter-cluster` header
 3. `<name>-catchall`: Creates catch-all virtual hosts for specified hostnames
+
+### CRD Validation Limits
+
+| Field | Constraint |
+|-------|-----------|
+| `spec.hostnames[]` | MinItems=1, MaxItems=50 |
+| `spec.rules[]` | MinItems=1, MaxItems=100 |
+| `rules[].matches[]` | MinItems=1, MaxItems=50 |
+| `pathPrefixes.values[]` | MaxItems=30 |
+| `matches[].priority` | Minimum=1, Maximum=10000, Default=1000 |
+| `backendRefs[].name` | RFC 1123 label: `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`, MaxLength=63 |
+| `backendRefs[].namespace` | RFC 1123 label: `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`, MaxLength=63 |
+| `targetRef.name` | RFC 1123 label: `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`, MaxLength=63 |
 
 ---
 
@@ -642,6 +655,9 @@ const DefaultPriority int32 = 1000
 // Max ConfigMap size before partitioning (internal/controller/customhttproute/sync.go)
 const maxConfigMapSize = 900 * 1024  // 900KB
 
+// Max routes per CRD before expansion is rejected (pkg/routes/expand.go)
+const MaxRoutesPerCRD = 500_000
+
 // Finalizer (internal/controller/commons.go)
 const ResourceFinalizer = "customrouter.freepik.com/finalizer"
 
@@ -670,9 +686,17 @@ const configMapPartLabel = "customrouter.freepik.com/part"
 
 7. **EnvoyFilter Generation**: `ExternalProcessorAttachment` creates EnvoyFilters in the same namespace as the attachment resource, not the gateway's namespace.
 
-8. **Backend Format**: Backends are always formatted as `service.namespace.svc.cluster.local:port` for Kubernetes DNS resolution.
+8. **Backend Format**: Backends are always formatted as `service.namespace.svc.cluster.local:port` for Kubernetes DNS resolution. The `backendRef.name` field is restricted to RFC 1123 labels (no dots) to prevent SSRF via external hostname injection.
 
 9. **Catch-All Route Requirement**: Without `catchAllRoute` or a base HTTPRoute, requests to hostnames handled only by CustomHTTPRoute will receive 404 from Envoy before reaching the ext_proc filter.
+
+10. **Namespace Isolation**: Hostnames are scoped by namespace. When multiple `CustomHTTPRoute` resources from different namespaces declare the same hostname, the alphabetically first namespace owns it. Routes from non-owning namespaces are dropped.
+
+11. **Priority Bounds**: The `priority` field is bounded between 1 and 10000 to prevent cross-namespace priority hijacking.
+
+12. **Route Expansion Cap**: `ExpandRoutes` rejects CRDs that would generate more than 500,000 routes (controlled by `MaxRoutesPerCRD`).
+
+13. **Header Injection Protection**: When the ext_proc finds no matching route, it explicitly removes the `x-customrouter-cluster` header to prevent external clients from injecting arbitrary routing decisions.
 
 ---
 

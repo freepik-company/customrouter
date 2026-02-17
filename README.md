@@ -94,12 +94,13 @@ spec:
     # Control which match types get prefix expansion (default: all)
     expandMatchTypes: [PathPrefix, Exact]  # Only expand these types
 
+  # Rules (max 100 per CustomHTTPRoute)
   rules:
     # Simple prefix match (default)
-    - matches:
+    - matches:  # max 50 matches per rule
         - path: /api
       backendRefs:
-        - name: api-service
+        - name: api-service       # RFC 1123 label (no dots, max 63 chars)
           namespace: backend
           port: 8080
 
@@ -107,7 +108,7 @@ spec:
     - matches:
         - path: /health
           type: Exact
-          priority: 2000
+          priority: 2000          # range: 1-10000
       backendRefs:
         - name: health-service
           namespace: infra
@@ -351,12 +352,12 @@ Defines routing rules for a set of hostnames. Rules are compiled into an optimiz
 | Field | Description |
 |-------|-------------|
 | `targetRef.name` | Which external processor handles these routes |
-| `hostnames` | List of hostnames this route applies to |
-| `pathPrefixes` | Optional prefixes to prepend to all paths |
+| `hostnames` | List of hostnames this route applies to (max 50) |
+| `pathPrefixes` | Optional prefixes to prepend to all paths (max 30 values) |
 | `pathPrefixes.expandMatchTypes` | Which match types are expanded with prefixes (default: all) |
-| `rules[].matches` | Path matching conditions |
+| `rules[].matches` | Path matching conditions (max 50 per rule) |
 | `rules[].actions` | Optional transformations (redirect, rewrite, headers) |
-| `rules[].backendRefs` | Target services (optional if redirect action) |
+| `rules[].backendRefs` | Target services — name must be a valid RFC 1123 label (no dots) |
 
 ### ExternalProcessorAttachment
 
@@ -431,7 +432,7 @@ rules:
 
 ### Priority
 
-Routes are evaluated by priority (higher first). Default priority is 1000.
+Routes are evaluated by priority (higher first). Default priority is 1000. Valid range: **1–10000**.
 
 - Use high priority (e.g., 2000) for specific routes like `/health`
 - Use low priority (e.g., 100) for catch-all routes like `/`
@@ -557,6 +558,26 @@ Variables can be used in `redirect.path`, `rewrite.path`, and `header.value`:
 | `${client_ip}` | Client IP from X-Forwarded-For |
 | `${request_id}` | Request ID from X-Request-ID header |
 | `${path.segment.N}` | Nth path segment (0-indexed) |
+
+### Validation Limits
+
+The CRD enforces the following limits to prevent resource exhaustion:
+
+| Field | Limit |
+|-------|-------|
+| `spec.hostnames[]` | Max 50 items |
+| `spec.rules[]` | Max 100 items |
+| `rules[].matches[]` | Max 50 items per rule |
+| `pathPrefixes.values[]` | Max 30 items |
+| `matches[].priority` | Range 1–10000 |
+| `backendRefs[].name` | RFC 1123 label (max 63 chars, no dots) |
+| `backendRefs[].namespace` | RFC 1123 label (max 63 chars, no dots) |
+
+Additionally, route expansion is capped at 500,000 routes per CRD at runtime. CRDs exceeding this limit are skipped with an error log.
+
+### Multi-Tenancy
+
+In multi-tenant clusters, hostnames are scoped by namespace. When multiple `CustomHTTPRoute` resources across different namespaces target the same hostname, the namespace that appears first alphabetically owns that hostname. Routes from non-owning namespaces for the same hostname are silently dropped.
 
 ## License
 
