@@ -100,6 +100,39 @@ func TestSplitPath(t *testing.T) {
 	}
 }
 
+func TestStripQueryString(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"/example", "/example"},
+		{"/example?key=value", "/example"},
+		{"/example?", "/example"},
+		{"/example?key=value&other=test", "/example"},
+		{"/path/to/resource?q=search+term", "/path/to/resource"},
+		{"/", "/"},
+		{"/?q=1", "/"},
+		{"", ""},
+		// RFC 3986 §3.3: path is also terminated by '#'
+		{"/example#section", "/example"},
+		{"/example#", "/example"},
+		{"/path/to/resource#top", "/path/to/resource"},
+		// '?' before '#': query terminates the path first
+		{"/example?q=1#frag", "/example"},
+		// '#' before '?': fragment terminates the path first
+		{"/example#frag?notquery", "/example"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := stripQueryString(tt.input)
+			if got != tt.want {
+				t.Errorf("stripQueryString(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSubstituteVariables(t *testing.T) {
 	vars := &requestVars{
 		clientIP:     "1.2.3.4",
