@@ -86,7 +86,7 @@ func (p *Processor) processRequestHeaders(headers *extprocv3.HttpHeaders) (*extp
 				reqCtx.authority = value
 				vars.host = value
 			case ":path":
-				reqCtx.path = value
+				reqCtx.path = stripQueryString(value)
 				vars.path = value
 				vars.pathSegments = splitPath(value)
 			case ":method":
@@ -422,10 +422,21 @@ func stripPort(host string) string {
 	return host
 }
 
+// stripQueryString extracts the path component from a request target by
+// removing the query string and fragment. Per RFC 3986 §3.3, the path is
+// terminated by the first "?" or "#" character, or by the end of the URI.
+// Route matching should operate exclusively on the path component.
+func stripQueryString(path string) string {
+	if idx := strings.IndexAny(path, "?#"); idx != -1 {
+		return path[:idx]
+	}
+	return path
+}
+
 // splitPath splits a path into segments
 func splitPath(path string) []string {
-	// Remove query string
-	if idx := strings.Index(path, "?"); idx != -1 {
+	// Remove query string and fragment (RFC 3986 §3.3)
+	if idx := strings.IndexAny(path, "?#"); idx != -1 {
 		path = path[:idx]
 	}
 	// Split and filter empty segments
