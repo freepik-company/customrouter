@@ -36,8 +36,8 @@ type RouteAction struct {
 	RedirectStatusCode int32  `json:"redirectStatusCode,omitempty"`
 
 	// For rewrite
-	RewritePath              string `json:"rewritePath,omitempty"`
-	RewriteHostname          string `json:"rewriteHostname,omitempty"`
+	RewritePath               string `json:"rewritePath,omitempty"`
+	RewriteHostname           string `json:"rewriteHostname,omitempty"`
 	RewriteReplacePrefixMatch *bool  `json:"rewriteReplacePrefixMatch,omitempty"`
 
 	// For header operations

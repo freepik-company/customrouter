@@ -60,6 +60,26 @@ rules:
       - patch
       - update
       - watch
+  {{- if .Values.operator.webhook.enabled }}
+  - apiGroups:
+      - gateway.networking.k8s.io
+    resources:
+      - httproutes
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - admissionregistration.k8s.io
+    resources:
+      - validatingwebhookconfigurations
+    verbs:
+      - get
+      - list
+      - watch
+      - update
+      - patch
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -132,4 +152,40 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "customrouter.operator.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{- if .Values.operator.webhook.enabled }}
+---
+# Webhook secrets role (namespaced — only access secrets in the operator namespace)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "customrouter.operator.name" . }}-webhook-secrets
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "customrouter.operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+      - create
+      - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "customrouter.operator.name" . }}-webhook-secrets
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "customrouter.operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "customrouter.operator.name" . }}-webhook-secrets
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "customrouter.operator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
 {{- end }}
