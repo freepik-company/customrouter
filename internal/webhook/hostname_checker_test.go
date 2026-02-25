@@ -63,15 +63,15 @@ func newCustomHTTPRouteWithPaths(name, namespace, target string, hostnames []str
 	}
 }
 
-func newHTTPRoute(name, namespace string, hostnames []string) *gatewayv1.HTTPRoute {
+func newHTTPRoute(hostnames []string) *gatewayv1.HTTPRoute {
 	ghs := make([]gatewayv1.Hostname, len(hostnames))
 	for i, h := range hostnames {
 		ghs[i] = gatewayv1.Hostname(h)
 	}
 	return &gatewayv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
+			Name:      "hr-a",
+			Namespace: "default",
 		},
 		Spec: gatewayv1.HTTPRouteSpec{
 			Hostnames: ghs,
@@ -155,7 +155,7 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 			name:  "conflict — with HTTPRoute",
 			route: newCustomHTTPRoute("route-a", "default", "default", []string{"example.com"}),
 			existingHR: []gatewayv1.HTTPRoute{
-				*newHTTPRoute("hr-a", "default", []string{"example.com"}),
+				*newHTTPRoute([]string{"example.com"}),
 			},
 			wantErr:     true,
 			errContains: "HTTPRoute",
@@ -164,7 +164,7 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 			name:  "no conflict — HTTPRoute without hostnames (inherits from Gateway)",
 			route: newCustomHTTPRoute("route-a", "default", "default", []string{"example.com"}),
 			existingHR: []gatewayv1.HTTPRoute{
-				*newHTTPRoute("hr-a", "default", nil),
+				*newHTTPRoute(nil),
 			},
 			wantErr: false,
 		},
@@ -245,12 +245,12 @@ func TestCheckHTTPRouteHostnames(t *testing.T) {
 	}{
 		{
 			name:      "no conflict — empty cluster",
-			httpRoute: newHTTPRoute("hr-a", "default", []string{"example.com"}),
+			httpRoute: newHTTPRoute([]string{"example.com"}),
 			wantErr:   false,
 		},
 		{
 			name:      "no conflict — different hostnames",
-			httpRoute: newHTTPRoute("hr-a", "default", []string{"a.example.com"}),
+			httpRoute: newHTTPRoute([]string{"a.example.com"}),
 			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
 				*newCustomHTTPRoute("route-a", "default", "default", []string{"b.example.com"}),
 			},
@@ -258,7 +258,7 @@ func TestCheckHTTPRouteHostnames(t *testing.T) {
 		},
 		{
 			name:      "conflict — same hostname",
-			httpRoute: newHTTPRoute("hr-a", "default", []string{"example.com"}),
+			httpRoute: newHTTPRoute([]string{"example.com"}),
 			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
 				*newCustomHTTPRoute("route-a", "default", "default", []string{"example.com"}),
 			},
@@ -267,7 +267,7 @@ func TestCheckHTTPRouteHostnames(t *testing.T) {
 		},
 		{
 			name:      "no hostnames on HTTPRoute — skip",
-			httpRoute: newHTTPRoute("hr-a", "default", nil),
+			httpRoute: newHTTPRoute(nil),
 			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
 				*newCustomHTTPRoute("route-a", "default", "default", []string{"example.com"}),
 			},
@@ -275,7 +275,7 @@ func TestCheckHTTPRouteHostnames(t *testing.T) {
 		},
 		{
 			name:      "conflict — multiple CustomHTTPRoutes, one conflicts",
-			httpRoute: newHTTPRoute("hr-a", "default", []string{"conflict.com"}),
+			httpRoute: newHTTPRoute([]string{"conflict.com"}),
 			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
 				*newCustomHTTPRoute("route-a", "default", "default", []string{"other.com"}),
 				*newCustomHTTPRoute("route-b", "other", "default", []string{"conflict.com"}),
