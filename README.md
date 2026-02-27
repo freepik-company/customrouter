@@ -180,6 +180,14 @@ operator:
     - --leader-elect
     - --health-probe-bind-address=:8081
 
+  # Optional: enable validating webhooks for hostname conflict detection
+  webhook:
+    enabled: true
+    timeoutSeconds: 10
+    # certManager:
+    #   enabled: true
+    #   issuerName: my-cluster-issuer
+
 externalProcessors:
   # Default processor
   default:
@@ -586,11 +594,17 @@ In multi-tenant clusters, hostnames are scoped by namespace. When multiple `Cust
 
 ### Validating Webhooks
 
-The operator includes optional validating admission webhooks that prevent hostname/path conflicts at admission time, before resources reach etcd.
+The operator includes optional validating admission webhooks that prevent route conflicts at admission time, before resources reach etcd.
 
 Two webhooks are provided:
-- **CustomHTTPRoute webhook** (`failurePolicy: Fail`): Blocks creation/update if another CustomHTTPRoute with the same target has overlapping hostname + path combinations. Different paths on the same hostname are allowed.
-- **HTTPRoute webhook** (`failurePolicy: Ignore`): Blocks creation/update if a Gateway API HTTPRoute uses a hostname already claimed by a CustomHTTPRoute.
+- **CustomHTTPRoute webhook** (`failurePolicy: Fail`): Blocks creation/update if another CustomHTTPRoute with the same target has overlapping hostname + route match (path + method + headers + query parameters). Different paths, methods, headers, or query parameters on the same hostname are allowed.
+- **HTTPRoute webhook** (`failurePolicy: Ignore`): Blocks creation/update if a Gateway API HTTPRoute uses a hostname + route match already claimed by a CustomHTTPRoute.
+
+Conflict detection uses the full `HTTPRouteMatch` surface:
+- **Path**: type + value (with trailing slash normalization — `/api/` equals `/api`)
+- **Method**: empty means "matches all methods"; different methods (e.g. `GET` vs `POST`) don't conflict
+- **Headers**: empty means "matches all"; different values for the same header name don't conflict
+- **Query parameters**: same logic as headers
 
 Enable in Helm:
 
@@ -612,7 +626,7 @@ operator:
       issuerKind: ClusterIssuer
 ```
 
-See [chart/values.yaml](chart/values.yaml) for all webhook options including `namespaceSelector`, `failurePolicy`, and `caBundle`.
+See [chart/values.yaml](chart/values.yaml) for all webhook options including `timeoutSeconds`, `namespaceSelector`, `failurePolicy`, and `caBundle`.
 
 ## License
 

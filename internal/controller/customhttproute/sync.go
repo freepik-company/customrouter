@@ -373,7 +373,7 @@ func (r *CustomHTTPRouteReconciler) partitionName(target string, index int) stri
 // upsertConfigMaps creates or updates all ConfigMap partitions for a target
 func (r *CustomHTTPRouteReconciler) upsertConfigMaps(
 	ctx context.Context,
-	target string,
+	_ string,
 	partitions []ConfigMapPartition,
 ) error {
 	// Create or update each partition

@@ -79,14 +79,14 @@ func newHTTPRoute(hostnames []string) *gatewayv1.HTTPRoute {
 	}
 }
 
-func newHTTPRouteWithMatches(name string, hostnames []string, matches []gatewayv1.HTTPRouteMatch) *gatewayv1.HTTPRoute {
+func newHTTPRouteWithMatches(hostnames []string, matches []gatewayv1.HTTPRouteMatch) *gatewayv1.HTTPRoute {
 	ghs := make([]gatewayv1.Hostname, len(hostnames))
 	for i, h := range hostnames {
 		ghs[i] = gatewayv1.Hostname(h)
 	}
 	hr := &gatewayv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
+			Name:      "hr-a",
 			Namespace: "default",
 		},
 		Spec: gatewayv1.HTTPRouteSpec{
@@ -231,7 +231,7 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 				[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}},
 			),
 			existingHR: []gatewayv1.HTTPRoute{
-				*newHTTPRouteWithMatches("hr-a", []string{"example.com"}, []gatewayv1.HTTPRouteMatch{
+				*newHTTPRouteWithMatches([]string{"example.com"}, []gatewayv1.HTTPRouteMatch{
 					{Path: &gatewayv1.HTTPPathMatch{
 						Type:  ptrTo(gatewayv1.PathMatchPathPrefix),
 						Value: ptrTo("/webhooks"),
@@ -246,7 +246,7 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 				[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}},
 			),
 			existingHR: []gatewayv1.HTTPRoute{
-				*newHTTPRouteWithMatches("hr-a", []string{"example.com"}, []gatewayv1.HTTPRouteMatch{
+				*newHTTPRouteWithMatches([]string{"example.com"}, []gatewayv1.HTTPRouteMatch{
 					{Path: &gatewayv1.HTTPPathMatch{
 						Type:  ptrTo(gatewayv1.PathMatchPathPrefix),
 						Value: ptrTo("/api"),
@@ -262,7 +262,7 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 				[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}},
 			),
 			existingHR: []gatewayv1.HTTPRoute{
-				*newHTTPRouteWithMatches("hr-a", []string{"example.com"}, []gatewayv1.HTTPRouteMatch{
+				*newHTTPRouteWithMatches([]string{"example.com"}, []gatewayv1.HTTPRouteMatch{
 					{
 						Path: &gatewayv1.HTTPPathMatch{
 							Type:  ptrTo(gatewayv1.PathMatchPathPrefix),
@@ -298,7 +298,7 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 				[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}},
 			),
 			existingHR: []gatewayv1.HTTPRoute{
-				*newHTTPRouteWithMatches("hr-a", []string{"example.com"}, []gatewayv1.HTTPRouteMatch{
+				*newHTTPRouteWithMatches([]string{"example.com"}, []gatewayv1.HTTPRouteMatch{
 					{
 						Path: &gatewayv1.HTTPPathMatch{
 							Type:  ptrTo(gatewayv1.PathMatchPathPrefix),
@@ -325,7 +325,7 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 				[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}},
 			),
 			existingHR: []gatewayv1.HTTPRoute{
-				*newHTTPRouteWithMatches("hr-a", []string{"example.com"}, []gatewayv1.HTTPRouteMatch{
+				*newHTTPRouteWithMatches([]string{"example.com"}, []gatewayv1.HTTPRouteMatch{
 					{
 						Path: &gatewayv1.HTTPPathMatch{
 							Type:  ptrTo(gatewayv1.PathMatchPathPrefix),
@@ -428,7 +428,7 @@ func TestCheckHTTPRouteHostnames(t *testing.T) {
 		// --- Path-aware conflict detection ---
 		{
 			name: "no conflict — same hostname, different paths",
-			httpRoute: newHTTPRouteWithMatches("hr-a", []string{"example.com"}, []gatewayv1.HTTPRouteMatch{
+			httpRoute: newHTTPRouteWithMatches([]string{"example.com"}, []gatewayv1.HTTPRouteMatch{
 				{Path: &gatewayv1.HTTPPathMatch{
 					Type:  ptrTo(gatewayv1.PathMatchPathPrefix),
 					Value: ptrTo("/webhooks"),
@@ -443,7 +443,7 @@ func TestCheckHTTPRouteHostnames(t *testing.T) {
 		},
 		{
 			name: "conflict — same hostname, same path",
-			httpRoute: newHTTPRouteWithMatches("hr-a", []string{"example.com"}, []gatewayv1.HTTPRouteMatch{
+			httpRoute: newHTTPRouteWithMatches([]string{"example.com"}, []gatewayv1.HTTPRouteMatch{
 				{Path: &gatewayv1.HTTPPathMatch{
 					Type:  ptrTo(gatewayv1.PathMatchPathPrefix),
 					Value: ptrTo("/api"),
@@ -460,7 +460,7 @@ func TestCheckHTTPRouteHostnames(t *testing.T) {
 		// --- Method-aware conflict detection ---
 		{
 			name: "conflict — HTTPRoute with method vs CustomHTTPRoute (no method = matches all)",
-			httpRoute: newHTTPRouteWithMatches("hr-a", []string{"example.com"}, []gatewayv1.HTTPRouteMatch{
+			httpRoute: newHTTPRouteWithMatches([]string{"example.com"}, []gatewayv1.HTTPRouteMatch{
 				{
 					Path: &gatewayv1.HTTPPathMatch{
 						Type:  ptrTo(gatewayv1.PathMatchPathPrefix),
@@ -480,7 +480,7 @@ func TestCheckHTTPRouteHostnames(t *testing.T) {
 		// --- QueryParam-aware conflict detection ---
 		{
 			name: "conflict — HTTPRoute with query params vs CustomHTTPRoute (no params = matches all)",
-			httpRoute: newHTTPRouteWithMatches("hr-a", []string{"example.com"}, []gatewayv1.HTTPRouteMatch{
+			httpRoute: newHTTPRouteWithMatches([]string{"example.com"}, []gatewayv1.HTTPRouteMatch{
 				{
 					Path: &gatewayv1.HTTPPathMatch{
 						Type:  ptrTo(gatewayv1.PathMatchPathPrefix),

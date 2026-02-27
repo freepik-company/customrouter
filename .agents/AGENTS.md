@@ -123,6 +123,12 @@ make generate manifests
 │   │       ├── controller.go               # Main reconciliation loop
 │   │       ├── status.go                   # Status condition updaters
 │   │       └── sync.go                     # EnvoyFilter generation
+│   ├── webhook/                            # Validating admission webhooks
+│   │   ├── hostname_checker.go            # Conflict detection (path+method+headers+queryParams)
+│   │   ├── hostname_checker_test.go       # 46 unit tests
+│   │   ├── customhttproute_webhook.go     # CustomHTTPRoute admission handler
+│   │   ├── httproute_webhook.go           # HTTPRoute admission handler
+│   │   └── certgen.go                     # Auto-cert generation, Secret sharing, CABundleReconciler
 │   └── extproc/                            # External processor implementation
 │       ├── config.go                       # Server configuration
 │       ├── processor.go                    # gRPC processor service
@@ -428,6 +434,11 @@ When a route matches, extproc sets these headers:
 | `--leader-elect` | `false` | Enable leader election |
 | `--metrics-secure` | `true` | Serve metrics via HTTPS |
 | `--routes-configmap-namespace` | `default` | Namespace for route ConfigMaps |
+| `--enable-webhooks` | `false` | Enable validating admission webhooks |
+| `--webhook-port` | `9443` | Port for the webhook server |
+| `--webhook-config-name` | `""` | ValidatingWebhookConfiguration name (auto-cert mode) |
+| `--webhook-service-name` | `""` | Webhook Service name for TLS SAN (auto-cert mode) |
+| `--webhook-cert-path` | `""` | Directory with TLS certs (cert-manager mode) |
 
 ---
 
@@ -459,6 +470,7 @@ KIND_CLUSTER=my-cluster go test -tags=e2e ./test/e2e/ -v -ginkgo.v
 | Path | Description |
 |------|-------------|
 | `pkg/routes/expand_test.go` | Route expansion unit tests |
+| `internal/webhook/hostname_checker_test.go` | Webhook conflict detection tests (46 tests) |
 | `test/e2e/e2e_test.go` | End-to-end integration tests |
 | `test/utils/utils.go` | Test helper utilities |
 
@@ -549,6 +561,15 @@ operator:
   args:
     - --leader-elect
     - --health-probe-bind-address=:8081
+  webhook:
+    enabled: false              # opt-in
+    port: 9443
+    timeoutSeconds: 10
+    customHTTPRouteFailurePolicy: Fail
+    httpRouteFailurePolicy: Ignore
+    namespaceSelector:          # excludes kube-system, kube-public, kube-node-lease
+    certManager:
+      enabled: false
   pdb:
     enabled: false
   hpa:
@@ -697,6 +718,10 @@ const configMapPartLabel = "customrouter.freepik.com/part"
 12. **Route Expansion Cap**: `ExpandRoutes` rejects CRDs that would generate more than 500,000 routes (controlled by `MaxRoutesPerCRD`).
 
 13. **Header Injection Protection**: When the ext_proc finds no matching route, it explicitly removes the `x-customrouter-cluster` header to prevent external clients from injecting arbitrary routing decisions.
+
+14. **Webhook Conflict Detection**: Conflicts are evaluated using the full `HTTPRouteMatch` surface — path + method + headers + query parameters. Empty fields mean "matches all" (conservative: assumes conflict when unsure). Path trailing slashes are normalized (`/api/` = `/api`).
+
+15. **Webhook Auto-Cert**: When `--enable-webhooks` is set without `--webhook-cert-path`, the operator auto-generates TLS certs and shares them across replicas via a Secret. A `CABundleReconciler` periodically re-patches the webhook config.
 
 ---
 
