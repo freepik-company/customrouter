@@ -191,8 +191,8 @@ func (p *Processor) buildRedirectResponse(action routes.RouteAction, vars *reque
 	portStr := ""
 	if action.RedirectPort > 0 {
 		// Only include port if non-standard
-		if !((scheme == "http" && action.RedirectPort == 80) ||
-			(scheme == "https" && action.RedirectPort == 443)) {
+		if (scheme != "http" || action.RedirectPort != 80) &&
+			(scheme != "https" || action.RedirectPort != 443) {
 			portStr = ":" + strconv.Itoa(int(action.RedirectPort))
 		}
 	}
@@ -453,7 +453,7 @@ func splitPath(path string) []string {
 // shouldReplacePrefixMatch determines whether a rewrite should use prefix replacement.
 // Explicit field takes precedence. Otherwise, convention: prefix rewrite for PathPrefix
 // routes whose rewritePath contains no variables (${...}); full rewrite otherwise.
-func shouldReplacePrefixMatch(action routes.RouteAction, route *routes.Route, rewrittenBase string) bool {
+func shouldReplacePrefixMatch(action routes.RouteAction, route *routes.Route, _ string) bool {
 	if action.RewriteReplacePrefixMatch != nil {
 		return *action.RewriteReplacePrefixMatch
 	}

@@ -180,6 +180,14 @@ operator:
     - --leader-elect
     - --health-probe-bind-address=:8081
 
+  # Optional: enable validating webhooks for hostname conflict detection
+  webhook:
+    enabled: true
+    timeoutSeconds: 10
+    # certManager:
+    #   enabled: true
+    #   issuerName: my-cluster-issuer
+
 externalProcessors:
   # Default processor
   default:
@@ -329,6 +337,11 @@ The operator watches `CustomHTTPRoute` resources, compiles routing rules, and wr
 | `--routes-configmap-namespace` | `default` | Namespace where route ConfigMaps are written |
 | `--leader-elect` | `false` | Enable leader election for HA |
 | `--health-probe-bind-address` | `:8081` | Address for health probes |
+| `--enable-webhooks` | `false` | Enable validating admission webhooks |
+| `--webhook-port` | `9443` | Port for the webhook server |
+| `--webhook-config-name` | `""` | ValidatingWebhookConfiguration name (auto-cert mode) |
+| `--webhook-service-name` | `""` | Webhook Service name for TLS SAN (auto-cert mode) |
+| `--webhook-cert-path` | `""` | Directory with TLS certs (cert-manager mode) |
 
 ### External Processor
 
@@ -578,6 +591,42 @@ Additionally, route expansion is capped at 500,000 routes per CRD at runtime. CR
 ### Multi-Tenancy
 
 In multi-tenant clusters, hostnames are scoped by namespace. When multiple `CustomHTTPRoute` resources across different namespaces target the same hostname, the namespace that appears first alphabetically owns that hostname. Routes from non-owning namespaces for the same hostname are silently dropped.
+
+### Validating Webhooks
+
+The operator includes optional validating admission webhooks that prevent route conflicts at admission time, before resources reach etcd.
+
+Two webhooks are provided:
+- **CustomHTTPRoute webhook** (`failurePolicy: Fail`): Blocks creation/update if another CustomHTTPRoute with the same target has overlapping hostname + route match (path + method + headers + query parameters). Different paths, methods, headers, or query parameters on the same hostname are allowed.
+- **HTTPRoute webhook** (`failurePolicy: Ignore`): Blocks creation/update if a Gateway API HTTPRoute uses a hostname + route match already claimed by a CustomHTTPRoute.
+
+Conflict detection uses the full `HTTPRouteMatch` surface:
+- **Path**: type + value (with trailing slash normalization — `/api/` equals `/api`)
+- **Method**: empty means "matches all methods"; different methods (e.g. `GET` vs `POST`) don't conflict
+- **Headers**: empty means "matches all"; different values for the same header name don't conflict
+- **Query parameters**: same logic as headers
+
+Enable in Helm:
+
+```yaml
+operator:
+  webhook:
+    enabled: true
+```
+
+By default, TLS certificates are auto-generated at startup and shared across replicas via a Secret. A `CABundleReconciler` periodically ensures the CA bundle survives Helm upgrades. For environments with cert-manager:
+
+```yaml
+operator:
+  webhook:
+    enabled: true
+    certManager:
+      enabled: true
+      issuerName: my-cluster-issuer
+      issuerKind: ClusterIssuer
+```
+
+See [chart/values.yaml](chart/values.yaml) for all webhook options including `timeoutSeconds`, `namespaceSelector`, `failurePolicy`, and `caBundle`.
 
 ## License
 

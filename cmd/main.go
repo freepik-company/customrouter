@@ -17,9 +17,11 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"os"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -29,6 +31,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -38,6 +41,9 @@ import (
 	customrouterfreepikcomv1alpha1 "github.com/freepik-company/customrouter/api/v1alpha1"
 	"github.com/freepik-company/customrouter/internal/controller/customhttproute"
 	"github.com/freepik-company/customrouter/internal/controller/externalprocessorattachment"
+	customwebhook "github.com/freepik-company/customrouter/internal/webhook"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -49,6 +55,7 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(customrouterfreepikcomv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(gatewayv1.Install(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -62,6 +69,10 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var routesConfigMapNamespace string
+	var enableWebhooks bool
+	var webhookConfigName string
+	var webhookServiceName string
+	var webhookPort int
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -82,6 +93,13 @@ func main() {
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.StringVar(&routesConfigMapNamespace, "routes-configmap-namespace", "default",
 		"The namespace where route ConfigMaps will be stored")
+	flag.BoolVar(&enableWebhooks, "enable-webhooks", false,
+		"Enable validating admission webhooks for hostname conflict detection")
+	flag.StringVar(&webhookConfigName, "webhook-config-name", "",
+		"Name of the ValidatingWebhookConfiguration to patch with the CA bundle (auto-cert mode)")
+	flag.StringVar(&webhookServiceName, "webhook-service-name", "",
+		"Name of the webhook Service for TLS certificate SAN (auto-cert mode)")
+	flag.IntVar(&webhookPort, "webhook-port", 9443, "Port for the webhook server to listen on")
 	opts := zap.Options{
 		Development: true,
 	}
@@ -109,6 +127,7 @@ func main() {
 	webhookTLSOpts := tlsOpts
 	webhookServerOptions := webhook.Options{
 		TLSOpts: webhookTLSOpts,
+		Port:    webhookPort,
 	}
 
 	if len(webhookCertPath) > 0 {
@@ -120,9 +139,47 @@ func main() {
 		webhookServerOptions.KeyName = webhookCertKey
 	}
 
+	// Auto-generate webhook TLS certificates when webhooks are enabled
+	// and no explicit cert path is provided (i.e., not using cert-manager).
+	cfg := ctrl.GetConfigOrDie()
+	var webhookCaPEM []byte
+
+	if enableWebhooks && webhookCertPath == "" {
+		webhookCertPath = "/tmp/k8s-webhook-server/serving-certs"
+		setupLog.Info("Auto-generating webhook TLS certificates",
+			"cert-dir", webhookCertPath,
+			"webhook-config-name", webhookConfigName,
+			"webhook-service-name", webhookServiceName,
+		)
+
+		directClient, err := client.New(cfg, client.Options{Scheme: scheme})
+		if err != nil {
+			setupLog.Error(err, "unable to create client for cert generation")
+			os.Exit(1)
+		}
+
+		certCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		ns := customwebhook.GetNamespace()
+		webhookCaPEM, err = customwebhook.EnsureCerts(
+			certCtx, directClient, webhookCertPath,
+			webhookConfigName, webhookServiceName, ns,
+		)
+		if err != nil {
+			setupLog.Error(err, "unable to ensure webhook certificates")
+			os.Exit(1)
+		}
+
+		webhookServerOptions.CertDir = webhookCertPath
+		webhookServerOptions.CertName = webhookCertName
+		webhookServerOptions.KeyName = webhookCertKey
+	}
+
 	webhookServer := webhook.NewServer(webhookServerOptions)
 
-	// Metrics endpoint is enabled in 'config/operator/deploy/default/kustomization.yaml'. The Metrics options configure the server.
+	// Metrics endpoint is enabled in 'config/operator/deploy/default/kustomization.yaml'.
+	// The Metrics options configure the server.
 	// More info:
 	// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/metrics/server
 	// - https://book.kubebuilder.io/reference/metrics.html
@@ -157,7 +214,7 @@ func main() {
 		metricsServerOptions.KeyName = metricsCertKey
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
 		WebhookServer:          webhookServer,
@@ -197,6 +254,34 @@ func main() {
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
+
+	if enableWebhooks {
+		if err := customwebhook.SetupCustomHTTPRouteWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "CustomHTTPRoute")
+			os.Exit(1)
+		}
+
+		mgr.GetWebhookServer().Register(
+			"/validate-gateway-networking-k8s-io-v1-httproute",
+			&admission.Webhook{Handler: customwebhook.NewHTTPRouteValidator(mgr.GetClient())},
+		)
+
+		// In auto-cert mode, periodically reconcile the CA bundle in case
+		// a Helm upgrade or external change wipes it.
+		if webhookCaPEM != nil {
+			if err := mgr.Add(&customwebhook.CABundleReconciler{
+				Client:     mgr.GetClient(),
+				ConfigName: webhookConfigName,
+				CaPEM:      webhookCaPEM,
+				Interval:   60 * time.Second,
+			}); err != nil {
+				setupLog.Error(err, "unable to add CA bundle reconciler")
+				os.Exit(1)
+			}
+		}
+
+		setupLog.Info("webhooks enabled")
+	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

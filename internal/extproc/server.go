@@ -138,7 +138,7 @@ func (s *Server) Start(ctx context.Context) error {
 		<-ctx.Done()
 		s.logger.Info("shutting down extproc server")
 		s.grpcServer.GracefulStop()
-		s.loader.Close()
+		_ = s.loader.Close()
 	}()
 
 	return s.grpcServer.Serve(listener)
@@ -147,5 +147,5 @@ func (s *Server) Start(ctx context.Context) error {
 // Stop stops the gRPC server
 func (s *Server) Stop() {
 	s.grpcServer.GracefulStop()
-	s.loader.Close()
+	_ = s.loader.Close()
 }

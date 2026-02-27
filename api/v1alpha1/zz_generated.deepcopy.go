@@ -36,7 +36,7 @@ func (in *Action) DeepCopyInto(out *Action) {
 	if in.Rewrite != nil {
 		in, out := &in.Rewrite, &out.Rewrite
 		*out = new(RewriteConfig)
-		**out = **in
+		(*in).DeepCopyInto(*out)
 	}
 	if in.Header != nil {
 		in, out := &in.Header, &out.Header

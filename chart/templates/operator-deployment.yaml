@@ -37,9 +37,25 @@ spec:
           imagePullPolicy: {{ .Values.operator.image.pullPolicy }}
           command:
             - /manager
-          {{- with .Values.operator.args }}
           args:
+          {{- with .Values.operator.args }}
             {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.operator.webhook.enabled }}
+            - --enable-webhooks
+            - --webhook-port={{ .Values.operator.webhook.port }}
+          {{- if or .Values.operator.webhook.certManager.enabled .Values.operator.webhook.tlsSecretName }}
+            - --webhook-cert-path=/tmp/k8s-webhook-server/serving-certs
+          {{- else }}
+            - --webhook-config-name={{ include "customrouter.operator.name" . }}
+            - --webhook-service-name={{ include "customrouter.operator.name" . }}-webhook
+          {{- end }}
+          {{- end }}
+          {{- if .Values.operator.webhook.enabled }}
+          ports:
+            - containerPort: {{ .Values.operator.webhook.port }}
+              name: webhook-server
+              protocol: TCP
           {{- end }}
           {{- with .Values.operator.securityContext }}
           securityContext:
@@ -57,6 +73,24 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- if .Values.operator.webhook.enabled }}
+          volumeMounts:
+            - name: webhook-certs
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+            {{- if or .Values.operator.webhook.certManager.enabled .Values.operator.webhook.tlsSecretName }}
+              readOnly: true
+            {{- end }}
+          {{- end }}
+      {{- if .Values.operator.webhook.enabled }}
+      volumes:
+        - name: webhook-certs
+      {{- if or .Values.operator.webhook.certManager.enabled .Values.operator.webhook.tlsSecretName }}
+          secret:
+            secretName: {{ .Values.operator.webhook.tlsSecretName | default (printf "%s-webhook-tls" (include "customrouter.operator.name" .)) }}
+      {{- else }}
+          emptyDir: {}
+      {{- end }}
+      {{- end }}
       {{- with .Values.operator.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
