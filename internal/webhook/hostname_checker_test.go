@@ -79,6 +79,32 @@ func newHTTPRoute(hostnames []string) *gatewayv1.HTTPRoute {
 	}
 }
 
+func newHTTPRouteWithMatches(name string, hostnames []string, matches []gatewayv1.HTTPRouteMatch) *gatewayv1.HTTPRoute {
+	ghs := make([]gatewayv1.Hostname, len(hostnames))
+	for i, h := range hostnames {
+		ghs[i] = gatewayv1.Hostname(h)
+	}
+	hr := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "default",
+		},
+		Spec: gatewayv1.HTTPRouteSpec{
+			Hostnames: ghs,
+		},
+	}
+	if len(matches) > 0 {
+		hr.Spec.Rules = []gatewayv1.HTTPRouteRule{
+			{Matches: matches},
+		}
+	}
+	return hr
+}
+
+func ptrTo[T any](v T) *T {
+	return &v
+}
+
 func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -117,7 +143,7 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 				*newCustomHTTPRoute("route-b", "default", "default", []string{"example.com"}),
 			},
 			wantErr:     true,
-			errContains: "path conflict",
+			errContains: "route conflict",
 		},
 		{
 			name: "no conflict — same target, same hostname, different paths",
@@ -152,7 +178,7 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:  "conflict — with HTTPRoute",
+			name:  "conflict — with HTTPRoute (catch-all)",
 			route: newCustomHTTPRoute("route-a", "default", "default", []string{"example.com"}),
 			existingHR: []gatewayv1.HTTPRoute{
 				*newHTTPRoute([]string{"example.com"}),
@@ -197,6 +223,59 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 			},
 			wantErr:     true,
 			errContains: "example.com",
+		},
+		// --- Path-aware HTTPRoute conflict detection ---
+		{
+			name: "no conflict — HTTPRoute with different path",
+			route: newCustomHTTPRouteWithPaths("route-a", "default", "default", []string{"example.com"},
+				[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}},
+			),
+			existingHR: []gatewayv1.HTTPRoute{
+				*newHTTPRouteWithMatches("hr-a", []string{"example.com"}, []gatewayv1.HTTPRouteMatch{
+					{Path: &gatewayv1.HTTPPathMatch{
+						Type:  ptrTo(gatewayv1.PathMatchPathPrefix),
+						Value: ptrTo("/webhooks"),
+					}},
+				}),
+			},
+			wantErr: false,
+		},
+		{
+			name: "conflict — HTTPRoute with same path",
+			route: newCustomHTTPRouteWithPaths("route-a", "default", "default", []string{"example.com"},
+				[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}},
+			),
+			existingHR: []gatewayv1.HTTPRoute{
+				*newHTTPRouteWithMatches("hr-a", []string{"example.com"}, []gatewayv1.HTTPRouteMatch{
+					{Path: &gatewayv1.HTTPPathMatch{
+						Type:  ptrTo(gatewayv1.PathMatchPathPrefix),
+						Value: ptrTo("/api"),
+					}},
+				}),
+			},
+			wantErr:     true,
+			errContains: "route conflict",
+		},
+		{
+			name: "conflict — HTTPRoute with same path and headers (CustomHTTPRoute has no headers)",
+			route: newCustomHTTPRouteWithPaths("route-a", "default", "default", []string{"example.com"},
+				[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}},
+			),
+			existingHR: []gatewayv1.HTTPRoute{
+				*newHTTPRouteWithMatches("hr-a", []string{"example.com"}, []gatewayv1.HTTPRouteMatch{
+					{
+						Path: &gatewayv1.HTTPPathMatch{
+							Type:  ptrTo(gatewayv1.PathMatchPathPrefix),
+							Value: ptrTo("/api"),
+						},
+						Headers: []gatewayv1.HTTPHeaderMatch{
+							{Name: "X-Version", Value: "v1"},
+						},
+					},
+				}),
+			},
+			wantErr:     true,
+			errContains: "route conflict",
 		},
 	}
 
@@ -257,7 +336,7 @@ func TestCheckHTTPRouteHostnames(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:      "conflict — same hostname",
+			name:      "conflict — same hostname (catch-all)",
 			httpRoute: newHTTPRoute([]string{"example.com"}),
 			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
 				*newCustomHTTPRoute("route-a", "default", "default", []string{"example.com"}),
@@ -282,6 +361,38 @@ func TestCheckHTTPRouteHostnames(t *testing.T) {
 			},
 			wantErr:     true,
 			errContains: "conflict.com",
+		},
+		// --- Path-aware conflict detection ---
+		{
+			name: "no conflict — same hostname, different paths",
+			httpRoute: newHTTPRouteWithMatches("hr-a", []string{"example.com"}, []gatewayv1.HTTPRouteMatch{
+				{Path: &gatewayv1.HTTPPathMatch{
+					Type:  ptrTo(gatewayv1.PathMatchPathPrefix),
+					Value: ptrTo("/webhooks"),
+				}},
+			}),
+			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
+				*newCustomHTTPRouteWithPaths("route-a", "default", "default", []string{"example.com"},
+					[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}},
+				),
+			},
+			wantErr: false,
+		},
+		{
+			name: "conflict — same hostname, same path",
+			httpRoute: newHTTPRouteWithMatches("hr-a", []string{"example.com"}, []gatewayv1.HTTPRouteMatch{
+				{Path: &gatewayv1.HTTPPathMatch{
+					Type:  ptrTo(gatewayv1.PathMatchPathPrefix),
+					Value: ptrTo("/api"),
+				}},
+			}),
+			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
+				*newCustomHTTPRouteWithPaths("route-a", "default", "default", []string{"example.com"},
+					[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}},
+				),
+			},
+			wantErr:     true,
+			errContains: "route conflict",
 		},
 	}
 
@@ -309,6 +420,70 @@ func TestCheckHTTPRouteHostnames(t *testing.T) {
 			}
 			if tt.errContains != "" && err != nil && !strings.Contains(err.Error(), tt.errContains) {
 				t.Errorf("error %q should contain %q", err.Error(), tt.errContains)
+			}
+		})
+	}
+}
+
+func TestHeadersCompatible(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b []headerMatch
+		want bool
+	}{
+		{
+			name: "both empty — compatible",
+			a:    nil,
+			b:    nil,
+			want: true,
+		},
+		{
+			name: "one empty — compatible (empty matches all)",
+			a:    []headerMatch{{Name: "X-Version", Value: "v1"}},
+			b:    nil,
+			want: true,
+		},
+		{
+			name: "same headers — compatible",
+			a:    []headerMatch{{Name: "X-Version", Value: "v1"}},
+			b:    []headerMatch{{Name: "X-Version", Value: "v1"}},
+			want: true,
+		},
+		{
+			name: "different values for same header — incompatible",
+			a:    []headerMatch{{Name: "X-Version", Value: "v1"}},
+			b:    []headerMatch{{Name: "X-Version", Value: "v2"}},
+			want: false,
+		},
+		{
+			name: "different header names — compatible (no contradiction)",
+			a:    []headerMatch{{Name: "X-Version", Value: "v1"}},
+			b:    []headerMatch{{Name: "X-Env", Value: "prod"}},
+			want: true,
+		},
+		{
+			name: "case insensitive header name — incompatible",
+			a:    []headerMatch{{Name: "X-Version", Value: "v1"}},
+			b:    []headerMatch{{Name: "x-version", Value: "v2"}},
+			want: false,
+		},
+		{
+			name: "superset with same values — compatible",
+			a:    []headerMatch{{Name: "X-Version", Value: "v1"}},
+			b:    []headerMatch{{Name: "X-Version", Value: "v1"}, {Name: "X-Env", Value: "prod"}},
+			want: true,
+		},
+		{
+			name: "superset with different values — incompatible",
+			a:    []headerMatch{{Name: "X-Version", Value: "v1"}},
+			b:    []headerMatch{{Name: "X-Version", Value: "v2"}, {Name: "X-Env", Value: "prod"}},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := headersCompatible(tt.a, tt.b); got != tt.want {
+				t.Errorf("headersCompatible() = %v, want %v", got, tt.want)
 			}
 		})
 	}

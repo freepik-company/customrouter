@@ -19,6 +19,8 @@ package webhook
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -36,6 +38,7 @@ type HostnameChecker struct {
 
 // CheckCustomHTTPRouteHostnames checks whether any hostname in the given CustomHTTPRoute
 // conflicts with another CustomHTTPRoute (same targetRef) or any HTTPRoute in the cluster.
+// A conflict requires overlapping hostnames AND overlapping route matches (path + headers).
 // It excludes self by UID to allow updates.
 func (c *HostnameChecker) CheckCustomHTTPRouteHostnames(ctx context.Context, route *customrouterv1alpha1.CustomHTTPRoute) error {
 	hostnames := route.Spec.Hostnames
@@ -43,14 +46,13 @@ func (c *HostnameChecker) CheckCustomHTTPRouteHostnames(ctx context.Context, rou
 		return nil
 	}
 	hostnameSet := toSet(hostnames)
+	routeMatches := extractCustomRouteMatches(route)
 
 	// Check against other CustomHTTPRoutes with the same targetRef
 	var customRoutes customrouterv1alpha1.CustomHTTPRouteList
 	if err := c.Client.List(ctx, &customRoutes); err != nil {
 		return fmt.Errorf("listing CustomHTTPRoutes: %w", err)
 	}
-
-	routePaths := extractPathMatches(route)
 
 	for i := range customRoutes.Items {
 		other := &customRoutes.Items[i]
@@ -64,17 +66,17 @@ func (c *HostnameChecker) CheckCustomHTTPRouteHostnames(ctx context.Context, rou
 		if len(hostConflicts) == 0 {
 			continue
 		}
-		// Same target + same hostname: only conflict if path matches overlap
-		otherPaths := extractPathMatches(other)
-		if pathConflicts := findPathMatchOverlap(routePaths, otherPaths); len(pathConflicts) > 0 {
+		// Same target + same hostname: only conflict if route matches overlap
+		otherMatches := extractCustomRouteMatches(other)
+		if matchConflicts := findRouteMatchOverlap(routeMatches, otherMatches); len(matchConflicts) > 0 {
 			return fmt.Errorf(
-				"path conflict on hostnames %v: %v already defined in CustomHTTPRoute %s (target %q)",
-				hostConflicts, pathConflicts, formatNamespacedName(other), route.Spec.TargetRef.Name,
+				"route conflict on hostnames %v: %v already defined in CustomHTTPRoute %s (target %q)",
+				hostConflicts, matchConflicts, formatNamespacedName(other), route.Spec.TargetRef.Name,
 			)
 		}
 	}
 
-	// Check against HTTPRoutes (any hostname overlap is a conflict, regardless of target)
+	// Check against HTTPRoutes (hostname + path + header overlap is a conflict)
 	var httpRoutes gatewayv1.HTTPRouteList
 	if err := c.Client.List(ctx, &httpRoutes); err != nil {
 		return fmt.Errorf("listing HTTPRoutes: %w", err)
@@ -86,10 +88,15 @@ func (c *HostnameChecker) CheckCustomHTTPRouteHostnames(ctx context.Context, rou
 		if len(hrHostnames) == 0 {
 			continue
 		}
-		if conflicts := findOverlap(hostnameSet, hrHostnames); len(conflicts) > 0 {
+		hostConflicts := findOverlap(hostnameSet, hrHostnames)
+		if len(hostConflicts) == 0 {
+			continue
+		}
+		hrMatches := extractHTTPRouteMatches(hr)
+		if matchConflicts := findRouteMatchOverlap(routeMatches, hrMatches); len(matchConflicts) > 0 {
 			return fmt.Errorf(
-				"hostname conflict: %v already defined in HTTPRoute %s/%s",
-				conflicts, hr.Namespace, hr.Name,
+				"route conflict on hostnames %v: %v already defined in HTTPRoute %s/%s",
+				hostConflicts, matchConflicts, hr.Namespace, hr.Name,
 			)
 		}
 	}
@@ -99,12 +106,14 @@ func (c *HostnameChecker) CheckCustomHTTPRouteHostnames(ctx context.Context, rou
 
 // CheckHTTPRouteHostnames checks whether any hostname in the given HTTPRoute
 // conflicts with an existing CustomHTTPRoute.
+// A conflict requires overlapping hostnames AND overlapping route matches (path + headers).
 func (c *HostnameChecker) CheckHTTPRouteHostnames(ctx context.Context, httpRoute *gatewayv1.HTTPRoute) error {
 	hrHostnames := gatewayHostnames(httpRoute)
 	if len(hrHostnames) == 0 {
 		return nil
 	}
 	hostnameSet := toSet(hrHostnames)
+	hrMatches := extractHTTPRouteMatches(httpRoute)
 
 	var customRoutes customrouterv1alpha1.CustomHTTPRouteList
 	if err := c.Client.List(ctx, &customRoutes); err != nil {
@@ -113,15 +122,153 @@ func (c *HostnameChecker) CheckHTTPRouteHostnames(ctx context.Context, httpRoute
 
 	for i := range customRoutes.Items {
 		cr := &customRoutes.Items[i]
-		if conflicts := findOverlap(hostnameSet, cr.Spec.Hostnames); len(conflicts) > 0 {
+		hostConflicts := findOverlap(hostnameSet, cr.Spec.Hostnames)
+		if len(hostConflicts) == 0 {
+			continue
+		}
+		crMatches := extractCustomRouteMatches(cr)
+		if matchConflicts := findRouteMatchOverlap(hrMatches, crMatches); len(matchConflicts) > 0 {
 			return fmt.Errorf(
-				"hostname conflict: %v already defined in CustomHTTPRoute %s",
-				conflicts, formatNamespacedName(cr),
+				"route conflict on hostnames %v: %v already defined in CustomHTTPRoute %s",
+				hostConflicts, matchConflicts, formatNamespacedName(cr),
 			)
 		}
 	}
 
 	return nil
+}
+
+// routeMatch represents a single match criterion within a routing rule.
+// Two routeMatches conflict when they could match the same HTTP request,
+// determined by the triad: hostname + path + headers.
+type routeMatch struct {
+	PathType string
+	Path     string
+	Headers  []headerMatch
+}
+
+func (r routeMatch) String() string {
+	if len(r.Headers) == 0 {
+		return fmt.Sprintf("%s:%s", r.PathType, r.Path)
+	}
+	hdrs := make([]string, len(r.Headers))
+	for i, h := range r.Headers {
+		hdrs[i] = fmt.Sprintf("%s=%s", h.Name, h.Value)
+	}
+	return fmt.Sprintf("%s:%s[%s]", r.PathType, r.Path, strings.Join(hdrs, ","))
+}
+
+// headerMatch represents an HTTP header matching criterion.
+type headerMatch struct {
+	Name  string
+	Value string
+}
+
+// extractCustomRouteMatches returns all unique route matches from a CustomHTTPRoute.
+// CustomHTTPRoute does not support header matching, so Headers is always empty.
+func extractCustomRouteMatches(route *customrouterv1alpha1.CustomHTTPRoute) []routeMatch {
+	seen := make(map[string]struct{})
+	var matches []routeMatch
+	for _, rule := range route.Spec.Rules {
+		for _, m := range rule.Matches {
+			key := string(m.Type) + ":" + m.Path
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			matches = append(matches, routeMatch{
+				PathType: string(m.Type),
+				Path:     m.Path,
+			})
+		}
+	}
+	return matches
+}
+
+// extractHTTPRouteMatches returns all route matches from a Gateway API HTTPRoute,
+// including path and header criteria. A rule with no matches defaults to
+// PathPrefix "/" (Gateway API default). An HTTPRoute with no rules also defaults
+// to PathPrefix "/" as a catch-all.
+func extractHTTPRouteMatches(hr *gatewayv1.HTTPRoute) []routeMatch {
+	var matches []routeMatch
+	for _, rule := range hr.Spec.Rules {
+		if len(rule.Matches) == 0 {
+			// Gateway API default: a rule with no matches is a catch-all
+			matches = append(matches, routeMatch{
+				PathType: string(gatewayv1.PathMatchPathPrefix),
+				Path:     "/",
+			})
+			continue
+		}
+		for _, m := range rule.Matches {
+			rm := routeMatch{
+				PathType: string(gatewayv1.PathMatchPathPrefix),
+				Path:     "/",
+			}
+			if m.Path != nil {
+				if m.Path.Type != nil {
+					rm.PathType = string(*m.Path.Type)
+				}
+				if m.Path.Value != nil {
+					rm.Path = *m.Path.Value
+				}
+			}
+			for _, h := range m.Headers {
+				rm.Headers = append(rm.Headers, headerMatch{
+					Name:  string(h.Name),
+					Value: h.Value,
+				})
+			}
+			sort.Slice(rm.Headers, func(i, j int) bool {
+				return strings.ToLower(rm.Headers[i].Name) < strings.ToLower(rm.Headers[j].Name)
+			})
+			matches = append(matches, rm)
+		}
+	}
+	// An HTTPRoute with no rules defaults to a catch-all
+	if len(hr.Spec.Rules) == 0 {
+		matches = append(matches, routeMatch{
+			PathType: string(gatewayv1.PathMatchPathPrefix),
+			Path:     "/",
+		})
+	}
+	return matches
+}
+
+// findRouteMatchOverlap returns matches from a that overlap with matches in b.
+// Two matches overlap when they have the same path type and path value,
+// and their headers are compatible (could match the same request).
+func findRouteMatchOverlap(a, b []routeMatch) []routeMatch {
+	var overlaps []routeMatch
+	for _, ma := range a {
+		for _, mb := range b {
+			if ma.PathType == mb.PathType && ma.Path == mb.Path && headersCompatible(ma.Headers, mb.Headers) {
+				overlaps = append(overlaps, ma)
+				break
+			}
+		}
+	}
+	return overlaps
+}
+
+// headersCompatible returns true if two sets of header matches could match the
+// same HTTP request. An empty header set matches all requests, so it is always
+// compatible. Two non-empty sets are incompatible only when they require
+// different values for the same header name (case-insensitive).
+func headersCompatible(a, b []headerMatch) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return true
+	}
+	bMap := make(map[string]string, len(b))
+	for _, h := range b {
+		bMap[strings.ToLower(h.Name)] = h.Value
+	}
+	for _, h := range a {
+		if bVal, ok := bMap[strings.ToLower(h.Name)]; ok && bVal != h.Value {
+			return false
+		}
+	}
+	return true
 }
 
 // gatewayHostnames extracts hostnames from an HTTPRoute, converting from gateway-api's Hostname type.
@@ -151,38 +298,6 @@ func findOverlap(set map[string]struct{}, candidates []string) []string {
 	for _, c := range candidates {
 		if _, ok := set[c]; ok {
 			overlap = append(overlap, c)
-		}
-	}
-	return overlap
-}
-
-// pathMatchKey uniquely identifies a path match by type and path value.
-type pathMatchKey struct {
-	Type string
-	Path string
-}
-
-func (p pathMatchKey) String() string {
-	return fmt.Sprintf("%s:%s", p.Type, p.Path)
-}
-
-// extractPathMatches returns all unique (type, path) pairs from a CustomHTTPRoute.
-func extractPathMatches(route *customrouterv1alpha1.CustomHTTPRoute) map[pathMatchKey]struct{} {
-	matches := make(map[pathMatchKey]struct{})
-	for _, rule := range route.Spec.Rules {
-		for _, m := range rule.Matches {
-			matches[pathMatchKey{Type: string(m.Type), Path: m.Path}] = struct{}{}
-		}
-	}
-	return matches
-}
-
-// findPathMatchOverlap returns the path matches that exist in both sets.
-func findPathMatchOverlap(a, b map[pathMatchKey]struct{}) []pathMatchKey {
-	var overlap []pathMatchKey
-	for pm := range a {
-		if _, ok := b[pm]; ok {
-			overlap = append(overlap, pm)
 		}
 	}
 	return overlap
