@@ -143,6 +143,8 @@ operator:
     customHTTPRouteFailurePolicy: Fail
     # -- Failure policy for HTTPRoute webhook (Fail or Ignore)
     httpRouteFailurePolicy: Ignore
+    # -- Timeout in seconds for webhook calls (K8s default is 10)
+    timeoutSeconds: 10
     # -- CA bundle (base64-encoded) to inject into the webhook configuration.
     # Required when not using cert-manager. Generate with: cat ca.crt | base64 -w0
     caBundle: ""
@@ -151,13 +153,15 @@ operator:
     # The secret must contain tls.crt and tls.key.
     tlsSecretName: ""
     # -- Namespace selector for webhook interception.
-    # By default, excludes kube-system to avoid interfering with system operations.
+    # By default, excludes system namespaces to avoid interfering with cluster operations.
     namespaceSelector:
       matchExpressions:
         - key: kubernetes.io/metadata.name
           operator: NotIn
           values:
             - kube-system
+            - kube-public
+            - kube-node-lease
     # -- cert-manager integration for webhook TLS certificates
     certManager:
       # -- Enable cert-manager Certificate resource and automatic CA injection

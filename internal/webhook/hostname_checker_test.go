@@ -277,6 +277,69 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 			wantErr:     true,
 			errContains: "route conflict",
 		},
+		// --- Trailing slash normalization ---
+		{
+			name: "conflict — trailing slash normalized (CustomHTTPRoute /api/ vs CustomHTTPRoute /api)",
+			route: newCustomHTTPRouteWithPaths("route-a", "default", "default", []string{"example.com"},
+				[]customrouterv1alpha1.PathMatch{{Path: "/api/", Type: customrouterv1alpha1.MatchTypePathPrefix}},
+			),
+			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
+				*newCustomHTTPRouteWithPaths("route-b", "default", "default", []string{"example.com"},
+					[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}},
+				),
+			},
+			wantErr:     true,
+			errContains: "route conflict",
+		},
+		// --- Method-aware HTTPRoute conflict detection ---
+		{
+			name: "no conflict — HTTPRoute with different method on same path",
+			route: newCustomHTTPRouteWithPaths("route-a", "default", "default", []string{"example.com"},
+				[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}},
+			),
+			existingHR: []gatewayv1.HTTPRoute{
+				*newHTTPRouteWithMatches("hr-a", []string{"example.com"}, []gatewayv1.HTTPRouteMatch{
+					{
+						Path: &gatewayv1.HTTPPathMatch{
+							Type:  ptrTo(gatewayv1.PathMatchPathPrefix),
+							Value: ptrTo("/api"),
+						},
+						Method: ptrTo(gatewayv1.HTTPMethodGet),
+					},
+					{
+						Path: &gatewayv1.HTTPPathMatch{
+							Type:  ptrTo(gatewayv1.PathMatchPathPrefix),
+							Value: ptrTo("/api"),
+						},
+						Method: ptrTo(gatewayv1.HTTPMethodPost),
+					},
+				}),
+			},
+			wantErr:     true,
+			errContains: "route conflict",
+		},
+		// --- QueryParam-aware HTTPRoute conflict detection ---
+		{
+			name: "conflict — HTTPRoute with query params (CustomHTTPRoute has no query params)",
+			route: newCustomHTTPRouteWithPaths("route-a", "default", "default", []string{"example.com"},
+				[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}},
+			),
+			existingHR: []gatewayv1.HTTPRoute{
+				*newHTTPRouteWithMatches("hr-a", []string{"example.com"}, []gatewayv1.HTTPRouteMatch{
+					{
+						Path: &gatewayv1.HTTPPathMatch{
+							Type:  ptrTo(gatewayv1.PathMatchPathPrefix),
+							Value: ptrTo("/api"),
+						},
+						QueryParams: []gatewayv1.HTTPQueryParamMatch{
+							{Name: "version", Value: "v1"},
+						},
+					},
+				}),
+			},
+			wantErr:     true,
+			errContains: "route conflict",
+		},
 	}
 
 	for _, tt := range tests {
@@ -394,6 +457,48 @@ func TestCheckHTTPRouteHostnames(t *testing.T) {
 			wantErr:     true,
 			errContains: "route conflict",
 		},
+		// --- Method-aware conflict detection ---
+		{
+			name: "conflict — HTTPRoute with method vs CustomHTTPRoute (no method = matches all)",
+			httpRoute: newHTTPRouteWithMatches("hr-a", []string{"example.com"}, []gatewayv1.HTTPRouteMatch{
+				{
+					Path: &gatewayv1.HTTPPathMatch{
+						Type:  ptrTo(gatewayv1.PathMatchPathPrefix),
+						Value: ptrTo("/api"),
+					},
+					Method: ptrTo(gatewayv1.HTTPMethodGet),
+				},
+			}),
+			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
+				*newCustomHTTPRouteWithPaths("route-a", "default", "default", []string{"example.com"},
+					[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}},
+				),
+			},
+			wantErr:     true,
+			errContains: "route conflict",
+		},
+		// --- QueryParam-aware conflict detection ---
+		{
+			name: "conflict — HTTPRoute with query params vs CustomHTTPRoute (no params = matches all)",
+			httpRoute: newHTTPRouteWithMatches("hr-a", []string{"example.com"}, []gatewayv1.HTTPRouteMatch{
+				{
+					Path: &gatewayv1.HTTPPathMatch{
+						Type:  ptrTo(gatewayv1.PathMatchPathPrefix),
+						Value: ptrTo("/api"),
+					},
+					QueryParams: []gatewayv1.HTTPQueryParamMatch{
+						{Name: "version", Value: "v1"},
+					},
+				},
+			}),
+			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
+				*newCustomHTTPRouteWithPaths("route-a", "default", "default", []string{"example.com"},
+					[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}},
+				),
+			},
+			wantErr:     true,
+			errContains: "route conflict",
+		},
 	}
 
 	for _, tt := range tests {
@@ -484,6 +589,184 @@ func TestHeadersCompatible(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := headersCompatible(tt.a, tt.b); got != tt.want {
 				t.Errorf("headersCompatible() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMethodsCompatible(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{name: "both empty — compatible", a: "", b: "", want: true},
+		{name: "one empty — compatible (empty matches all)", a: "GET", b: "", want: true},
+		{name: "same method — compatible", a: "GET", b: "GET", want: true},
+		{name: "different methods — incompatible", a: "GET", b: "POST", want: false},
+		{name: "case insensitive — compatible", a: "get", b: "GET", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := methodsCompatible(tt.a, tt.b); got != tt.want {
+				t.Errorf("methodsCompatible() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestQueryParamsCompatible(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b []queryParamMatch
+		want bool
+	}{
+		{
+			name: "both empty — compatible",
+			a:    nil,
+			b:    nil,
+			want: true,
+		},
+		{
+			name: "one empty — compatible (empty matches all)",
+			a:    []queryParamMatch{{Name: "version", Value: "v1"}},
+			b:    nil,
+			want: true,
+		},
+		{
+			name: "same params — compatible",
+			a:    []queryParamMatch{{Name: "version", Value: "v1"}},
+			b:    []queryParamMatch{{Name: "version", Value: "v1"}},
+			want: true,
+		},
+		{
+			name: "different values for same param — incompatible",
+			a:    []queryParamMatch{{Name: "version", Value: "v1"}},
+			b:    []queryParamMatch{{Name: "version", Value: "v2"}},
+			want: false,
+		},
+		{
+			name: "different param names — compatible (no contradiction)",
+			a:    []queryParamMatch{{Name: "version", Value: "v1"}},
+			b:    []queryParamMatch{{Name: "env", Value: "prod"}},
+			want: true,
+		},
+		{
+			name: "case insensitive param name — incompatible",
+			a:    []queryParamMatch{{Name: "Version", Value: "v1"}},
+			b:    []queryParamMatch{{Name: "version", Value: "v2"}},
+			want: false,
+		},
+		{
+			name: "superset with same values — compatible",
+			a:    []queryParamMatch{{Name: "version", Value: "v1"}},
+			b:    []queryParamMatch{{Name: "version", Value: "v1"}, {Name: "env", Value: "prod"}},
+			want: true,
+		},
+		{
+			name: "superset with different values — incompatible",
+			a:    []queryParamMatch{{Name: "version", Value: "v1"}},
+			b:    []queryParamMatch{{Name: "version", Value: "v2"}, {Name: "env", Value: "prod"}},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := queryParamsCompatible(tt.a, tt.b); got != tt.want {
+				t.Errorf("queryParamsCompatible() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNormalizePath(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{input: "/", want: "/"},
+		{input: "/api", want: "/api"},
+		{input: "/api/", want: "/api"},
+		{input: "/api/v1/", want: "/api/v1"},
+		{input: "", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := normalizePath(tt.input); got != tt.want {
+				t.Errorf("normalizePath(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFindRouteMatchOverlap(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b []routeMatch
+		want int // expected number of overlaps
+	}{
+		{
+			name: "same path, no method/headers/params — overlap",
+			a:    []routeMatch{{PathType: "PathPrefix", Path: "/api"}},
+			b:    []routeMatch{{PathType: "PathPrefix", Path: "/api"}},
+			want: 1,
+		},
+		{
+			name: "same path, different methods — no overlap",
+			a:    []routeMatch{{PathType: "PathPrefix", Path: "/api", Method: "GET"}},
+			b:    []routeMatch{{PathType: "PathPrefix", Path: "/api", Method: "POST"}},
+			want: 0,
+		},
+		{
+			name: "same path, one empty method — overlap (empty matches all)",
+			a:    []routeMatch{{PathType: "PathPrefix", Path: "/api", Method: "GET"}},
+			b:    []routeMatch{{PathType: "PathPrefix", Path: "/api"}},
+			want: 1,
+		},
+		{
+			name: "same path, different query params — no overlap",
+			a:    []routeMatch{{PathType: "PathPrefix", Path: "/api", QueryParams: []queryParamMatch{{Name: "v", Value: "1"}}}},
+			b:    []routeMatch{{PathType: "PathPrefix", Path: "/api", QueryParams: []queryParamMatch{{Name: "v", Value: "2"}}}},
+			want: 0,
+		},
+		{
+			name: "same path, one empty query params — overlap",
+			a:    []routeMatch{{PathType: "PathPrefix", Path: "/api", QueryParams: []queryParamMatch{{Name: "v", Value: "1"}}}},
+			b:    []routeMatch{{PathType: "PathPrefix", Path: "/api"}},
+			want: 1,
+		},
+		{
+			name: "different paths — no overlap",
+			a:    []routeMatch{{PathType: "PathPrefix", Path: "/api"}},
+			b:    []routeMatch{{PathType: "PathPrefix", Path: "/web"}},
+			want: 0,
+		},
+		{
+			name: "same path, different headers — no overlap",
+			a:    []routeMatch{{PathType: "PathPrefix", Path: "/api", Headers: []headerMatch{{Name: "X-V", Value: "1"}}}},
+			b:    []routeMatch{{PathType: "PathPrefix", Path: "/api", Headers: []headerMatch{{Name: "X-V", Value: "2"}}}},
+			want: 0,
+		},
+		{
+			name: "all axes match — overlap",
+			a: []routeMatch{{
+				PathType: "PathPrefix", Path: "/api", Method: "GET",
+				Headers:     []headerMatch{{Name: "X-V", Value: "1"}},
+				QueryParams: []queryParamMatch{{Name: "env", Value: "prod"}},
+			}},
+			b: []routeMatch{{
+				PathType: "PathPrefix", Path: "/api", Method: "GET",
+				Headers:     []headerMatch{{Name: "X-V", Value: "1"}},
+				QueryParams: []queryParamMatch{{Name: "env", Value: "prod"}},
+			}},
+			want: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := findRouteMatchOverlap(tt.a, tt.b)
+			if len(got) != tt.want {
+				t.Errorf("findRouteMatchOverlap() returned %d overlaps, want %d", len(got), tt.want)
 			}
 		})
 	}

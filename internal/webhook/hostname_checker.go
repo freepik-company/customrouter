@@ -38,8 +38,8 @@ type HostnameChecker struct {
 
 // CheckCustomHTTPRouteHostnames checks whether any hostname in the given CustomHTTPRoute
 // conflicts with another CustomHTTPRoute (same targetRef) or any HTTPRoute in the cluster.
-// A conflict requires overlapping hostnames AND overlapping route matches (path + headers).
-// It excludes self by UID to allow updates.
+// A conflict requires overlapping hostnames AND overlapping route matches
+// (path + method + headers + query parameters). It excludes self by UID to allow updates.
 func (c *HostnameChecker) CheckCustomHTTPRouteHostnames(ctx context.Context, route *customrouterv1alpha1.CustomHTTPRoute) error {
 	hostnames := route.Spec.Hostnames
 	if len(hostnames) == 0 {
@@ -106,7 +106,8 @@ func (c *HostnameChecker) CheckCustomHTTPRouteHostnames(ctx context.Context, rou
 
 // CheckHTTPRouteHostnames checks whether any hostname in the given HTTPRoute
 // conflicts with an existing CustomHTTPRoute.
-// A conflict requires overlapping hostnames AND overlapping route matches (path + headers).
+// A conflict requires overlapping hostnames AND overlapping route matches
+// (path + method + headers + query parameters).
 func (c *HostnameChecker) CheckHTTPRouteHostnames(ctx context.Context, httpRoute *gatewayv1.HTTPRoute) error {
 	hrHostnames := gatewayHostnames(httpRoute)
 	if len(hrHostnames) == 0 {
@@ -140,22 +141,43 @@ func (c *HostnameChecker) CheckHTTPRouteHostnames(ctx context.Context, httpRoute
 
 // routeMatch represents a single match criterion within a routing rule.
 // Two routeMatches conflict when they could match the same HTTP request,
-// determined by the triad: hostname + path + headers.
+// determined by: path + method + headers + query parameters.
 type routeMatch struct {
-	PathType string
-	Path     string
-	Headers  []headerMatch
+	PathType    string
+	Path        string
+	Method      string
+	Headers     []headerMatch
+	QueryParams []queryParamMatch
 }
 
 func (r routeMatch) String() string {
-	if len(r.Headers) == 0 {
-		return fmt.Sprintf("%s:%s", r.PathType, r.Path)
+	var parts []string
+
+	base := fmt.Sprintf("%s:%s", r.PathType, r.Path)
+	if r.Method != "" {
+		base = fmt.Sprintf("%s %s:%s", r.Method, r.PathType, r.Path)
 	}
-	hdrs := make([]string, len(r.Headers))
-	for i, h := range r.Headers {
-		hdrs[i] = fmt.Sprintf("%s=%s", h.Name, h.Value)
+	parts = append(parts, base)
+
+	if len(r.Headers) > 0 {
+		hdrs := make([]string, len(r.Headers))
+		for i, h := range r.Headers {
+			hdrs[i] = fmt.Sprintf("%s=%s", h.Name, h.Value)
+		}
+		parts = append(parts, fmt.Sprintf("headers[%s]", strings.Join(hdrs, ",")))
 	}
-	return fmt.Sprintf("%s:%s[%s]", r.PathType, r.Path, strings.Join(hdrs, ","))
+	if len(r.QueryParams) > 0 {
+		qps := make([]string, len(r.QueryParams))
+		for i, q := range r.QueryParams {
+			qps[i] = fmt.Sprintf("%s=%s", q.Name, q.Value)
+		}
+		parts = append(parts, fmt.Sprintf("params[%s]", strings.Join(qps, ",")))
+	}
+
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return strings.Join(parts, " ")
 }
 
 // headerMatch represents an HTTP header matching criterion.
@@ -164,21 +186,29 @@ type headerMatch struct {
 	Value string
 }
 
+// queryParamMatch represents an HTTP query parameter matching criterion.
+type queryParamMatch struct {
+	Name  string
+	Value string
+}
+
 // extractCustomRouteMatches returns all unique route matches from a CustomHTTPRoute.
-// CustomHTTPRoute does not support header matching, so Headers is always empty.
+// CustomHTTPRoute does not support Method, header, or query parameter matching,
+// so those fields are always empty (which means "matches all" during comparison).
 func extractCustomRouteMatches(route *customrouterv1alpha1.CustomHTTPRoute) []routeMatch {
 	seen := make(map[string]struct{})
 	var matches []routeMatch
 	for _, rule := range route.Spec.Rules {
 		for _, m := range rule.Matches {
-			key := string(m.Type) + ":" + m.Path
+			path := normalizePath(m.Path)
+			key := string(m.Type) + ":" + path
 			if _, ok := seen[key]; ok {
 				continue
 			}
 			seen[key] = struct{}{}
 			matches = append(matches, routeMatch{
 				PathType: string(m.Type),
-				Path:     m.Path,
+				Path:     path,
 			})
 		}
 	}
@@ -186,9 +216,9 @@ func extractCustomRouteMatches(route *customrouterv1alpha1.CustomHTTPRoute) []ro
 }
 
 // extractHTTPRouteMatches returns all route matches from a Gateway API HTTPRoute,
-// including path and header criteria. A rule with no matches defaults to
-// PathPrefix "/" (Gateway API default). An HTTPRoute with no rules also defaults
-// to PathPrefix "/" as a catch-all.
+// including path, method, header, and query parameter criteria. A rule with no
+// matches defaults to PathPrefix "/" (Gateway API default). An HTTPRoute with no
+// rules also defaults to PathPrefix "/" as a catch-all.
 func extractHTTPRouteMatches(hr *gatewayv1.HTTPRoute) []routeMatch {
 	var matches []routeMatch
 	for _, rule := range hr.Spec.Rules {
@@ -210,8 +240,11 @@ func extractHTTPRouteMatches(hr *gatewayv1.HTTPRoute) []routeMatch {
 					rm.PathType = string(*m.Path.Type)
 				}
 				if m.Path.Value != nil {
-					rm.Path = *m.Path.Value
+					rm.Path = normalizePath(*m.Path.Value)
 				}
+			}
+			if m.Method != nil {
+				rm.Method = string(*m.Method)
 			}
 			for _, h := range m.Headers {
 				rm.Headers = append(rm.Headers, headerMatch{
@@ -221,6 +254,15 @@ func extractHTTPRouteMatches(hr *gatewayv1.HTTPRoute) []routeMatch {
 			}
 			sort.Slice(rm.Headers, func(i, j int) bool {
 				return strings.ToLower(rm.Headers[i].Name) < strings.ToLower(rm.Headers[j].Name)
+			})
+			for _, q := range m.QueryParams {
+				rm.QueryParams = append(rm.QueryParams, queryParamMatch{
+					Name:  string(q.Name),
+					Value: q.Value,
+				})
+			}
+			sort.Slice(rm.QueryParams, func(i, j int) bool {
+				return strings.ToLower(rm.QueryParams[i].Name) < strings.ToLower(rm.QueryParams[j].Name)
 			})
 			matches = append(matches, rm)
 		}
@@ -237,12 +279,16 @@ func extractHTTPRouteMatches(hr *gatewayv1.HTTPRoute) []routeMatch {
 
 // findRouteMatchOverlap returns matches from a that overlap with matches in b.
 // Two matches overlap when they have the same path type and path value,
-// and their headers are compatible (could match the same request).
+// compatible methods, compatible headers, and compatible query parameters
+// (i.e. they could match the same HTTP request).
 func findRouteMatchOverlap(a, b []routeMatch) []routeMatch {
 	var overlaps []routeMatch
 	for _, ma := range a {
 		for _, mb := range b {
-			if ma.PathType == mb.PathType && ma.Path == mb.Path && headersCompatible(ma.Headers, mb.Headers) {
+			if ma.PathType == mb.PathType && ma.Path == mb.Path &&
+				methodsCompatible(ma.Method, mb.Method) &&
+				headersCompatible(ma.Headers, mb.Headers) &&
+				queryParamsCompatible(ma.QueryParams, mb.QueryParams) {
 				overlaps = append(overlaps, ma)
 				break
 			}
@@ -265,6 +311,45 @@ func headersCompatible(a, b []headerMatch) bool {
 	}
 	for _, h := range a {
 		if bVal, ok := bMap[strings.ToLower(h.Name)]; ok && bVal != h.Value {
+			return false
+		}
+	}
+	return true
+}
+
+// normalizePath strips a single trailing slash from a path to prevent false
+// negatives (e.g. "/api" vs "/api/"). The root path "/" is preserved as-is.
+func normalizePath(p string) string {
+	if len(p) > 1 && strings.HasSuffix(p, "/") {
+		return strings.TrimRight(p, "/")
+	}
+	return p
+}
+
+// methodsCompatible returns true if two method constraints could match the same
+// HTTP request. An empty method means "matches all methods", so it is always
+// compatible. Two non-empty methods are incompatible only when they differ.
+func methodsCompatible(a, b string) bool {
+	if a == "" || b == "" {
+		return true
+	}
+	return strings.EqualFold(a, b)
+}
+
+// queryParamsCompatible returns true if two sets of query parameter matches could
+// match the same HTTP request. An empty set matches all requests, so it is always
+// compatible. Two non-empty sets are incompatible only when they require different
+// values for the same parameter name (case-insensitive).
+func queryParamsCompatible(a, b []queryParamMatch) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return true
+	}
+	bMap := make(map[string]string, len(b))
+	for _, q := range b {
+		bMap[strings.ToLower(q.Name)] = q.Value
+	}
+	for _, q := range a {
+		if bVal, ok := bMap[strings.ToLower(q.Name)]; ok && bVal != q.Value {
 			return false
 		}
 	}
