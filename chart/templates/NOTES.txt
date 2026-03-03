@@ -1,0 +1,76 @@
+CustomRouter has been installed.
+
+{{- if .Values.operator.enabled }}
+
+Operator:
+  Name: {{ include "customrouter.operator.name" . }}
+  Namespace: {{ .Release.Namespace }}
+  {{- if .Values.operator.webhook.enabled }}
+  Webhooks: enabled (port {{ .Values.operator.webhook.port }})
+  {{- else }}
+  Webhooks: disabled
+  {{- end }}
+{{- end }}
+
+{{- range $name, $config := .Values.externalProcessors }}
+{{- if $config.enabled }}
+
+External Processor "{{ $name }}":
+  Name: {{ include "customrouter.extproc.name" (dict "name" $name "root" $) }}
+  Service: {{ include "customrouter.extproc.name" (dict "name" $name "root" $) }}:{{ $config.service.port }}
+{{- end }}
+{{- end }}
+
+Next steps:
+
+  1. Create a CustomHTTPRoute to define your routing rules:
+
+     kubectl apply -f - <<EOF
+     apiVersion: customrouter.freepik.com/v1alpha1
+     kind: CustomHTTPRoute
+     metadata:
+       name: my-routes
+     spec:
+       targetRef:
+         name: default
+       hostnames:
+         - www.example.com
+       rules:
+         - matches:
+             - path: /
+           backendRefs:
+             - name: my-service
+               namespace: default
+               port: 8080
+     EOF
+
+  2. Create an ExternalProcessorAttachment to connect to your gateway:
+
+     kubectl apply -f - <<EOF
+     apiVersion: customrouter.freepik.com/v1alpha1
+     kind: ExternalProcessorAttachment
+     metadata:
+       name: my-gateway
+       namespace: istio-system
+     spec:
+       gatewayRef:
+         selector:
+           istio: my-gateway
+       externalProcessorRef:
+         service:
+           name: {{ include "customrouter.extproc.name" (dict "name" "default" "root" .) }}
+           namespace: {{ .Release.Namespace }}
+           port: 9001
+     EOF
+{{- if .Values.operator.webhook.enabled }}
+
+  3. Check webhook status:
+
+     kubectl get validatingwebhookconfiguration {{ include "customrouter.operator.name" . }}-webhooks -o yaml
+{{- end }}
+
+Note: External processors read route ConfigMaps from the namespace configured
+via --routes-configmap-namespace (default: "default"). Make sure the operator
+and external processors use the same namespace.
+
+For more information, visit: https://github.com/freepik-company/customrouter

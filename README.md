@@ -324,6 +324,7 @@ Deployment:
   uninstall        Uninstall CRDs
   deploy           Deploy to cluster
   undeploy         Undeploy from cluster
+  sync-chart-crds  Copy generated CRDs into the Helm chart directory
 ```
 
 ## Architecture
@@ -342,6 +343,17 @@ The operator watches `CustomHTTPRoute` resources, compiles routing rules, and wr
 | `--webhook-config-name` | `""` | ValidatingWebhookConfiguration name (auto-cert mode) |
 | `--webhook-service-name` | `""` | Webhook Service name for TLS SAN (auto-cert mode) |
 | `--webhook-cert-path` | `""` | Directory with TLS certs (cert-manager mode) |
+
+### Security
+
+Both the operator and external processor containers run with a hardened security context:
+
+- `runAsNonRoot: true` — containers never run as root
+- `readOnlyRootFilesystem: true` — no writes to the container filesystem
+- `capabilities: drop: ["ALL"]` — all Linux capabilities are dropped
+- `seccompProfile: type: RuntimeDefault` — default seccomp filtering
+
+These defaults are applied by the Helm chart and can be customized via `operator.securityContext` and `externalProcessors.<name>.securityContext` in `values.yaml`.
 
 ### External Processor
 
@@ -384,6 +396,17 @@ Connects an external processor to Istio gateway pods by generating EnvoyFilters.
 | `externalProcessorRef.messageTimeout` | Message exchange timeout — valid duration string, e.g. `5s`, `500ms` (default: "5s") |
 | `catchAllRoute.hostnames` | Hostnames to generate catch-all routes for |
 | `catchAllRoute.backendRef` | Default backend for unmatched requests |
+
+### Status Conditions
+
+Both CRDs report status via standard Kubernetes conditions. Each condition includes `ObservedGeneration` so clients can distinguish stale status from the current spec revision.
+
+| CRD | Condition | Description |
+|-----|-----------|-------------|
+| `CustomHTTPRoute` | `Reconciled` | Whether the manifest was processed successfully |
+| `CustomHTTPRoute` | `ConfigMapSynced` | Whether the ConfigMap was generated and synced |
+| `ExternalProcessorAttachment` | `Reconciled` | Whether the attachment was processed successfully |
+| `ExternalProcessorAttachment` | `EnvoyFilterSynced` | Whether the EnvoyFilters were generated and synced |
 
 #### Catch-All Routes
 
@@ -640,6 +663,6 @@ See [chart/values.yaml](chart/values.yaml) for all webhook options including `ti
 
 ## License
 
-Copyright 2026 Freepik Company.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.

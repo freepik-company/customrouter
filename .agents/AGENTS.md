@@ -94,6 +94,7 @@ make generate manifests
 | `make deploy IMG=<image>` | Deploy controller to cluster |
 | `make undeploy` | Remove controller from cluster |
 | `make build-installer` | Generate consolidated install YAML |
+| `make sync-chart-crds` | Copy generated CRDs into the Helm chart directory |
 
 ---
 
@@ -113,12 +114,16 @@ make generate manifests
 │
 ├── internal/
 │   ├── controller/                         # Controller logic
-│   │   ├── commons.go                      # Shared constants, UpdateWithRetry helper
-│   │   ├── conditions.go                   # Condition helpers
+│   │   ├── commons.go                      # ResourceFinalizer constant, UpdateWithRetry helpers
+│   │   ├── conditions.go                   # Condition reason/message constants
 │   │   ├── customhttproute/
+│   │   │   ├── catchall.go                 # Catch-all route generation for hostnames
+│   │   │   ├── catchall_test.go            # Catch-all route tests
 │   │   │   ├── controller.go               # Main reconciliation loop
 │   │   │   ├── status.go                   # Status condition updaters
 │   │   │   └── sync.go                     # ConfigMap generation & partitioning
+│   │   ├── envoyfilter/                    # Shared EnvoyFilter CRUD package
+│   │   │   └── envoyfilter.go              # Create/update/delete EnvoyFilter helpers
 │   │   └── externalprocessorattachment/
 │   │       ├── controller.go               # Main reconciliation loop
 │   │       ├── status.go                   # Status condition updaters
@@ -351,10 +356,12 @@ Exact matches are never expanded - they match the literal path only.
 
 ### Sorting Order
 
-Routes are sorted by:
+Routes are sorted by `SortRoutes()` (exported from `pkg/routes/expand.go`):
 1. **Priority DESC** (higher values first)
 2. **Type**: exact > regex > prefix
 3. **Path length DESC** (longer paths first)
+
+Both the operator (ConfigMap generation) and the extproc (route loading) use the same `SortRoutes` function to ensure consistent ordering.
 
 ---
 
@@ -480,6 +487,8 @@ KIND_CLUSTER=my-cluster go test -tags=e2e ./test/e2e/ -v -ginkgo.v
 | Path | Description |
 |------|-------------|
 | `pkg/routes/expand_test.go` | Route expansion unit tests |
+| `api/v1alpha1/customhttproute_validation_test.go` | CRD validation unit tests |
+| `internal/controller/customhttproute/catchall_test.go` | Catch-all route generation tests |
 | `internal/webhook/hostname_checker_test.go` | Webhook conflict detection tests (46 tests) |
 | `test/e2e/e2e_test.go` | End-to-end integration tests |
 | `test/utils/utils.go` | Test helper utilities |
@@ -530,12 +539,21 @@ if !object.DeletionTimestamp.IsZero() {
 
 ### Status Conditions
 
-CustomHTTPRoute uses these condition types:
+Conditions are set via `meta.SetStatusCondition()` with `ObservedGeneration: object.Generation` so clients can detect stale status. Reason/message constants are defined in `internal/controller/conditions.go`; the per-controller status updaters live in each controller's `status.go`.
+
+CustomHTTPRoute condition types:
 
 | Condition | Description |
 |-----------|-------------|
 | `Reconciled` | Whether the manifest was processed |
 | `ConfigMapSynced` | Whether the ConfigMap was successfully generated |
+
+ExternalProcessorAttachment condition types:
+
+| Condition | Description |
+|-----------|-------------|
+| `Reconciled` | Whether the attachment was processed |
+| `EnvoyFilterSynced` | Whether the EnvoyFilters were generated and synced |
 
 ---
 

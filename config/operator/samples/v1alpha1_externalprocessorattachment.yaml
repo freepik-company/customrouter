@@ -37,6 +37,12 @@ spec:
       # gRPC port where the external processor is listening
       port: 9001
 
+    # gRPC connection timeout (default: "5s", valid: ^[0-9]+(s|ms|m|h)$)
+    timeout: 5s
+
+    # Message exchange timeout (default: "5s", valid: ^[0-9]+(s|ms|m|h)$)
+    messageTimeout: 5s
+
   # catchAllRoute (optional) configures automatic generation of catch-all routes.
   # When specified, the controller generates an EnvoyFilter that creates default
   # virtual hosts for the specified hostnames, allowing CustomHTTPRoutes to handle
@@ -44,15 +50,14 @@ spec:
   #
   # This is useful when you want CustomHTTPRoutes to be the primary routing
   # mechanism for certain hostnames, without needing to create HTTPRoute resources.
-  #
-  # catchAllRoute:
-  #   # hostnames lists the domains that should have catch-all routes generated
-  #   hostnames:
-  #     - example.com
-  #     - api.example.com
-  #
-  #   # backendRef specifies the default backend service for unmatched requests
-  #   backendRef:
-  #     name: default-backend
-  #     namespace: default
-  #     port: 80
+  catchAllRoute:
+    # hostnames lists the domains that should have catch-all routes generated
+    hostnames:
+      - example.com
+      - api.example.com
+
+    # backendRef specifies the default backend service for unmatched requests
+    backendRef:
+      name: default-backend
+      namespace: default
+      port: 80
