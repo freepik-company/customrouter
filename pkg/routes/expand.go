@@ -1,5 +1,5 @@
 /*
-Copyright 2024.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -284,6 +284,9 @@ func buildBackendString(refs []v1alpha1.BackendRef) string {
 	return ref.Name + "." + ref.Namespace + ".svc.cluster.local:" + strconv.Itoa(int(ref.Port))
 }
 
+// typePriority defines the sort precedence of route types: exact > regex > prefix.
+var typePriority = map[string]int{RouteTypeExact: 0, RouteTypeRegex: 1, RouteTypePrefix: 2}
+
 // SortRoutes sorts routes by priority (descending), then by type, then by path length
 func SortRoutes(routes []Route) {
 	sort.Slice(routes, func(i, j int) bool {
@@ -293,7 +296,6 @@ func SortRoutes(routes []Route) {
 		}
 
 		// Then by type priority: exact > regex > prefix
-		typePriority := map[string]int{RouteTypeExact: 0, RouteTypeRegex: 1, RouteTypePrefix: 2}
 		pi, pj := typePriority[routes[i].Type], typePriority[routes[j].Type]
 		if pi != pj {
 			return pi < pj

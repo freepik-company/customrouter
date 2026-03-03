@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -38,7 +38,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	customrouterfreepikcomv1alpha1 "github.com/freepik-company/customrouter/api/v1alpha1"
+	crv1alpha1 "github.com/freepik-company/customrouter/api/v1alpha1"
 	"github.com/freepik-company/customrouter/internal/controller/customhttproute"
 	"github.com/freepik-company/customrouter/internal/controller/externalprocessorattachment"
 	customwebhook "github.com/freepik-company/customrouter/internal/webhook"
@@ -54,12 +54,11 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(customrouterfreepikcomv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(crv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(gatewayv1.Install(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
-// nolint:gocyclo
 func main() {
 	var metricsAddr string
 	var metricsCertPath, metricsCertName, metricsCertKey string
@@ -100,9 +99,7 @@ func main() {
 	flag.StringVar(&webhookServiceName, "webhook-service-name", "",
 		"Name of the webhook Service for TLS certificate SAN (auto-cert mode)")
 	flag.IntVar(&webhookPort, "webhook-port", 9443, "Port for the webhook server to listen on")
-	opts := zap.Options{
-		Development: true,
-	}
+	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
@@ -145,6 +142,10 @@ func main() {
 	var webhookCaPEM []byte
 
 	if enableWebhooks && webhookCertPath == "" {
+		if webhookConfigName == "" || webhookServiceName == "" {
+			setupLog.Error(nil, "--webhook-config-name and --webhook-service-name are required in auto-cert mode (when --webhook-cert-path is not set)")
+			os.Exit(1)
+		}
 		webhookCertPath = "/tmp/k8s-webhook-server/serving-certs"
 		setupLog.Info("Auto-generating webhook TLS certificates",
 			"cert-dir", webhookCertPath,
@@ -158,14 +159,15 @@ func main() {
 			os.Exit(1)
 		}
 
-		certCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
 		ns := customwebhook.GetNamespace()
-		webhookCaPEM, err = customwebhook.EnsureCerts(
-			certCtx, directClient, webhookCertPath,
-			webhookConfigName, webhookServiceName, ns,
-		)
+		webhookCaPEM, err = func() ([]byte, error) {
+			certCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			return customwebhook.EnsureCerts(
+				certCtx, directClient, webhookCertPath,
+				webhookConfigName, webhookServiceName, ns,
+			)
+		}()
 		if err != nil {
 			setupLog.Error(err, "unable to ensure webhook certificates")
 			os.Exit(1)
@@ -262,7 +264,7 @@ func main() {
 		}
 
 		mgr.GetWebhookServer().Register(
-			"/validate-gateway-networking-k8s-io-v1-httproute",
+			customwebhook.HTTPRouteWebhookPath,
 			&admission.Webhook{Handler: customwebhook.NewHTTPRouteValidator(mgr.GetClient())},
 		)
 

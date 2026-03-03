@@ -1,5 +1,5 @@
 /*
-Copyright 2024.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -141,7 +141,7 @@ func (l *K8sLoader) loadLocked() error {
 
 	// Sort routes for each host by priority
 	for host := range mergedConfig.Hosts {
-		l.sortRoutes(mergedConfig.Hosts[host])
+		SortRoutes(mergedConfig.Hosts[host])
 	}
 
 	// Compile regexes
@@ -151,26 +151,6 @@ func (l *K8sLoader) loadLocked() error {
 
 	l.config = mergedConfig
 	return nil
-}
-
-// sortRoutes sorts routes by priority (descending), then by type, then by path length
-func (l *K8sLoader) sortRoutes(routes []Route) {
-	sort.Slice(routes, func(i, j int) bool {
-		// First by priority descending (higher priority first)
-		if routes[i].Priority != routes[j].Priority {
-			return routes[i].Priority > routes[j].Priority
-		}
-
-		// Then by type priority: exact > regex > prefix
-		typePriority := map[string]int{RouteTypeExact: 0, RouteTypeRegex: 1, RouteTypePrefix: 2}
-		pi, pj := typePriority[routes[i].Type], typePriority[routes[j].Type]
-		if pi != pj {
-			return pi < pj
-		}
-
-		// Then by path length descending (longer paths first)
-		return len(routes[i].Path) > len(routes[j].Path)
-	})
 }
 
 // GetConfig returns the current routes configuration

@@ -7,7 +7,9 @@ metadata:
   labels:
     {{- include "customrouter.operator.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.operator.hpa.enabled }}
   replicas: {{ .Values.operator.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "customrouter.operator.selectorLabels" . | nindent 6 }}

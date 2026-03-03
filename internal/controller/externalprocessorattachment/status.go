@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,8 +17,7 @@ limitations under the License.
 package externalprocessorattachment
 
 import (
-	"time"
-
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/freepik-company/customrouter/api/v1alpha1"
@@ -31,39 +30,22 @@ const (
 
 // updateConditionReady sets the Ready condition to True
 func (r *ExternalProcessorAttachmentReconciler) updateConditionReady(attachment *v1alpha1.ExternalProcessorAttachment) {
-	condition := metav1.Condition{
+	meta.SetStatusCondition(&attachment.Status.Conditions, metav1.Condition{
 		Type:               ConditionTypeReady,
 		Status:             metav1.ConditionTrue,
+		ObservedGeneration: attachment.Generation,
 		Reason:             "EnvoyFiltersCreated",
 		Message:            "EnvoyFilters were created successfully",
-		LastTransitionTime: metav1.NewTime(time.Now()),
-	}
-	setCondition(attachment, condition)
+	})
 }
 
 // updateConditionFailed sets the Ready condition to False
 func (r *ExternalProcessorAttachmentReconciler) updateConditionFailed(attachment *v1alpha1.ExternalProcessorAttachment, message string) {
-	condition := metav1.Condition{
+	meta.SetStatusCondition(&attachment.Status.Conditions, metav1.Condition{
 		Type:               ConditionTypeReady,
 		Status:             metav1.ConditionFalse,
+		ObservedGeneration: attachment.Generation,
 		Reason:             "EnvoyFiltersFailed",
 		Message:            message,
-		LastTransitionTime: metav1.NewTime(time.Now()),
-	}
-	setCondition(attachment, condition)
-}
-
-// setCondition updates or adds a condition to the attachment status
-func setCondition(attachment *v1alpha1.ExternalProcessorAttachment, condition metav1.Condition) {
-	for i, c := range attachment.Status.Conditions {
-		if c.Type == condition.Type {
-			// Only update if status changed
-			if c.Status != condition.Status {
-				attachment.Status.Conditions[i] = condition
-			}
-			return
-		}
-	}
-	// Condition not found, add it
-	attachment.Status.Conditions = append(attachment.Status.Conditions, condition)
+	})
 }

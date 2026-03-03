@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -37,6 +37,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=validatingwebhookconfigurations,verbs=get;update;patch
@@ -205,7 +206,7 @@ func generateCerts(serviceName, namespace string) (caPEM, serverCertPEM, serverK
 			CommonName: "customrouter-webhook-ca",
 		},
 		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
@@ -244,7 +245,7 @@ func generateCerts(serviceName, namespace string) (caPEM, serverCertPEM, serverK
 		},
 		DNSNames:    dnsNames,
 		NotBefore:   time.Now(),
-		NotAfter:    time.Now().Add(10 * 365 * 24 * time.Hour),
+		NotAfter:    time.Now().Add(365 * 24 * time.Hour),
 		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
@@ -265,7 +266,7 @@ func generateCerts(serviceName, namespace string) (caPEM, serverCertPEM, serverK
 }
 
 func writeCertsToDisk(certDir string, certPEM, keyPEM []byte) error {
-	if err := os.MkdirAll(certDir, 0o755); err != nil {
+	if err := os.MkdirAll(certDir, 0o700); err != nil {
 		return fmt.Errorf("creating cert dir: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(certDir, "tls.crt"), certPEM, 0o644); err != nil {
@@ -307,7 +308,9 @@ func (r *CABundleReconciler) Start(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			_ = patchWebhookConfig(ctx, r.Client, r.ConfigName, r.CaPEM)
+			if err := patchWebhookConfig(ctx, r.Client, r.ConfigName, r.CaPEM); err != nil {
+				log.FromContext(ctx).Error(err, "failed to reconcile CA bundle")
+			}
 		}
 	}
 }

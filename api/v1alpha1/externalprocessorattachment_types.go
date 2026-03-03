@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -108,6 +108,10 @@ type ExternalProcessorAttachmentSpec struct {
 
 // ExternalProcessorAttachmentStatus defines the observed state of ExternalProcessorAttachment.
 type ExternalProcessorAttachmentStatus struct {
+	// observedGeneration is the most recent generation observed by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
 	// conditions represent the current state of the ExternalProcessorAttachment resource.
 	// +listType=map
 	// +listMapKey=type

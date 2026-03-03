@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/freepik-company/customrouter/api/v1alpha1"
+	ef "github.com/freepik-company/customrouter/internal/controller/envoyfilter"
 )
 
 const (
@@ -32,7 +33,7 @@ const (
 
 func TestCollectCatchAllEntries_Empty(t *testing.T) {
 	routeList := &v1alpha1.CustomHTTPRouteList{}
-	entries := collectCatchAllEntries(routeList)
+	entries := ef.CollectCatchAllEntries(routeList)
 	if len(entries) != 0 {
 		t.Errorf("expected 0 entries, got %d", len(entries))
 	}
@@ -51,7 +52,7 @@ func TestCollectCatchAllEntries_NoCatchAll(t *testing.T) {
 			},
 		},
 	}
-	entries := collectCatchAllEntries(routeList)
+	entries := ef.CollectCatchAllEntries(routeList)
 	if len(entries) != 0 {
 		t.Errorf("expected 0 entries, got %d", len(entries))
 	}
@@ -77,7 +78,7 @@ func TestCollectCatchAllEntries_SingleRoute(t *testing.T) {
 			},
 		},
 	}
-	entries := collectCatchAllEntries(routeList)
+	entries := ef.CollectCatchAllEntries(routeList)
 	if len(entries) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(entries))
 	}
@@ -119,7 +120,7 @@ func TestCollectCatchAllEntries_MultipleRoutes(t *testing.T) {
 			},
 		},
 	}
-	entries := collectCatchAllEntries(routeList)
+	entries := ef.CollectCatchAllEntries(routeList)
 	if len(entries) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(entries))
 	}
@@ -151,7 +152,7 @@ func TestCollectCatchAllEntries_SkipsDeleting(t *testing.T) {
 			},
 		},
 	}
-	entries := collectCatchAllEntries(routeList)
+	entries := ef.CollectCatchAllEntries(routeList)
 	if len(entries) != 0 {
 		t.Errorf("expected 0 entries (route being deleted), got %d", len(entries))
 	}
@@ -184,7 +185,7 @@ func TestCollectCatchAllEntries_DuplicateHostnameLastWins(t *testing.T) {
 			},
 		},
 	}
-	entries := collectCatchAllEntries(routeList)
+	entries := ef.CollectCatchAllEntries(routeList)
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 entry (deduplicated), got %d", len(entries))
 	}
@@ -193,13 +194,13 @@ func TestCollectCatchAllEntries_DuplicateHostnameLastWins(t *testing.T) {
 	}
 }
 
-func TestMergeWithEPACatchAll_OnlyRoutes(t *testing.T) {
-	routeEntries := []CatchAllEntry{
+func TestMergeCatchAllEntries_OnlyRoutes(t *testing.T) {
+	routeEntries := []ef.CatchAllEntry{
 		{Hostname: hostACom, BackendRef: v1alpha1.BackendRef{Name: "svc-a", Namespace: "ns", Port: 80}},
 	}
 	epa := &v1alpha1.ExternalProcessorAttachment{}
 
-	merged := mergeWithEPACatchAll(routeEntries, epa)
+	merged := ef.MergeCatchAllEntries(routeEntries, epa)
 	if len(merged) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(merged))
 	}
@@ -208,7 +209,7 @@ func TestMergeWithEPACatchAll_OnlyRoutes(t *testing.T) {
 	}
 }
 
-func TestMergeWithEPACatchAll_OnlyEPA(t *testing.T) {
+func TestMergeCatchAllEntries_OnlyEPA(t *testing.T) {
 	epa := &v1alpha1.ExternalProcessorAttachment{
 		Spec: v1alpha1.ExternalProcessorAttachmentSpec{
 			CatchAllRoute: &v1alpha1.CatchAllRouteConfig{
@@ -218,7 +219,7 @@ func TestMergeWithEPACatchAll_OnlyEPA(t *testing.T) {
 		},
 	}
 
-	merged := mergeWithEPACatchAll(nil, epa)
+	merged := ef.MergeCatchAllEntries(nil, epa)
 	if len(merged) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(merged))
 	}
@@ -227,8 +228,8 @@ func TestMergeWithEPACatchAll_OnlyEPA(t *testing.T) {
 	}
 }
 
-func TestMergeWithEPACatchAll_EPAOverrides(t *testing.T) {
-	routeEntries := []CatchAllEntry{
+func TestMergeCatchAllEntries_EPAOverrides(t *testing.T) {
+	routeEntries := []ef.CatchAllEntry{
 		{Hostname: "shared.com", BackendRef: v1alpha1.BackendRef{Name: "route-svc", Namespace: "ns", Port: 80}},
 		{Hostname: "route-only.com", BackendRef: v1alpha1.BackendRef{Name: "route-svc", Namespace: "ns", Port: 80}},
 	}
@@ -241,7 +242,7 @@ func TestMergeWithEPACatchAll_EPAOverrides(t *testing.T) {
 		},
 	}
 
-	merged := mergeWithEPACatchAll(routeEntries, epa)
+	merged := ef.MergeCatchAllEntries(routeEntries, epa)
 	if len(merged) != 3 {
 		t.Fatalf("expected 3 entries, got %d", len(merged))
 	}
@@ -262,23 +263,23 @@ func TestMergeWithEPACatchAll_EPAOverrides(t *testing.T) {
 	}
 }
 
-func TestMergeWithEPACatchAll_Empty(t *testing.T) {
+func TestMergeCatchAllEntries_Empty(t *testing.T) {
 	epa := &v1alpha1.ExternalProcessorAttachment{}
-	merged := mergeWithEPACatchAll(nil, epa)
+	merged := ef.MergeCatchAllEntries(nil, epa)
 	if len(merged) != 0 {
 		t.Errorf("expected 0 entries, got %d", len(merged))
 	}
 }
 
-func TestMergeWithEPACatchAll_Sorted(t *testing.T) {
-	routeEntries := []CatchAllEntry{
+func TestMergeCatchAllEntries_Sorted(t *testing.T) {
+	routeEntries := []ef.CatchAllEntry{
 		{Hostname: "z.com", BackendRef: v1alpha1.BackendRef{Name: "svc", Namespace: "ns", Port: 80}},
 		{Hostname: hostACom, BackendRef: v1alpha1.BackendRef{Name: "svc", Namespace: "ns", Port: 80}},
 		{Hostname: "m.com", BackendRef: v1alpha1.BackendRef{Name: "svc", Namespace: "ns", Port: 80}},
 	}
 	epa := &v1alpha1.ExternalProcessorAttachment{}
 
-	merged := mergeWithEPACatchAll(routeEntries, epa)
+	merged := ef.MergeCatchAllEntries(routeEntries, epa)
 	if len(merged) != 3 {
 		t.Fatalf("expected 3 entries, got %d", len(merged))
 	}

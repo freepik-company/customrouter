@@ -1,6 +1,11 @@
 # CustomRouter Helm Chart Values
 # This chart deploys the CustomRouter operator and optionally one or more external processors
 
+# -- Override the chart name
+nameOverride: ""
+# -- Override the full release name
+fullnameOverride: ""
+
 # -- Global settings
 global:
   # -- Image pull secrets for all deployments

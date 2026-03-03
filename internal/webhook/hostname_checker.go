@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -321,7 +321,7 @@ func headersCompatible(a, b []headerMatch) bool {
 // negatives (e.g. "/api" vs "/api/"). The root path "/" is preserved as-is.
 func normalizePath(p string) string {
 	if len(p) > 1 && strings.HasSuffix(p, "/") {
-		return strings.TrimRight(p, "/")
+		return strings.TrimSuffix(p, "/")
 	}
 	return p
 }
@@ -339,17 +339,17 @@ func methodsCompatible(a, b string) bool {
 // queryParamsCompatible returns true if two sets of query parameter matches could
 // match the same HTTP request. An empty set matches all requests, so it is always
 // compatible. Two non-empty sets are incompatible only when they require different
-// values for the same parameter name (case-insensitive).
+// values for the same parameter name (case-sensitive per RFC 3986).
 func queryParamsCompatible(a, b []queryParamMatch) bool {
 	if len(a) == 0 || len(b) == 0 {
 		return true
 	}
 	bMap := make(map[string]string, len(b))
 	for _, q := range b {
-		bMap[strings.ToLower(q.Name)] = q.Value
+		bMap[q.Name] = q.Value
 	}
 	for _, q := range a {
-		if bVal, ok := bMap[strings.ToLower(q.Name)]; ok && bVal != q.Value {
+		if bVal, ok := bMap[q.Name]; ok && bVal != q.Value {
 			return false
 		}
 	}

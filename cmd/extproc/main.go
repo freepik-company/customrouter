@@ -1,5 +1,5 @@
 /*
-Copyright 2024.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"go.uber.org/zap"
@@ -56,10 +57,9 @@ func main() {
 	flag.Func("grpc-max-concurrent-streams",
 		"Maximum number of concurrent streams per connection (default 1000)",
 		func(s string) error {
-			var v uint64
-			_, err := fmt.Sscanf(s, "%d", &v)
+			v, err := strconv.ParseUint(s, 10, 32)
 			if err != nil {
-				return err
+				return fmt.Errorf("invalid value %q: %w", s, err)
 			}
 			config.MaxConcurrentStreams = uint32(v)
 			return nil
@@ -87,7 +87,8 @@ func main() {
 	config.Debug = debug
 	logger, err := logConfig.Build()
 	if err != nil {
-		panic(err)
+		fmt.Fprintf(os.Stderr, "failed to build logger: %v\n", err)
+		os.Exit(1)
 	}
 	defer func() { _ = logger.Sync() }()
 

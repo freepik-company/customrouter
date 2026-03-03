@@ -9,7 +9,9 @@ metadata:
   labels:
     {{- include "customrouter.extproc.labels" (dict "name" $name "root" $) | nindent 4 }}
 spec:
+  {{- if not $config.hpa.enabled }}
   replicas: {{ $config.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "customrouter.extproc.selectorLabels" (dict "name" $name "root" $) | nindent 6 }}

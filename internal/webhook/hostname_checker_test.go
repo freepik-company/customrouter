@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -652,10 +652,10 @@ func TestQueryParamsCompatible(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "case insensitive param name — incompatible",
+			name: "case sensitive param name — different names are compatible",
 			a:    []queryParamMatch{{Name: "Version", Value: "v1"}},
 			b:    []queryParamMatch{{Name: "version", Value: "v2"}},
-			want: false,
+			want: true, // RFC 3986: query param names are case-sensitive
 		},
 		{
 			name: "superset with same values — compatible",

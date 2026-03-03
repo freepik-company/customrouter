@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,9 +18,7 @@ package customhttproute
 
 import (
 	"context"
-	"fmt"
 
-	//
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -28,8 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	//
-	customrouterfreepikcomv1alpha1 "github.com/freepik-company/customrouter/api/v1alpha1"
+	crv1alpha1 "github.com/freepik-company/customrouter/api/v1alpha1"
 	"github.com/freepik-company/customrouter/internal/controller"
 )
 
@@ -49,58 +46,47 @@ type CustomHTTPRouteReconciler struct {
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.4/pkg/reconcile
 func (r *CustomHTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (result ctrl.Result, err error) {
 	logger := log.FromContext(ctx)
 
 	// 1. Get the content of the resource
-	objectManifest := &customrouterfreepikcomv1alpha1.CustomHTTPRoute{}
+	objectManifest := &crv1alpha1.CustomHTTPRoute{}
 	err = r.Get(ctx, req.NamespacedName, objectManifest)
 
 	// 2. Check the existence inside the cluster
 	if err != nil {
-
-		// 2.1 It does NOT exist: manage removal
 		if err = client.IgnoreNotFound(err); err == nil {
-			logger.Info(fmt.Sprintf(controller.ResourceNotFoundError, controller.CustomHttpRouteResourceType, req.Name))
+			logger.Info("Resource not found, ignoring since object must be deleted", "name", req.Name)
 			return result, err
 		}
-
-		// 2.2 Failed to get the resource, requeue the request
-		logger.Info(fmt.Sprintf(controller.ResourceRetrievalError, controller.CustomHttpRouteResourceType, req.Name, err.Error()))
+		logger.Error(err, "Failed to get resource", "name", req.Name)
 		return result, err
 	}
 
-	// 3. Check if the resource instance is marked to be deleted: indicated by the deletion timestamp being set
+	// 3. Check if the resource instance is marked to be deleted
 	if !objectManifest.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(objectManifest, controller.ResourceFinalizer) {
-			// Delete Notification from WatcherPool
 			err = r.ReconcileObject(ctx, watch.Deleted, objectManifest)
 			if err != nil {
-				logger.Info(fmt.Sprintf(controller.ResourceReconcileError, controller.CustomHttpRouteResourceType, req.Name, err.Error()))
+				logger.Error(err, "Failed to reconcile deletion", "name", req.Name)
 				return result, err
 			}
 
-			// Remove the finalizers on the resource
-			controllerutil.RemoveFinalizer(objectManifest, controller.ResourceFinalizer)
 			err = controller.UpdateWithRetry(ctx, r.Client, objectManifest, func(object client.Object) error {
 				controllerutil.RemoveFinalizer(object, controller.ResourceFinalizer)
 				return nil
 			})
 			if err != nil {
-				logger.Info(fmt.Sprintf(controller.ResourceFinalizersUpdateError, controller.CustomHttpRouteResourceType, req.Name, err.Error()))
+				logger.Error(err, "Failed to remove finalizer", "name", req.Name)
 			}
 		}
-		result = ctrl.Result{}
-		err = nil
-		return result, err
+		return ctrl.Result{}, nil
 	}
 
 	// 4. Add a finalizer to the resource
 	if !controllerutil.ContainsFinalizer(objectManifest, controller.ResourceFinalizer) {
 		err = controller.UpdateWithRetry(ctx, r.Client, objectManifest, func(object client.Object) error {
-			controllerutil.AddFinalizer(objectManifest, controller.ResourceFinalizer)
+			controllerutil.AddFinalizer(object, controller.ResourceFinalizer)
 			return nil
 		})
 		if err != nil {
@@ -112,18 +98,17 @@ func (r *CustomHTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if err = objectManifest.Validate(); err != nil {
 		r.UpdateConditionReconciled(objectManifest)
 		r.UpdateConditionConfigMapFailed(objectManifest, err.Error())
-		logger.Info(fmt.Sprintf(controller.ResourceValidationError, controller.CustomHttpRouteResourceType, req.Name, err.Error()))
+		logger.Info("Validation failed", "name", req.Name, "error", err.Error())
 		return result, nil // Don't requeue validation errors
 	}
 
 	// 6. Update the status before the requeue
 	defer func() {
-		// Save conditions before the Get overwrites objectManifest
-		conditionsToApply := objectManifest.Status.Conditions
+		statusToApply := objectManifest.Status
+		statusToApply.ObservedGeneration = objectManifest.Generation
 		statusErr := controller.UpdateStatusWithRetry(ctx, r.Client, objectManifest, func(object client.Object) error {
-			// Copy the saved conditions to the fresh object
-			route := object.(*customrouterfreepikcomv1alpha1.CustomHTTPRoute)
-			route.Status.Conditions = conditionsToApply
+			route := object.(*crv1alpha1.CustomHTTPRoute)
+			route.Status = statusToApply
 			return nil
 		})
 		if statusErr != nil {
@@ -134,10 +119,9 @@ func (r *CustomHTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	// 7. The resource already exists: manage the update
 	err = r.ReconcileObject(ctx, watch.Modified, objectManifest)
 	if err != nil {
-		// Set Reconciled to True (manifest was processed) but ConfigMapSynced to False (ConfigMap failed)
 		r.UpdateConditionReconciled(objectManifest)
 		r.UpdateConditionConfigMapFailed(objectManifest, err.Error())
-		logger.Info(fmt.Sprintf(controller.ResourceReconcileError, controller.CustomHttpRouteResourceType, req.Name, err.Error()))
+		logger.Error(err, "Failed to reconcile", "name", req.Name)
 		return result, err
 	}
 
@@ -151,7 +135,7 @@ func (r *CustomHTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 // SetupWithManager sets up the controller with the Manager.
 func (r *CustomHTTPRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&customrouterfreepikcomv1alpha1.CustomHTTPRoute{}).
+		For(&crv1alpha1.CustomHTTPRoute{}).
 		Named("customhttproute").
 		Complete(r)
 }

@@ -1,5 +1,5 @@
 /*
-Copyright 2024.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"time"
 
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	"github.com/freepik-company/customrouter/pkg/routes"
@@ -72,14 +73,15 @@ func NewServer(config *ServerConfig, logger *zap.Logger) (*Server, error) {
 		grpc.MaxSendMsgSize(config.MaxSendMsgSize),
 		grpc.MaxConcurrentStreams(config.MaxConcurrentStreams),
 		grpc.KeepaliveParams(keepalive.ServerParameters{
-			Time:              config.KeepaliveTime,
-			Timeout:           config.KeepaliveTimeout,
-			MaxConnectionIdle: config.MaxConnectionIdle,
-			MaxConnectionAge:  config.MaxConnectionAge,
+			Time:                  config.KeepaliveTime,
+			Timeout:               config.KeepaliveTimeout,
+			MaxConnectionIdle:     config.MaxConnectionIdle,
+			MaxConnectionAge:      config.MaxConnectionAge,
+			MaxConnectionAgeGrace: config.MaxConnectionAgeGrace,
 		}),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
-			MinTime:             5,    // Minimum time between pings from client
-			PermitWithoutStream: true, // Allow pings even when no active streams
+			MinTime:             5 * time.Second, // Minimum time between pings from client
+			PermitWithoutStream: true,            // Allow pings even when no active streams
 		}),
 	}
 
@@ -146,12 +148,4 @@ func (s *Server) Start(ctx context.Context) error {
 	}()
 
 	return s.grpcServer.Serve(listener)
-}
-
-// Stop stops the gRPC server
-func (s *Server) Stop() {
-	s.grpcServer.GracefulStop()
-	if err := s.loader.Close(); err != nil {
-		s.logger.Warn("failed to close loader", zap.Error(err))
-	}
 }

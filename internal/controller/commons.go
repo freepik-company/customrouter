@@ -1,5 +1,5 @@
 /*
-Copyright 2024.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -27,17 +27,7 @@ import (
 )
 
 const (
-	CustomHttpRouteResourceType = "CustomHttpRoute"
-
-	//
-	ResourceNotFoundError         = "%s '%s' resource not found. Ignoring since object must be deleted."
-	ResourceRetrievalError        = "Error getting the %s '%s' from the cluster: %s"
-	ResourceFinalizersUpdateError = "Failed to update finalizer of %s '%s': %s"
-	ResourceConditionUpdateError  = "Failed to update the condition on %s '%s': %s"
-	ResourceReconcileError        = "Can not reconcile %s '%s': %s"
-	ResourceValidationError       = "Validation failed for %s '%s': %s"
-
-	//
+	// ResourceFinalizer is the finalizer name used by all controllers in this project.
 	ResourceFinalizer = "customrouter.freepik.com/finalizer"
 )
 

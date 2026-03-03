@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -27,16 +27,22 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
+// HTTPRouteWebhookPath is the path for the HTTPRoute validating webhook.
+const HTTPRouteWebhookPath = "/validate-gateway-networking-k8s-io-v1-httproute"
+
 // HTTPRouteValidator validates HTTPRoute resources against existing CustomHTTPRoutes.
+// It implements admission.Handler directly (instead of admission.CustomValidator) because
+// the Gateway API HTTPRoute type is not owned by this project, so we cannot register a
+// CustomValidator for it via controller-runtime's webhook builder.
 type HTTPRouteValidator struct {
-	Client  client.Reader
+	client  client.Reader
 	checker *HostnameChecker
 }
 
 // NewHTTPRouteValidator creates a new HTTPRouteValidator.
 func NewHTTPRouteValidator(cl client.Reader) *HTTPRouteValidator {
 	return &HTTPRouteValidator{
-		Client:  cl,
+		client:  cl,
 		checker: &HostnameChecker{Client: cl},
 	}
 }

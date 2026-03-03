@@ -1,5 +1,5 @@
 /*
-Copyright 2024.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,22 +17,22 @@ limitations under the License.
 package customhttproute
 
 import (
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	//
 	"github.com/freepik-company/customrouter/api/v1alpha1"
 	"github.com/freepik-company/customrouter/internal/controller"
 )
 
 // UpdateConditionReconciled sets the Reconciled condition to True
 func (r *CustomHTTPRouteReconciler) UpdateConditionReconciled(object *v1alpha1.CustomHTTPRoute) {
-	condition := controller.NewCondition(
-		v1alpha1.ConditionTypeReconciled,
-		metav1.ConditionTrue,
-		controller.ConditionReasonReconcileSuccess,
-		controller.ConditionReasonReconcileSuccessMessage,
-	)
-	controller.UpdateCondition(&object.Status.Conditions, condition)
+	meta.SetStatusCondition(&object.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionTypeReconciled,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: object.Generation,
+		Reason:             controller.ConditionReasonReconcileSuccess,
+		Message:            controller.ConditionReasonReconcileSuccessMessage,
+	})
 }
 
 // UpdateConditionReconcileFailed sets the Reconciled condition to False
@@ -41,24 +41,24 @@ func (r *CustomHTTPRouteReconciler) UpdateConditionReconcileFailed(object *v1alp
 	if message != "" {
 		msg = message
 	}
-	condition := controller.NewCondition(
-		v1alpha1.ConditionTypeReconciled,
-		metav1.ConditionFalse,
-		controller.ConditionReasonReconcileError,
-		msg,
-	)
-	controller.UpdateCondition(&object.Status.Conditions, condition)
+	meta.SetStatusCondition(&object.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionTypeReconciled,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: object.Generation,
+		Reason:             controller.ConditionReasonReconcileError,
+		Message:            msg,
+	})
 }
 
 // UpdateConditionConfigMapSynced sets the ConfigMapSynced condition to True
 func (r *CustomHTTPRouteReconciler) UpdateConditionConfigMapSynced(object *v1alpha1.CustomHTTPRoute) {
-	condition := controller.NewCondition(
-		v1alpha1.ConditionTypeConfigMapSynced,
-		metav1.ConditionTrue,
-		controller.ConditionReasonConfigMapSuccess,
-		controller.ConditionReasonConfigMapSuccessMessage,
-	)
-	controller.UpdateCondition(&object.Status.Conditions, condition)
+	meta.SetStatusCondition(&object.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionTypeConfigMapSynced,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: object.Generation,
+		Reason:             controller.ConditionReasonConfigMapSuccess,
+		Message:            controller.ConditionReasonConfigMapSuccessMessage,
+	})
 }
 
 // UpdateConditionConfigMapFailed sets the ConfigMapSynced condition to False
@@ -67,11 +67,11 @@ func (r *CustomHTTPRouteReconciler) UpdateConditionConfigMapFailed(object *v1alp
 	if message != "" {
 		msg = message
 	}
-	condition := controller.NewCondition(
-		v1alpha1.ConditionTypeConfigMapSynced,
-		metav1.ConditionFalse,
-		controller.ConditionReasonConfigMapError,
-		msg,
-	)
-	controller.UpdateCondition(&object.Status.Conditions, condition)
+	meta.SetStatusCondition(&object.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionTypeConfigMapSynced,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: object.Generation,
+		Reason:             controller.ConditionReasonConfigMapError,
+		Message:            msg,
+	})
 }
