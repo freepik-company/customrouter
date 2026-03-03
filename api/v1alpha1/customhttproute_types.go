@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -112,6 +112,7 @@ type PathPrefixes struct {
 type PathMatch struct {
 	// path is the value to match against the request path
 	// +required
+	// +kubebuilder:validation:MaxLength=4096
 	Path string `json:"path"`
 
 	// type is the type of path matching
@@ -170,6 +171,7 @@ type RewriteConfig struct {
 	//
 	// This automatic behavior can be overridden with replacePrefixMatch.
 	// +optional
+	// +kubebuilder:validation:MaxLength=4096
 	Path string `json:"path,omitempty"`
 
 	// replacePrefixMatch explicitly controls whether prefix rewrite is used.
@@ -182,6 +184,7 @@ type RewriteConfig struct {
 
 	// hostname is the new hostname to rewrite to
 	// +optional
+	// +kubebuilder:validation:MaxLength=253
 	Hostname string `json:"hostname,omitempty"`
 }
 
@@ -194,6 +197,7 @@ type RedirectConfig struct {
 
 	// hostname is the hostname to redirect to
 	// +optional
+	// +kubebuilder:validation:MaxLength=253
 	Hostname string `json:"hostname,omitempty"`
 
 	// path is the path to redirect to. Supports variables:
@@ -203,6 +207,7 @@ type RedirectConfig struct {
 	// ${scheme} - request scheme (http or https)
 	// ${path.segment.N} - Nth segment of the path (0-indexed)
 	// +optional
+	// +kubebuilder:validation:MaxLength=4096
 	Path string `json:"path,omitempty"`
 
 	// port is the port to redirect to
@@ -222,6 +227,7 @@ type RedirectConfig struct {
 type HeaderConfig struct {
 	// name is the header name
 	// +required
+	// +kubebuilder:validation:MaxLength=256
 	Name string `json:"name"`
 
 	// value is the header value. Supports variables:
@@ -232,6 +238,7 @@ type HeaderConfig struct {
 	// ${method} - HTTP method (GET, POST, etc.)
 	// ${scheme} - request scheme (http or https)
 	// +required
+	// +kubebuilder:validation:MaxLength=4096
 	Value string `json:"value"`
 }
 
@@ -256,6 +263,7 @@ type Action struct {
 
 	// headerName specifies the header name to remove (required when type is "header-remove")
 	// +optional
+	// +kubebuilder:validation:MaxLength=256
 	HeaderName string `json:"headerName,omitempty"`
 }
 
@@ -349,6 +357,10 @@ type CustomHTTPRouteSpec struct {
 
 // CustomHTTPRouteStatus defines the observed state of CustomHTTPRoute.
 type CustomHTTPRouteStatus struct {
+	// observedGeneration is the most recent generation observed by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
 	// The status of each condition is one of True, False, or Unknown.
 	// +listType=map
 	// +listMapKey=type

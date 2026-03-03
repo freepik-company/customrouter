@@ -56,7 +56,7 @@ flowchart LR
 
 - Kubernetes v1.26+
 - Istio v1.18+ (for gateway integration)
-- Go v1.24+ (for development)
+- Go v1.25+ (for development)
 
 ## Installation
 
@@ -180,6 +180,14 @@ operator:
     - --leader-elect
     - --health-probe-bind-address=:8081
 
+  # Optional: enable validating webhooks for hostname conflict detection
+  webhook:
+    enabled: true
+    timeoutSeconds: 10
+    # certManager:
+    #   enabled: true
+    #   issuerName: my-cluster-issuer
+
 externalProcessors:
   # Default processor
   default:
@@ -219,7 +227,7 @@ See [chart/values.yaml](chart/values.yaml) for all available options.
 
 ### Prerequisites
 
-- Go v1.24+
+- Go v1.25+
 - Docker
 - kubectl
 - A Kubernetes cluster (kind, minikube, etc.)
@@ -316,6 +324,7 @@ Deployment:
   uninstall        Uninstall CRDs
   deploy           Deploy to cluster
   undeploy         Undeploy from cluster
+  sync-chart-crds  Copy generated CRDs into the Helm chart directory
 ```
 
 ## Architecture
@@ -329,6 +338,22 @@ The operator watches `CustomHTTPRoute` resources, compiles routing rules, and wr
 | `--routes-configmap-namespace` | `default` | Namespace where route ConfigMaps are written |
 | `--leader-elect` | `false` | Enable leader election for HA |
 | `--health-probe-bind-address` | `:8081` | Address for health probes |
+| `--enable-webhooks` | `false` | Enable validating admission webhooks |
+| `--webhook-port` | `9443` | Port for the webhook server |
+| `--webhook-config-name` | `""` | ValidatingWebhookConfiguration name (auto-cert mode) |
+| `--webhook-service-name` | `""` | Webhook Service name for TLS SAN (auto-cert mode) |
+| `--webhook-cert-path` | `""` | Directory with TLS certs (cert-manager mode) |
+
+### Security
+
+Both the operator and external processor containers run with a hardened security context:
+
+- `runAsNonRoot: true` — containers never run as root
+- `readOnlyRootFilesystem: true` — no writes to the container filesystem
+- `capabilities: drop: ["ALL"]` — all Linux capabilities are dropped
+- `seccompProfile: type: RuntimeDefault` — default seccomp filtering
+
+These defaults are applied by the Helm chart and can be customized via `operator.securityContext` and `externalProcessors.<name>.securityContext` in `values.yaml`.
 
 ### External Processor
 
@@ -340,7 +365,7 @@ The external processor reads route ConfigMaps and makes routing decisions for En
 | `--target-name` | `""` | Target name to filter ConfigMaps (matches `spec.targetRef.name`) |
 | `--routes-configmap-namespace` | `""` | Namespace to read ConfigMaps from (empty = all namespaces) |
 | `--access-log` | `true` | Enable access logging |
-| `--debug` | `false` | Enable debug logging |
+| `--debug` | `false` | Enable debug logging and gRPC reflection |
 | `--kubeconfig` | `""` | Path to kubeconfig (uses in-cluster config if not set) |
 
 > **Important**: Set `--routes-configmap-namespace` on the external processor to match the operator's `--routes-configmap-namespace`. This prevents stale ConfigMaps in other namespaces from causing route conflicts.
@@ -367,10 +392,21 @@ Connects an external processor to Istio gateway pods by generating EnvoyFilters.
 |-------|-------------|
 | `gatewayRef.selector` | Labels to match gateway pods |
 | `externalProcessorRef.service` | External processor service reference |
-| `externalProcessorRef.timeout` | gRPC connection timeout (default: "5s") |
-| `externalProcessorRef.messageTimeout` | Message exchange timeout (default: "5s") |
+| `externalProcessorRef.timeout` | gRPC connection timeout — valid duration string, e.g. `5s`, `500ms` (default: "5s") |
+| `externalProcessorRef.messageTimeout` | Message exchange timeout — valid duration string, e.g. `5s`, `500ms` (default: "5s") |
 | `catchAllRoute.hostnames` | Hostnames to generate catch-all routes for |
 | `catchAllRoute.backendRef` | Default backend for unmatched requests |
+
+### Status Conditions
+
+Both CRDs report status via standard Kubernetes conditions. Each condition includes `ObservedGeneration` so clients can distinguish stale status from the current spec revision.
+
+| CRD | Condition | Description |
+|-----|-----------|-------------|
+| `CustomHTTPRoute` | `Reconciled` | Whether the manifest was processed successfully |
+| `CustomHTTPRoute` | `ConfigMapSynced` | Whether the ConfigMap was generated and synced |
+| `ExternalProcessorAttachment` | `Reconciled` | Whether the attachment was processed successfully |
+| `ExternalProcessorAttachment` | `EnvoyFilterSynced` | Whether the EnvoyFilters were generated and synced |
 
 #### Catch-All Routes
 
@@ -572,6 +608,16 @@ The CRD enforces the following limits to prevent resource exhaustion:
 | `matches[].priority` | Range 1–10000 |
 | `backendRefs[].name` | RFC 1123 label (max 63 chars, no dots) |
 | `backendRefs[].namespace` | RFC 1123 label (max 63 chars, no dots) |
+| `matches[].path` | MaxLength 4096 |
+| `rewrite.path` | MaxLength 4096 |
+| `rewrite.hostname` | MaxLength 253 |
+| `redirect.path` | MaxLength 4096 |
+| `redirect.hostname` | MaxLength 253 |
+| `header.name` | MaxLength 256 |
+| `header.value` | MaxLength 4096 |
+| `action.headerName` | MaxLength 256 |
+| `externalProcessorRef.timeout` | Valid duration pattern: `^[0-9]+(s\|ms\|m\|h)$` |
+| `externalProcessorRef.messageTimeout` | Valid duration pattern: `^[0-9]+(s\|ms\|m\|h)$` |
 
 Additionally, route expansion is capped at 500,000 routes per CRD at runtime. CRDs exceeding this limit are skipped with an error log.
 
@@ -579,8 +625,44 @@ Additionally, route expansion is capped at 500,000 routes per CRD at runtime. CR
 
 In multi-tenant clusters, hostnames are scoped by namespace. When multiple `CustomHTTPRoute` resources across different namespaces target the same hostname, the namespace that appears first alphabetically owns that hostname. Routes from non-owning namespaces for the same hostname are silently dropped.
 
+### Validating Webhooks
+
+The operator includes optional validating admission webhooks that prevent route conflicts at admission time, before resources reach etcd.
+
+Two webhooks are provided:
+- **CustomHTTPRoute webhook** (`failurePolicy: Fail`): Blocks creation/update if another CustomHTTPRoute with the same target has overlapping hostname + route match (path + method + headers + query parameters). Different paths, methods, headers, or query parameters on the same hostname are allowed.
+- **HTTPRoute webhook** (`failurePolicy: Ignore`): Blocks creation/update if a Gateway API HTTPRoute uses a hostname + route match already claimed by a CustomHTTPRoute.
+
+Conflict detection uses the full `HTTPRouteMatch` surface:
+- **Path**: type + value (with trailing slash normalization — `/api/` equals `/api`)
+- **Method**: empty means "matches all methods"; different methods (e.g. `GET` vs `POST`) don't conflict
+- **Headers**: empty means "matches all"; different values for the same header name don't conflict
+- **Query parameters**: same logic as headers
+
+Enable in Helm:
+
+```yaml
+operator:
+  webhook:
+    enabled: true
+```
+
+By default, TLS certificates are auto-generated at startup and shared across replicas via a Secret. A `CABundleReconciler` periodically ensures the CA bundle survives Helm upgrades. For environments with cert-manager:
+
+```yaml
+operator:
+  webhook:
+    enabled: true
+    certManager:
+      enabled: true
+      issuerName: my-cluster-issuer
+      issuerKind: ClusterIssuer
+```
+
+See [chart/values.yaml](chart/values.yaml) for all webhook options including `timeoutSeconds`, `namespaceSelector`, `failurePolicy`, and `caBundle`.
+
 ## License
 
-Copyright 2026 Freepik Company.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.

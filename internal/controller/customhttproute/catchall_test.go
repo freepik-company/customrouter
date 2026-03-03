@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,11 +23,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/freepik-company/customrouter/api/v1alpha1"
+	ef "github.com/freepik-company/customrouter/internal/controller/envoyfilter"
+)
+
+const (
+	hostACom  = "a.com"
+	svcEPASvc = "epa-svc"
 )
 
 func TestCollectCatchAllEntries_Empty(t *testing.T) {
 	routeList := &v1alpha1.CustomHTTPRouteList{}
-	entries := collectCatchAllEntries(routeList)
+	entries := ef.CollectCatchAllEntries(routeList)
 	if len(entries) != 0 {
 		t.Errorf("expected 0 entries, got %d", len(entries))
 	}
@@ -46,7 +52,7 @@ func TestCollectCatchAllEntries_NoCatchAll(t *testing.T) {
 			},
 		},
 	}
-	entries := collectCatchAllEntries(routeList)
+	entries := ef.CollectCatchAllEntries(routeList)
 	if len(entries) != 0 {
 		t.Errorf("expected 0 entries, got %d", len(entries))
 	}
@@ -72,7 +78,7 @@ func TestCollectCatchAllEntries_SingleRoute(t *testing.T) {
 			},
 		},
 	}
-	entries := collectCatchAllEntries(routeList)
+	entries := ef.CollectCatchAllEntries(routeList)
 	if len(entries) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(entries))
 	}
@@ -92,7 +98,7 @@ func TestCollectCatchAllEntries_MultipleRoutes(t *testing.T) {
 		Items: []v1alpha1.CustomHTTPRoute{
 			{
 				Spec: v1alpha1.CustomHTTPRouteSpec{
-					Hostnames: []string{"a.com"},
+					Hostnames: []string{hostACom},
 					CatchAllRoute: &v1alpha1.CatchAllBackendRef{
 						BackendRef: v1alpha1.BackendRef{Name: "svc-a", Namespace: "ns-a", Port: 80},
 					},
@@ -114,11 +120,11 @@ func TestCollectCatchAllEntries_MultipleRoutes(t *testing.T) {
 			},
 		},
 	}
-	entries := collectCatchAllEntries(routeList)
+	entries := ef.CollectCatchAllEntries(routeList)
 	if len(entries) != 2 {
 		t.Fatalf("expected 2 entries, got %d", len(entries))
 	}
-	if entries[0].Hostname != "a.com" || entries[0].BackendRef.Name != "svc-a" {
+	if entries[0].Hostname != hostACom || entries[0].BackendRef.Name != "svc-a" {
 		t.Errorf("unexpected first entry: %+v", entries[0])
 	}
 	if entries[1].Hostname != "b.com" || entries[1].BackendRef.Name != "svc-b" {
@@ -146,7 +152,7 @@ func TestCollectCatchAllEntries_SkipsDeleting(t *testing.T) {
 			},
 		},
 	}
-	entries := collectCatchAllEntries(routeList)
+	entries := ef.CollectCatchAllEntries(routeList)
 	if len(entries) != 0 {
 		t.Errorf("expected 0 entries (route being deleted), got %d", len(entries))
 	}
@@ -179,7 +185,7 @@ func TestCollectCatchAllEntries_DuplicateHostnameLastWins(t *testing.T) {
 			},
 		},
 	}
-	entries := collectCatchAllEntries(routeList)
+	entries := ef.CollectCatchAllEntries(routeList)
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 entry (deduplicated), got %d", len(entries))
 	}
@@ -188,42 +194,42 @@ func TestCollectCatchAllEntries_DuplicateHostnameLastWins(t *testing.T) {
 	}
 }
 
-func TestMergeWithEPACatchAll_OnlyRoutes(t *testing.T) {
-	routeEntries := []CatchAllEntry{
-		{Hostname: "a.com", BackendRef: v1alpha1.BackendRef{Name: "svc-a", Namespace: "ns", Port: 80}},
+func TestMergeCatchAllEntries_OnlyRoutes(t *testing.T) {
+	routeEntries := []ef.CatchAllEntry{
+		{Hostname: hostACom, BackendRef: v1alpha1.BackendRef{Name: "svc-a", Namespace: "ns", Port: 80}},
 	}
 	epa := &v1alpha1.ExternalProcessorAttachment{}
 
-	merged := mergeWithEPACatchAll(routeEntries, epa)
+	merged := ef.MergeCatchAllEntries(routeEntries, epa)
 	if len(merged) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(merged))
 	}
-	if merged[0].Hostname != "a.com" {
+	if merged[0].Hostname != hostACom {
 		t.Errorf("expected a.com, got %s", merged[0].Hostname)
 	}
 }
 
-func TestMergeWithEPACatchAll_OnlyEPA(t *testing.T) {
+func TestMergeCatchAllEntries_OnlyEPA(t *testing.T) {
 	epa := &v1alpha1.ExternalProcessorAttachment{
 		Spec: v1alpha1.ExternalProcessorAttachmentSpec{
 			CatchAllRoute: &v1alpha1.CatchAllRouteConfig{
 				Hostnames:  []string{"epa.com"},
-				BackendRef: v1alpha1.BackendRef{Name: "epa-svc", Namespace: "ns", Port: 80},
+				BackendRef: v1alpha1.BackendRef{Name: svcEPASvc, Namespace: "ns", Port: 80},
 			},
 		},
 	}
 
-	merged := mergeWithEPACatchAll(nil, epa)
+	merged := ef.MergeCatchAllEntries(nil, epa)
 	if len(merged) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(merged))
 	}
-	if merged[0].BackendRef.Name != "epa-svc" {
+	if merged[0].BackendRef.Name != svcEPASvc {
 		t.Errorf("expected epa-svc, got %s", merged[0].BackendRef.Name)
 	}
 }
 
-func TestMergeWithEPACatchAll_EPAOverrides(t *testing.T) {
-	routeEntries := []CatchAllEntry{
+func TestMergeCatchAllEntries_EPAOverrides(t *testing.T) {
+	routeEntries := []ef.CatchAllEntry{
 		{Hostname: "shared.com", BackendRef: v1alpha1.BackendRef{Name: "route-svc", Namespace: "ns", Port: 80}},
 		{Hostname: "route-only.com", BackendRef: v1alpha1.BackendRef{Name: "route-svc", Namespace: "ns", Port: 80}},
 	}
@@ -231,12 +237,12 @@ func TestMergeWithEPACatchAll_EPAOverrides(t *testing.T) {
 		Spec: v1alpha1.ExternalProcessorAttachmentSpec{
 			CatchAllRoute: &v1alpha1.CatchAllRouteConfig{
 				Hostnames:  []string{"shared.com", "epa-only.com"},
-				BackendRef: v1alpha1.BackendRef{Name: "epa-svc", Namespace: "ns", Port: 80},
+				BackendRef: v1alpha1.BackendRef{Name: svcEPASvc, Namespace: "ns", Port: 80},
 			},
 		},
 	}
 
-	merged := mergeWithEPACatchAll(routeEntries, epa)
+	merged := ef.MergeCatchAllEntries(routeEntries, epa)
 	if len(merged) != 3 {
 		t.Fatalf("expected 3 entries, got %d", len(merged))
 	}
@@ -246,38 +252,38 @@ func TestMergeWithEPACatchAll_EPAOverrides(t *testing.T) {
 		entryMap[e.Hostname] = e.BackendRef.Name
 	}
 
-	if entryMap["shared.com"] != "epa-svc" {
+	if entryMap["shared.com"] != svcEPASvc {
 		t.Errorf("EPA should override route for shared.com, got %s", entryMap["shared.com"])
 	}
 	if entryMap["route-only.com"] != "route-svc" {
 		t.Errorf("route-only.com should keep route backend, got %s", entryMap["route-only.com"])
 	}
-	if entryMap["epa-only.com"] != "epa-svc" {
+	if entryMap["epa-only.com"] != svcEPASvc {
 		t.Errorf("epa-only.com should have EPA backend, got %s", entryMap["epa-only.com"])
 	}
 }
 
-func TestMergeWithEPACatchAll_Empty(t *testing.T) {
+func TestMergeCatchAllEntries_Empty(t *testing.T) {
 	epa := &v1alpha1.ExternalProcessorAttachment{}
-	merged := mergeWithEPACatchAll(nil, epa)
+	merged := ef.MergeCatchAllEntries(nil, epa)
 	if len(merged) != 0 {
 		t.Errorf("expected 0 entries, got %d", len(merged))
 	}
 }
 
-func TestMergeWithEPACatchAll_Sorted(t *testing.T) {
-	routeEntries := []CatchAllEntry{
+func TestMergeCatchAllEntries_Sorted(t *testing.T) {
+	routeEntries := []ef.CatchAllEntry{
 		{Hostname: "z.com", BackendRef: v1alpha1.BackendRef{Name: "svc", Namespace: "ns", Port: 80}},
-		{Hostname: "a.com", BackendRef: v1alpha1.BackendRef{Name: "svc", Namespace: "ns", Port: 80}},
+		{Hostname: hostACom, BackendRef: v1alpha1.BackendRef{Name: "svc", Namespace: "ns", Port: 80}},
 		{Hostname: "m.com", BackendRef: v1alpha1.BackendRef{Name: "svc", Namespace: "ns", Port: 80}},
 	}
 	epa := &v1alpha1.ExternalProcessorAttachment{}
 
-	merged := mergeWithEPACatchAll(routeEntries, epa)
+	merged := ef.MergeCatchAllEntries(routeEntries, epa)
 	if len(merged) != 3 {
 		t.Fatalf("expected 3 entries, got %d", len(merged))
 	}
-	if merged[0].Hostname != "a.com" || merged[1].Hostname != "m.com" || merged[2].Hostname != "z.com" {
+	if merged[0].Hostname != hostACom || merged[1].Hostname != "m.com" || merged[2].Hostname != "z.com" {
 		t.Errorf("expected sorted order, got: %s, %s, %s", merged[0].Hostname, merged[1].Hostname, merged[2].Hostname)
 	}
 }

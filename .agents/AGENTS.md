@@ -17,7 +17,7 @@ This document helps AI agents work effectively in the **customrouter** codebase.
 |----------|-------|
 | Domain | `customrouter.freepik.com` |
 | API Group | `customrouter.freepik.com/v1alpha1` |
-| Go Version | 1.24.6 |
+| Go Version | 1.25 |
 | Controller Runtime | v0.22.4 |
 | Test Framework | Ginkgo/Gomega |
 | Linter | golangci-lint v2.5.0 |
@@ -94,6 +94,7 @@ make generate manifests
 | `make deploy IMG=<image>` | Deploy controller to cluster |
 | `make undeploy` | Remove controller from cluster |
 | `make build-installer` | Generate consolidated install YAML |
+| `make sync-chart-crds` | Copy generated CRDs into the Helm chart directory |
 
 ---
 
@@ -113,16 +114,26 @@ make generate manifests
 │
 ├── internal/
 │   ├── controller/                         # Controller logic
-│   │   ├── commons.go                      # Shared constants, UpdateWithRetry helper
-│   │   ├── conditions.go                   # Condition helpers
+│   │   ├── commons.go                      # ResourceFinalizer constant, UpdateWithRetry helpers
+│   │   ├── conditions.go                   # Condition reason/message constants
 │   │   ├── customhttproute/
+│   │   │   ├── catchall.go                 # Catch-all route generation for hostnames
+│   │   │   ├── catchall_test.go            # Catch-all route tests
 │   │   │   ├── controller.go               # Main reconciliation loop
 │   │   │   ├── status.go                   # Status condition updaters
 │   │   │   └── sync.go                     # ConfigMap generation & partitioning
+│   │   ├── envoyfilter/                    # Shared EnvoyFilter CRUD package
+│   │   │   └── envoyfilter.go              # Create/update/delete EnvoyFilter helpers
 │   │   └── externalprocessorattachment/
 │   │       ├── controller.go               # Main reconciliation loop
 │   │       ├── status.go                   # Status condition updaters
 │   │       └── sync.go                     # EnvoyFilter generation
+│   ├── webhook/                            # Validating admission webhooks
+│   │   ├── hostname_checker.go            # Conflict detection (path+method+headers+queryParams)
+│   │   ├── hostname_checker_test.go       # 46 unit tests
+│   │   ├── customhttproute_webhook.go     # CustomHTTPRoute admission handler
+│   │   ├── httproute_webhook.go           # HTTPRoute admission handler
+│   │   └── certgen.go                     # Auto-cert generation, Secret sharing, CABundleReconciler
 │   └── extproc/                            # External processor implementation
 │       ├── config.go                       # Server configuration
 │       ├── processor.go                    # gRPC processor service
@@ -223,8 +234,8 @@ spec:
       name: customrouter-extproc
       namespace: customrouter
       port: 9001
-    timeout: 5s          # gRPC connection timeout (default: "5s")
-    messageTimeout: 5s   # Message exchange timeout (default: "5s")
+    timeout: 5s          # gRPC connection timeout (default: "5s", pattern: ^[0-9]+(s|ms|m|h)$)
+    messageTimeout: 5s   # Message exchange timeout (default: "5s", pattern: ^[0-9]+(s|ms|m|h)$)
 
   # Optional: generate catch-all routes for hostnames without HTTPRoute
   catchAllRoute:
@@ -259,6 +270,16 @@ The `catchAllRoute` field solves this by generating an additional EnvoyFilter th
 | `backendRefs[].name` | RFC 1123 label: `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`, MaxLength=63 |
 | `backendRefs[].namespace` | RFC 1123 label: `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`, MaxLength=63 |
 | `targetRef.name` | RFC 1123 label: `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`, MaxLength=63 |
+| `matches[].path` | MaxLength=4096 |
+| `rewrite.path` | MaxLength=4096 |
+| `rewrite.hostname` | MaxLength=253 |
+| `redirect.path` | MaxLength=4096 |
+| `redirect.hostname` | MaxLength=253 |
+| `header.name` | MaxLength=256 |
+| `header.value` | MaxLength=4096 |
+| `action.headerName` | MaxLength=256 |
+| `externalProcessorRef.timeout` | Pattern: `^[0-9]+(s\|ms\|m\|h)$`, Default="5s" |
+| `externalProcessorRef.messageTimeout` | Pattern: `^[0-9]+(s\|ms\|m\|h)$`, Default="5s" |
 
 ---
 
@@ -335,10 +356,12 @@ Exact matches are never expanded - they match the literal path only.
 
 ### Sorting Order
 
-Routes are sorted by:
+Routes are sorted by `SortRoutes()` (exported from `pkg/routes/expand.go`):
 1. **Priority DESC** (higher values first)
 2. **Type**: exact > regex > prefix
 3. **Path length DESC** (longer paths first)
+
+Both the operator (ConfigMap generation) and the extproc (route loading) use the same `SortRoutes` function to ensure consistent ordering.
 
 ---
 
@@ -392,7 +415,7 @@ labels:
 |------|---------|-------------|
 | `--addr` | `:9001` | gRPC listen address |
 | `--target-name` | `default` | Target name to filter ConfigMaps |
-| `--debug` | `false` | Enable debug logging |
+| `--debug` | `false` | Enable debug logging and gRPC reflection |
 | `--access-log` | `true` | Enable access logging |
 | `--kubeconfig` | `` | Path to kubeconfig (uses in-cluster if not set) |
 | `--grpc-max-recv-msg-size` | 4MB | Max receive message size |
@@ -428,6 +451,11 @@ When a route matches, extproc sets these headers:
 | `--leader-elect` | `false` | Enable leader election |
 | `--metrics-secure` | `true` | Serve metrics via HTTPS |
 | `--routes-configmap-namespace` | `default` | Namespace for route ConfigMaps |
+| `--enable-webhooks` | `false` | Enable validating admission webhooks |
+| `--webhook-port` | `9443` | Port for the webhook server |
+| `--webhook-config-name` | `""` | ValidatingWebhookConfiguration name (auto-cert mode) |
+| `--webhook-service-name` | `""` | Webhook Service name for TLS SAN (auto-cert mode) |
+| `--webhook-cert-path` | `""` | Directory with TLS certs (cert-manager mode) |
 
 ---
 
@@ -459,6 +487,9 @@ KIND_CLUSTER=my-cluster go test -tags=e2e ./test/e2e/ -v -ginkgo.v
 | Path | Description |
 |------|-------------|
 | `pkg/routes/expand_test.go` | Route expansion unit tests |
+| `api/v1alpha1/customhttproute_validation_test.go` | CRD validation unit tests |
+| `internal/controller/customhttproute/catchall_test.go` | Catch-all route generation tests |
+| `internal/webhook/hostname_checker_test.go` | Webhook conflict detection tests (46 tests) |
 | `test/e2e/e2e_test.go` | End-to-end integration tests |
 | `test/utils/utils.go` | Test helper utilities |
 
@@ -508,12 +539,21 @@ if !object.DeletionTimestamp.IsZero() {
 
 ### Status Conditions
 
-CustomHTTPRoute uses these condition types:
+Conditions are set via `meta.SetStatusCondition()` with `ObservedGeneration: object.Generation` so clients can detect stale status. Reason/message constants are defined in `internal/controller/conditions.go`; the per-controller status updaters live in each controller's `status.go`.
+
+CustomHTTPRoute condition types:
 
 | Condition | Description |
 |-----------|-------------|
 | `Reconciled` | Whether the manifest was processed |
 | `ConfigMapSynced` | Whether the ConfigMap was successfully generated |
+
+ExternalProcessorAttachment condition types:
+
+| Condition | Description |
+|-----------|-------------|
+| `Reconciled` | Whether the attachment was processed |
+| `EnvoyFilterSynced` | Whether the EnvoyFilters were generated and synced |
 
 ---
 
@@ -549,6 +589,15 @@ operator:
   args:
     - --leader-elect
     - --health-probe-bind-address=:8081
+  webhook:
+    enabled: false              # opt-in
+    port: 9443
+    timeoutSeconds: 10
+    customHTTPRouteFailurePolicy: Fail
+    httpRouteFailurePolicy: Ignore
+    namespaceSelector:          # excludes kube-system, kube-public, kube-node-lease
+    certManager:
+      enabled: false
   pdb:
     enabled: false
   hpa:
@@ -697,6 +746,12 @@ const configMapPartLabel = "customrouter.freepik.com/part"
 12. **Route Expansion Cap**: `ExpandRoutes` rejects CRDs that would generate more than 500,000 routes (controlled by `MaxRoutesPerCRD`).
 
 13. **Header Injection Protection**: When the ext_proc finds no matching route, it explicitly removes the `x-customrouter-cluster` header to prevent external clients from injecting arbitrary routing decisions.
+
+14. **Webhook Conflict Detection**: Conflicts are evaluated using the full `HTTPRouteMatch` surface — path + method + headers + query parameters. Empty fields mean "matches all" (conservative: assumes conflict when unsure). Path trailing slashes are normalized (`/api/` = `/api`).
+
+15. **Webhook Auto-Cert**: When `--enable-webhooks` is set without `--webhook-cert-path`, the operator auto-generates TLS certs and shares them across replicas via a Secret. A `CABundleReconciler` periodically re-patches the webhook config.
+
+16. **gRPC Reflection**: The external processor only registers gRPC reflection when `--debug=true`. In production, reflection is disabled to prevent service enumeration.
 
 ---
 

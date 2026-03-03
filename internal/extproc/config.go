@@ -1,5 +1,5 @@
 /*
-Copyright 2024.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -59,6 +59,9 @@ type ServerConfig struct {
 	// MaxConnectionAgeGrace is an additive period after MaxConnectionAge after which
 	// the connection will be forcibly closed
 	MaxConnectionAgeGrace time.Duration
+
+	// Debug enables debug mode (verbose logging, gRPC reflection, etc.)
+	Debug bool
 
 	// AccessLogEnabled enables access logging
 	AccessLogEnabled bool

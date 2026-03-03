@@ -1,5 +1,5 @@
 /*
-Copyright 2024.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"go.uber.org/zap"
@@ -49,22 +50,30 @@ func main() {
 		"Namespace to read route ConfigMaps from (empty = all namespaces)")
 
 	// gRPC server configuration flags
-	flag.IntVar(&config.MaxRecvMsgSize, "grpc-max-recv-msg-size", config.MaxRecvMsgSize, "Maximum message size the server can receive (bytes)")
-	flag.IntVar(&config.MaxSendMsgSize, "grpc-max-send-msg-size", config.MaxSendMsgSize, "Maximum message size the server can send (bytes)")
-	flag.Func("grpc-max-concurrent-streams", "Maximum number of concurrent streams per connection (default 1000)", func(s string) error {
-		var v uint64
-		_, err := fmt.Sscanf(s, "%d", &v)
-		if err != nil {
-			return err
-		}
-		config.MaxConcurrentStreams = uint32(v)
-		return nil
-	})
-	flag.DurationVar(&config.KeepaliveTime, "grpc-keepalive-time", config.KeepaliveTime, "Time after which server pings client if no activity")
-	flag.DurationVar(&config.KeepaliveTimeout, "grpc-keepalive-timeout", config.KeepaliveTimeout, "Time server waits for activity after keepalive ping")
-	flag.DurationVar(&config.MaxConnectionIdle, "grpc-max-connection-idle", config.MaxConnectionIdle, "Maximum time a connection may be idle before being closed")
-	flag.DurationVar(&config.MaxConnectionAge, "grpc-max-connection-age", config.MaxConnectionAge, "Maximum time a connection may exist before being closed")
-	flag.DurationVar(&config.MaxConnectionAgeGrace, "grpc-max-connection-age-grace", config.MaxConnectionAgeGrace, "Grace period after max-connection-age before forcibly closing")
+	flag.IntVar(&config.MaxRecvMsgSize, "grpc-max-recv-msg-size",
+		config.MaxRecvMsgSize, "Maximum message size the server can receive (bytes)")
+	flag.IntVar(&config.MaxSendMsgSize, "grpc-max-send-msg-size",
+		config.MaxSendMsgSize, "Maximum message size the server can send (bytes)")
+	flag.Func("grpc-max-concurrent-streams",
+		"Maximum number of concurrent streams per connection (default 1000)",
+		func(s string) error {
+			v, err := strconv.ParseUint(s, 10, 32)
+			if err != nil {
+				return fmt.Errorf("invalid value %q: %w", s, err)
+			}
+			config.MaxConcurrentStreams = uint32(v)
+			return nil
+		})
+	flag.DurationVar(&config.KeepaliveTime, "grpc-keepalive-time",
+		config.KeepaliveTime, "Time after which server pings client if no activity")
+	flag.DurationVar(&config.KeepaliveTimeout, "grpc-keepalive-timeout",
+		config.KeepaliveTimeout, "Time server waits for activity after keepalive ping")
+	flag.DurationVar(&config.MaxConnectionIdle, "grpc-max-connection-idle",
+		config.MaxConnectionIdle, "Maximum time a connection may be idle before being closed")
+	flag.DurationVar(&config.MaxConnectionAge, "grpc-max-connection-age",
+		config.MaxConnectionAge, "Maximum time a connection may exist before being closed")
+	flag.DurationVar(&config.MaxConnectionAgeGrace, "grpc-max-connection-age-grace",
+		config.MaxConnectionAgeGrace, "Grace period after max-connection-age before forcibly closing")
 
 	flag.Parse()
 
@@ -75,11 +84,13 @@ func main() {
 	if debug {
 		logConfig.Level = zap.NewAtomicLevelAt(zapcore.DebugLevel)
 	}
+	config.Debug = debug
 	logger, err := logConfig.Build()
 	if err != nil {
-		panic(err)
+		fmt.Fprintf(os.Stderr, "failed to build logger: %v\n", err)
+		os.Exit(1)
 	}
-	defer logger.Sync()
+	defer func() { _ = logger.Sync() }()
 
 	// Create Kubernetes client
 	var k8sConfig *rest.Config

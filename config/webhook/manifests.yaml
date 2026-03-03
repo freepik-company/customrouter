@@ -1,0 +1,26 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: validating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-customrouter-freepik-com-v1alpha1-customhttproute
+  failurePolicy: Fail
+  name: vcustomhttproute.kb.io
+  rules:
+  - apiGroups:
+    - customrouter.freepik.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - customhttproutes
+  sideEffects: None

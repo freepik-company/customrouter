@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -60,6 +60,7 @@ type ExternalProcessorRef struct {
 	// Defaults to "5s" if not specified.
 	// +optional
 	// +kubebuilder:default="5s"
+	// +kubebuilder:validation:Pattern=`^[0-9]+(s|ms|m|h)$`
 	Timeout string `json:"timeout,omitempty"`
 
 	// messageTimeout is the timeout for individual messages sent to the external processor.
@@ -68,6 +69,7 @@ type ExternalProcessorRef struct {
 	// Defaults to "5s" if not specified.
 	// +optional
 	// +kubebuilder:default="5s"
+	// +kubebuilder:validation:Pattern=`^[0-9]+(s|ms|m|h)$`
 	MessageTimeout string `json:"messageTimeout,omitempty"`
 }
 
@@ -106,6 +108,10 @@ type ExternalProcessorAttachmentSpec struct {
 
 // ExternalProcessorAttachmentStatus defines the observed state of ExternalProcessorAttachment.
 type ExternalProcessorAttachmentStatus struct {
+	// observedGeneration is the most recent generation observed by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
 	// conditions represent the current state of the ExternalProcessorAttachment resource.
 	// +listType=map
 	// +listMapKey=type

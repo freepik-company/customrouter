@@ -1,5 +1,5 @@
 /*
-Copyright 2026.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,7 +18,6 @@ package externalprocessorattachment
 
 import (
 	"context"
-	"fmt"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -26,12 +25,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	customrouterfreepikcomv1alpha1 "github.com/freepik-company/customrouter/api/v1alpha1"
+	crv1alpha1 "github.com/freepik-company/customrouter/api/v1alpha1"
 	"github.com/freepik-company/customrouter/internal/controller"
-)
-
-const (
-	ExternalProcessorAttachmentResourceType = "ExternalProcessorAttachment"
 )
 
 // ExternalProcessorAttachmentReconciler reconciles a ExternalProcessorAttachment object
@@ -52,36 +47,31 @@ func (r *ExternalProcessorAttachmentReconciler) Reconcile(ctx context.Context, r
 	logger := log.FromContext(ctx)
 
 	// 1. Get the content of the resource
-	attachment := &customrouterfreepikcomv1alpha1.ExternalProcessorAttachment{}
+	attachment := &crv1alpha1.ExternalProcessorAttachment{}
 	err = r.Get(ctx, req.NamespacedName, attachment)
 
 	// 2. Check the existence inside the cluster
 	if err != nil {
-		// 2.1 It does NOT exist: manage removal
 		if err = client.IgnoreNotFound(err); err == nil {
-			logger.Info(fmt.Sprintf(controller.ResourceNotFoundError, ExternalProcessorAttachmentResourceType, req.Name))
+			logger.Info("Resource not found, ignoring since object must be deleted", "name", req.Name)
 			return result, err
 		}
-
-		// 2.2 Failed to get the resource, requeue the request
-		logger.Info(fmt.Sprintf(controller.ResourceRetrievalError, ExternalProcessorAttachmentResourceType, req.Name, err.Error()))
+		logger.Error(err, "Failed to get resource", "name", req.Name)
 		return result, err
 	}
 
 	// 3. Check if the resource instance is marked to be deleted
 	if !attachment.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(attachment, controller.ResourceFinalizer) {
-			// Delete the EnvoyFilters
 			if err = r.deleteEnvoyFilters(ctx, attachment); err != nil {
-				logger.Info(fmt.Sprintf(controller.ResourceReconcileError, ExternalProcessorAttachmentResourceType, req.Name, err.Error()))
+				logger.Error(err, "Failed to delete EnvoyFilters", "name", req.Name)
 				return result, err
 			}
 
-			// Remove the finalizer using Patch
 			patch := client.MergeFrom(attachment.DeepCopy())
 			controllerutil.RemoveFinalizer(attachment, controller.ResourceFinalizer)
 			if err = r.Patch(ctx, attachment, patch); err != nil {
-				logger.Info(fmt.Sprintf(controller.ResourceFinalizersUpdateError, ExternalProcessorAttachmentResourceType, req.Name, err.Error()))
+				logger.Error(err, "Failed to remove finalizer", "name", req.Name)
 			}
 		}
 		return ctrl.Result{}, nil
@@ -98,10 +88,11 @@ func (r *ExternalProcessorAttachmentReconciler) Reconcile(ctx context.Context, r
 
 	// 5. Update the status before the requeue
 	defer func() {
-		conditionsToApply := attachment.Status.Conditions
+		statusToApply := attachment.Status
+		statusToApply.ObservedGeneration = attachment.Generation
 		statusErr := controller.UpdateStatusWithRetry(ctx, r.Client, attachment, func(object client.Object) error {
-			att := object.(*customrouterfreepikcomv1alpha1.ExternalProcessorAttachment)
-			att.Status.Conditions = conditionsToApply
+			att := object.(*crv1alpha1.ExternalProcessorAttachment)
+			att.Status = statusToApply
 			return nil
 		})
 		if statusErr != nil {
@@ -113,7 +104,7 @@ func (r *ExternalProcessorAttachmentReconciler) Reconcile(ctx context.Context, r
 	err = r.reconcileEnvoyFilters(ctx, attachment)
 	if err != nil {
 		r.updateConditionFailed(attachment, err.Error())
-		logger.Info(fmt.Sprintf(controller.ResourceReconcileError, ExternalProcessorAttachmentResourceType, req.Name, err.Error()))
+		logger.Error(err, "Failed to reconcile EnvoyFilters", "name", req.Name)
 		return result, err
 	}
 
@@ -126,7 +117,7 @@ func (r *ExternalProcessorAttachmentReconciler) Reconcile(ctx context.Context, r
 // SetupWithManager sets up the controller with the Manager.
 func (r *ExternalProcessorAttachmentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&customrouterfreepikcomv1alpha1.ExternalProcessorAttachment{}).
+		For(&crv1alpha1.ExternalProcessorAttachment{}).
 		Named("externalprocessorattachment").
 		Complete(r)
 }

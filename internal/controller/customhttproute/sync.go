@@ -1,5 +1,5 @@
 /*
-Copyright 2024.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -157,7 +157,7 @@ func (r *CustomHTTPRouteReconciler) rebuildAllConfigMaps(ctx context.Context) er
 		partitions := r.partitionConfig(target, config)
 
 		// Create or update the ConfigMaps for this target
-		if err := r.upsertConfigMaps(ctx, target, partitions); err != nil {
+		if err := r.upsertConfigMaps(ctx, partitions); err != nil {
 			return fmt.Errorf("failed to upsert ConfigMaps for target %s: %w", target, err)
 		}
 
@@ -373,7 +373,6 @@ func (r *CustomHTTPRouteReconciler) partitionName(target string, index int) stri
 // upsertConfigMaps creates or updates all ConfigMap partitions for a target
 func (r *CustomHTTPRouteReconciler) upsertConfigMaps(
 	ctx context.Context,
-	target string,
 	partitions []ConfigMapPartition,
 ) error {
 	// Create or update each partition

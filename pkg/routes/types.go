@@ -1,5 +1,5 @@
 /*
-Copyright 2024.
+Copyright 2024-2026 Freepik Company S.L.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -36,8 +36,8 @@ type RouteAction struct {
 	RedirectStatusCode int32  `json:"redirectStatusCode,omitempty"`
 
 	// For rewrite
-	RewritePath              string `json:"rewritePath,omitempty"`
-	RewriteHostname          string `json:"rewriteHostname,omitempty"`
+	RewritePath               string `json:"rewritePath,omitempty"`
+	RewriteHostname           string `json:"rewriteHostname,omitempty"`
 	RewriteReplacePrefixMatch *bool  `json:"rewriteReplacePrefixMatch,omitempty"`
 
 	// For header operations

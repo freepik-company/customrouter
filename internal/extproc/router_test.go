@@ -10,11 +10,11 @@ func boolPtr(v bool) *bool { return &v }
 
 func TestShouldReplacePrefixMatch(t *testing.T) {
 	tests := []struct {
-		name         string
-		action       routes.RouteAction
-		routeType    string
+		name          string
+		action        routes.RouteAction
+		routeType     string
 		rewrittenBase string
-		want         bool
+		want          bool
 	}{
 		{
 			name:      "prefix route, no variables -> prefix rewrite",
