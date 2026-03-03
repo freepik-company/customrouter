@@ -56,7 +56,7 @@ flowchart LR
 
 - Kubernetes v1.26+
 - Istio v1.18+ (for gateway integration)
-- Go v1.24+ (for development)
+- Go v1.25+ (for development)
 
 ## Installation
 
@@ -227,7 +227,7 @@ See [chart/values.yaml](chart/values.yaml) for all available options.
 
 ### Prerequisites
 
-- Go v1.24+
+- Go v1.25+
 - Docker
 - kubectl
 - A Kubernetes cluster (kind, minikube, etc.)
@@ -353,7 +353,7 @@ The external processor reads route ConfigMaps and makes routing decisions for En
 | `--target-name` | `""` | Target name to filter ConfigMaps (matches `spec.targetRef.name`) |
 | `--routes-configmap-namespace` | `""` | Namespace to read ConfigMaps from (empty = all namespaces) |
 | `--access-log` | `true` | Enable access logging |
-| `--debug` | `false` | Enable debug logging |
+| `--debug` | `false` | Enable debug logging and gRPC reflection |
 | `--kubeconfig` | `""` | Path to kubeconfig (uses in-cluster config if not set) |
 
 > **Important**: Set `--routes-configmap-namespace` on the external processor to match the operator's `--routes-configmap-namespace`. This prevents stale ConfigMaps in other namespaces from causing route conflicts.
@@ -380,8 +380,8 @@ Connects an external processor to Istio gateway pods by generating EnvoyFilters.
 |-------|-------------|
 | `gatewayRef.selector` | Labels to match gateway pods |
 | `externalProcessorRef.service` | External processor service reference |
-| `externalProcessorRef.timeout` | gRPC connection timeout (default: "5s") |
-| `externalProcessorRef.messageTimeout` | Message exchange timeout (default: "5s") |
+| `externalProcessorRef.timeout` | gRPC connection timeout — valid duration string, e.g. `5s`, `500ms` (default: "5s") |
+| `externalProcessorRef.messageTimeout` | Message exchange timeout — valid duration string, e.g. `5s`, `500ms` (default: "5s") |
 | `catchAllRoute.hostnames` | Hostnames to generate catch-all routes for |
 | `catchAllRoute.backendRef` | Default backend for unmatched requests |
 
@@ -585,6 +585,16 @@ The CRD enforces the following limits to prevent resource exhaustion:
 | `matches[].priority` | Range 1–10000 |
 | `backendRefs[].name` | RFC 1123 label (max 63 chars, no dots) |
 | `backendRefs[].namespace` | RFC 1123 label (max 63 chars, no dots) |
+| `matches[].path` | MaxLength 4096 |
+| `rewrite.path` | MaxLength 4096 |
+| `rewrite.hostname` | MaxLength 253 |
+| `redirect.path` | MaxLength 4096 |
+| `redirect.hostname` | MaxLength 253 |
+| `header.name` | MaxLength 256 |
+| `header.value` | MaxLength 4096 |
+| `action.headerName` | MaxLength 256 |
+| `externalProcessorRef.timeout` | Valid duration pattern: `^[0-9]+(s\|ms\|m\|h)$` |
+| `externalProcessorRef.messageTimeout` | Valid duration pattern: `^[0-9]+(s\|ms\|m\|h)$` |
 
 Additionally, route expansion is capped at 500,000 routes per CRD at runtime. CRDs exceeding this limit are skipped with an error log.
 

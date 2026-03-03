@@ -17,7 +17,7 @@ This document helps AI agents work effectively in the **customrouter** codebase.
 |----------|-------|
 | Domain | `customrouter.freepik.com` |
 | API Group | `customrouter.freepik.com/v1alpha1` |
-| Go Version | 1.24.6 |
+| Go Version | 1.25 |
 | Controller Runtime | v0.22.4 |
 | Test Framework | Ginkgo/Gomega |
 | Linter | golangci-lint v2.5.0 |
@@ -229,8 +229,8 @@ spec:
       name: customrouter-extproc
       namespace: customrouter
       port: 9001
-    timeout: 5s          # gRPC connection timeout (default: "5s")
-    messageTimeout: 5s   # Message exchange timeout (default: "5s")
+    timeout: 5s          # gRPC connection timeout (default: "5s", pattern: ^[0-9]+(s|ms|m|h)$)
+    messageTimeout: 5s   # Message exchange timeout (default: "5s", pattern: ^[0-9]+(s|ms|m|h)$)
 
   # Optional: generate catch-all routes for hostnames without HTTPRoute
   catchAllRoute:
@@ -265,6 +265,16 @@ The `catchAllRoute` field solves this by generating an additional EnvoyFilter th
 | `backendRefs[].name` | RFC 1123 label: `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`, MaxLength=63 |
 | `backendRefs[].namespace` | RFC 1123 label: `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`, MaxLength=63 |
 | `targetRef.name` | RFC 1123 label: `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`, MaxLength=63 |
+| `matches[].path` | MaxLength=4096 |
+| `rewrite.path` | MaxLength=4096 |
+| `rewrite.hostname` | MaxLength=253 |
+| `redirect.path` | MaxLength=4096 |
+| `redirect.hostname` | MaxLength=253 |
+| `header.name` | MaxLength=256 |
+| `header.value` | MaxLength=4096 |
+| `action.headerName` | MaxLength=256 |
+| `externalProcessorRef.timeout` | Pattern: `^[0-9]+(s\|ms\|m\|h)$`, Default="5s" |
+| `externalProcessorRef.messageTimeout` | Pattern: `^[0-9]+(s\|ms\|m\|h)$`, Default="5s" |
 
 ---
 
@@ -398,7 +408,7 @@ labels:
 |------|---------|-------------|
 | `--addr` | `:9001` | gRPC listen address |
 | `--target-name` | `default` | Target name to filter ConfigMaps |
-| `--debug` | `false` | Enable debug logging |
+| `--debug` | `false` | Enable debug logging and gRPC reflection |
 | `--access-log` | `true` | Enable access logging |
 | `--kubeconfig` | `` | Path to kubeconfig (uses in-cluster if not set) |
 | `--grpc-max-recv-msg-size` | 4MB | Max receive message size |
@@ -722,6 +732,8 @@ const configMapPartLabel = "customrouter.freepik.com/part"
 14. **Webhook Conflict Detection**: Conflicts are evaluated using the full `HTTPRouteMatch` surface — path + method + headers + query parameters. Empty fields mean "matches all" (conservative: assumes conflict when unsure). Path trailing slashes are normalized (`/api/` = `/api`).
 
 15. **Webhook Auto-Cert**: When `--enable-webhooks` is set without `--webhook-cert-path`, the operator auto-generates TLS certs and shares them across replicas via a Secret. A `CABundleReconciler` periodically re-patches the webhook config.
+
+16. **gRPC Reflection**: The external processor only registers gRPC reflection when `--debug=true`. In production, reflection is disabled to prevent service enumeration.
 
 ---
 
