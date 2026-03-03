@@ -60,6 +60,7 @@ type ExternalProcessorRef struct {
 	// Defaults to "5s" if not specified.
 	// +optional
 	// +kubebuilder:default="5s"
+	// +kubebuilder:validation:Pattern=`^[0-9]+(s|ms|m|h)$`
 	Timeout string `json:"timeout,omitempty"`
 
 	// messageTimeout is the timeout for individual messages sent to the external processor.
@@ -68,6 +69,7 @@ type ExternalProcessorRef struct {
 	// Defaults to "5s" if not specified.
 	// +optional
 	// +kubebuilder:default="5s"
+	// +kubebuilder:validation:Pattern=`^[0-9]+(s|ms|m|h)$`
 	MessageTimeout string `json:"messageTimeout,omitempty"`
 }
 

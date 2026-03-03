@@ -84,6 +84,7 @@ func main() {
 	if debug {
 		logConfig.Level = zap.NewAtomicLevelAt(zapcore.DebugLevel)
 	}
+	config.Debug = debug
 	logger, err := logConfig.Build()
 	if err != nil {
 		panic(err)

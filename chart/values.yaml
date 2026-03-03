@@ -220,10 +220,18 @@ externalProcessors:
       port: 9001
 
     # -- Pod security context
-    podSecurityContext: {}
+    podSecurityContext:
+      runAsNonRoot: true
+      seccompProfile:
+        type: RuntimeDefault
 
     # -- Container security context
-    securityContext: {}
+    securityContext:
+      readOnlyRootFilesystem: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
 
     # -- Resource requests and limits
     resources:

@@ -60,6 +60,9 @@ type ServerConfig struct {
 	// the connection will be forcibly closed
 	MaxConnectionAgeGrace time.Duration
 
+	// Debug enables debug mode (verbose logging, gRPC reflection, etc.)
+	Debug bool
+
 	// AccessLogEnabled enables access logging
 	AccessLogEnabled bool
 

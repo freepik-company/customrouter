@@ -91,8 +91,10 @@ func NewServer(config *ServerConfig, logger *zap.Logger) (*Server, error) {
 	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 	healthpb.RegisterHealthServer(grpcServer, healthServer)
 
-	// Register reflection for debugging
-	reflection.Register(grpcServer)
+	// Register reflection only in debug mode
+	if config.Debug {
+		reflection.Register(grpcServer)
+	}
 
 	return &Server{
 		grpcServer: grpcServer,
@@ -138,7 +140,9 @@ func (s *Server) Start(ctx context.Context) error {
 		<-ctx.Done()
 		s.logger.Info("shutting down extproc server")
 		s.grpcServer.GracefulStop()
-		_ = s.loader.Close()
+		if err := s.loader.Close(); err != nil {
+			s.logger.Warn("failed to close loader", zap.Error(err))
+		}
 	}()
 
 	return s.grpcServer.Serve(listener)
@@ -147,5 +151,7 @@ func (s *Server) Start(ctx context.Context) error {
 // Stop stops the gRPC server
 func (s *Server) Stop() {
 	s.grpcServer.GracefulStop()
-	_ = s.loader.Close()
+	if err := s.loader.Close(); err != nil {
+		s.logger.Warn("failed to close loader", zap.Error(err))
+	}
 }
