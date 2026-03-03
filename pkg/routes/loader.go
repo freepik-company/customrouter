@@ -150,7 +150,7 @@ func (l *Loader) Watch(onChange func(*RoutesConfig)) error {
 	}
 
 	if err := watcher.Add(l.routesDir); err != nil {
-		watcher.Close()
+		_ = watcher.Close()
 		return fmt.Errorf("failed to watch directory: %w", err)
 	}
 

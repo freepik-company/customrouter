@@ -143,7 +143,9 @@ func main() {
 
 	if enableWebhooks && webhookCertPath == "" {
 		if webhookConfigName == "" || webhookServiceName == "" {
-			setupLog.Error(nil, "--webhook-config-name and --webhook-service-name are required in auto-cert mode (when --webhook-cert-path is not set)")
+			setupLog.Error(nil,
+				"--webhook-config-name and --webhook-service-name are required "+
+					"in auto-cert mode (when --webhook-cert-path is not set)")
 			os.Exit(1)
 		}
 		webhookCertPath = "/tmp/k8s-webhook-server/serving-certs"
