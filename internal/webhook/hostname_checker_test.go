@@ -443,7 +443,7 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 		{
 			name: "no conflict — rule-level policy override to Disabled uses raw paths",
 			route: func() *customrouterv1alpha1.CustomHTTPRoute {
-				r := newCustomHTTPRouteWithPrefixes("route-a", "default", "default", []string{"example.com"},
+				r := newCustomHTTPRouteWithPrefixes("route-a", "ns1", "target-2", []string{"example.com"},
 					[]customrouterv1alpha1.PathMatch{
 						{Path: "/profile", Type: customrouterv1alpha1.MatchTypePathPrefix},
 					},
