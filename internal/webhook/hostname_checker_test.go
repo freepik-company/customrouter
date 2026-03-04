@@ -101,6 +101,21 @@ func newHTTPRouteWithMatches(hostnames []string, matches []gatewayv1.HTTPRouteMa
 	return hr
 }
 
+func newCustomHTTPRouteWithPrefixes(
+	name, namespace, target string,
+	hostnames []string,
+	matches []customrouterv1alpha1.PathMatch,
+	prefixValues []string,
+	policy customrouterv1alpha1.PathPrefixPolicy,
+) *customrouterv1alpha1.CustomHTTPRoute {
+	route := newCustomHTTPRouteWithPaths(name, namespace, target, hostnames, matches)
+	route.Spec.PathPrefixes = &customrouterv1alpha1.PathPrefixes{
+		Values: prefixValues,
+		Policy: policy,
+	}
+	return route
+}
+
 func ptrTo[T any](v T) *T {
 	return &v
 }
@@ -337,6 +352,154 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 					},
 				}),
 			},
+			wantErr:     true,
+			errContains: "route conflict",
+		},
+		// --- PathPrefixes-aware conflict detection ---
+		{
+			name: "no conflict — Required + disjoint prefixes + same raw paths",
+			route: newCustomHTTPRouteWithPrefixes("route-a", "default", "default", []string{"example.com"},
+				[]customrouterv1alpha1.PathMatch{
+					{Path: "/profile", Type: customrouterv1alpha1.MatchTypePathPrefix},
+					{Path: "/settings", Type: customrouterv1alpha1.MatchTypeExact},
+				},
+				[]string{"pa", "gu", "kn", "ml"},
+				customrouterv1alpha1.PathPrefixPolicyRequired,
+			),
+			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
+				*newCustomHTTPRouteWithPrefixes("route-b", "default", "default", []string{"example.com"},
+					[]customrouterv1alpha1.PathMatch{
+						{Path: "/profile", Type: customrouterv1alpha1.MatchTypePathPrefix},
+						{Path: "/settings", Type: customrouterv1alpha1.MatchTypeExact},
+					},
+					[]string{"az", "hy", "ka"},
+					customrouterv1alpha1.PathPrefixPolicyRequired,
+				),
+			},
+			wantErr: false,
+		},
+		{
+			name: "conflict — Required + overlapping prefixes + same raw paths",
+			route: newCustomHTTPRouteWithPrefixes("route-a", "default", "default", []string{"example.com"},
+				[]customrouterv1alpha1.PathMatch{
+					{Path: "/profile", Type: customrouterv1alpha1.MatchTypePathPrefix},
+				},
+				[]string{"es", "fr"},
+				customrouterv1alpha1.PathPrefixPolicyRequired,
+			),
+			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
+				*newCustomHTTPRouteWithPrefixes("route-b", "default", "default", []string{"example.com"},
+					[]customrouterv1alpha1.PathMatch{
+						{Path: "/profile", Type: customrouterv1alpha1.MatchTypePathPrefix},
+					},
+					[]string{"fr", "de"},
+					customrouterv1alpha1.PathPrefixPolicyRequired,
+				),
+			},
+			wantErr:     true,
+			errContains: "route conflict",
+		},
+		{
+			name: "conflict — Optional + disjoint prefixes + same raw paths (unprefixed overlap)",
+			route: newCustomHTTPRouteWithPrefixes("route-a", "default", "default", []string{"example.com"},
+				[]customrouterv1alpha1.PathMatch{
+					{Path: "/profile", Type: customrouterv1alpha1.MatchTypePathPrefix},
+				},
+				[]string{"pa", "gu"},
+				customrouterv1alpha1.PathPrefixPolicyOptional,
+			),
+			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
+				*newCustomHTTPRouteWithPrefixes("route-b", "default", "default", []string{"example.com"},
+					[]customrouterv1alpha1.PathMatch{
+						{Path: "/profile", Type: customrouterv1alpha1.MatchTypePathPrefix},
+					},
+					[]string{"az", "hy"},
+					customrouterv1alpha1.PathPrefixPolicyOptional,
+				),
+			},
+			wantErr:     true,
+			errContains: "route conflict",
+		},
+		{
+			name: "no conflict — Required vs Disabled + same raw paths (expanded vs raw don't match)",
+			route: newCustomHTTPRouteWithPrefixes("route-a", "default", "default", []string{"example.com"},
+				[]customrouterv1alpha1.PathMatch{
+					{Path: "/profile", Type: customrouterv1alpha1.MatchTypePathPrefix},
+				},
+				[]string{"es", "fr"},
+				customrouterv1alpha1.PathPrefixPolicyRequired,
+			),
+			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
+				*newCustomHTTPRouteWithPrefixes("route-b", "default", "default", []string{"example.com"},
+					[]customrouterv1alpha1.PathMatch{
+						{Path: "/profile", Type: customrouterv1alpha1.MatchTypePathPrefix},
+					},
+					[]string{"es", "fr"},
+					customrouterv1alpha1.PathPrefixPolicyDisabled,
+				),
+			},
+			wantErr: false,
+		},
+		{
+			name: "no conflict — rule-level policy override to Disabled uses raw paths",
+			route: func() *customrouterv1alpha1.CustomHTTPRoute {
+				r := newCustomHTTPRouteWithPrefixes("route-a", "default", "default", []string{"example.com"},
+					[]customrouterv1alpha1.PathMatch{
+						{Path: "/profile", Type: customrouterv1alpha1.MatchTypePathPrefix},
+					},
+					[]string{"es", "fr"},
+					customrouterv1alpha1.PathPrefixPolicyRequired,
+				)
+				// Override rule-level policy to Disabled
+				r.Spec.Rules[0].PathPrefixes = &customrouterv1alpha1.RulePathPrefixes{
+					Policy: customrouterv1alpha1.PathPrefixPolicyDisabled,
+				}
+				return r
+			}(),
+			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
+				*newCustomHTTPRouteWithPrefixes("route-b", "default", "default", []string{"example.com"},
+					[]customrouterv1alpha1.PathMatch{
+						{Path: "/profile", Type: customrouterv1alpha1.MatchTypePathPrefix},
+					},
+					[]string{"az", "hy"},
+					customrouterv1alpha1.PathPrefixPolicyRequired,
+				),
+			},
+			wantErr: false,
+		},
+		{
+			name: "no conflict — expandMatchTypes restricts expansion to Exact only",
+			route: func() *customrouterv1alpha1.CustomHTTPRoute {
+				r := newCustomHTTPRouteWithPrefixes("route-a", "default", "default", []string{"example.com"},
+					[]customrouterv1alpha1.PathMatch{
+						{Path: "/profile", Type: customrouterv1alpha1.MatchTypePathPrefix},
+					},
+					[]string{"es", "fr"},
+					customrouterv1alpha1.PathPrefixPolicyRequired,
+				)
+				// Only expand Exact, not PathPrefix
+				r.Spec.PathPrefixes.ExpandMatchTypes = []customrouterv1alpha1.MatchType{
+					customrouterv1alpha1.MatchTypeExact,
+				}
+				return r
+			}(),
+			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
+				func() customrouterv1alpha1.CustomHTTPRoute {
+					r := newCustomHTTPRouteWithPrefixes("route-b", "default", "default", []string{"example.com"},
+						[]customrouterv1alpha1.PathMatch{
+							{Path: "/profile", Type: customrouterv1alpha1.MatchTypePathPrefix},
+						},
+						[]string{"az", "hy"},
+						customrouterv1alpha1.PathPrefixPolicyRequired,
+					)
+					r.Spec.PathPrefixes.ExpandMatchTypes = []customrouterv1alpha1.MatchType{
+						customrouterv1alpha1.MatchTypeExact,
+					}
+					return *r
+				}(),
+			},
+			// PathPrefix matches are NOT expanded (expandMatchTypes=[Exact]),
+			// so raw /profile vs raw /profile → conflict
 			wantErr:     true,
 			errContains: "route conflict",
 		},

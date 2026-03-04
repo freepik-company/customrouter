@@ -195,24 +195,104 @@ type queryParamMatch struct {
 // extractCustomRouteMatches returns all unique route matches from a CustomHTTPRoute.
 // CustomHTTPRoute does not support Method, header, or query parameter matching,
 // so those fields are always empty (which means "matches all" during comparison).
+//
+// Paths are expanded using pathPrefixes configuration (matching the operator's logic
+// in pkg/routes/expand.go) so that conflict detection compares actual effective paths.
+// Regex matches are kept as raw paths — expanding regex for comparison would be
+// complex and error-prone, so conservative false positives are preferred.
 func extractCustomRouteMatches(route *customrouterv1alpha1.CustomHTTPRoute) []routeMatch {
 	seen := make(map[string]struct{})
 	var matches []routeMatch
+
+	var prefixes []string
+	if route.Spec.PathPrefixes != nil {
+		prefixes = route.Spec.PathPrefixes.Values
+	}
+
 	for _, rule := range route.Spec.Rules {
+		policy := getEffectivePolicy(route.Spec.PathPrefixes, &rule)
+		expandTypes := getEffectiveExpandMatchTypes(route.Spec.PathPrefixes, &rule)
+
 		for _, m := range rule.Matches {
 			path := normalizePath(m.Path)
-			key := string(m.Type) + ":" + path
-			if _, ok := seen[key]; ok {
+			shouldExpand := matchTypeExpandable(m.Type, expandTypes)
+
+			// Regex: always keep raw path (expansion would be unreliable for comparison)
+			if !shouldExpand || m.Type == customrouterv1alpha1.MatchTypeRegex {
+				addRouteMatch(&matches, seen, string(m.Type), path)
 				continue
 			}
-			seen[key] = struct{}{}
-			matches = append(matches, routeMatch{
-				PathType: string(m.Type),
-				Path:     path,
-			})
+
+			// Exact / PathPrefix: expand per policy
+			switch policy {
+			case customrouterv1alpha1.PathPrefixPolicyDisabled:
+				addRouteMatch(&matches, seen, string(m.Type), path)
+
+			case customrouterv1alpha1.PathPrefixPolicyRequired:
+				for _, pfx := range prefixes {
+					addRouteMatch(&matches, seen, string(m.Type), "/"+pfx+path)
+				}
+
+			case customrouterv1alpha1.PathPrefixPolicyOptional:
+				addRouteMatch(&matches, seen, string(m.Type), path)
+				for _, pfx := range prefixes {
+					addRouteMatch(&matches, seen, string(m.Type), "/"+pfx+path)
+				}
+			}
 		}
 	}
 	return matches
+}
+
+// getEffectivePolicy returns the effective pathPrefixes policy for a rule,
+// checking rule-level override first, then spec-level, defaulting to Optional.
+func getEffectivePolicy(specPrefixes *customrouterv1alpha1.PathPrefixes, rule *customrouterv1alpha1.Rule) customrouterv1alpha1.PathPrefixPolicy {
+	if rule.PathPrefixes != nil {
+		return rule.PathPrefixes.Policy
+	}
+	if specPrefixes != nil && specPrefixes.Policy != "" {
+		return specPrefixes.Policy
+	}
+	return customrouterv1alpha1.PathPrefixPolicyOptional
+}
+
+// getEffectiveExpandMatchTypes returns which match types should be expanded.
+// Rule-level overrides spec-level. Empty/nil means expand all types.
+func getEffectiveExpandMatchTypes(specPrefixes *customrouterv1alpha1.PathPrefixes, rule *customrouterv1alpha1.Rule) []customrouterv1alpha1.MatchType {
+	if rule.PathPrefixes != nil && len(rule.PathPrefixes.ExpandMatchTypes) > 0 {
+		return rule.PathPrefixes.ExpandMatchTypes
+	}
+	if specPrefixes != nil && len(specPrefixes.ExpandMatchTypes) > 0 {
+		return specPrefixes.ExpandMatchTypes
+	}
+	return nil
+}
+
+// matchTypeExpandable returns true if the given match type should be expanded
+// with prefixes. When expandTypes is nil/empty, all types are expandable.
+func matchTypeExpandable(mt customrouterv1alpha1.MatchType, expandTypes []customrouterv1alpha1.MatchType) bool {
+	if len(expandTypes) == 0 {
+		return true
+	}
+	for _, t := range expandTypes {
+		if t == mt {
+			return true
+		}
+	}
+	return false
+}
+
+// addRouteMatch appends a routeMatch if the pathType:path key hasn't been seen.
+func addRouteMatch(matches *[]routeMatch, seen map[string]struct{}, pathType, path string) {
+	key := pathType + ":" + path
+	if _, ok := seen[key]; ok {
+		return
+	}
+	seen[key] = struct{}{}
+	*matches = append(*matches, routeMatch{
+		PathType: pathType,
+		Path:     path,
+	})
 }
 
 // extractHTTPRouteMatches returns all route matches from a Gateway API HTTPRoute,
