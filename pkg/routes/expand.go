@@ -33,7 +33,7 @@ const (
 // ExpandRoutes expands a CustomHTTPRoute into a list of routes per host.
 // It caps the total number of generated routes to MaxRoutesPerCRD to prevent
 // resource exhaustion from overly large CRDs.
-func ExpandRoutes(cr *v1alpha1.CustomHTTPRoute) (map[string][]Route, error) {
+func ExpandRoutes(cr *v1alpha1.CustomHTTPRoute, externalNames map[string]string) (map[string][]Route, error) {
 	hosts := make(map[string][]Route)
 
 	numPrefixes := 0
@@ -57,7 +57,7 @@ func ExpandRoutes(cr *v1alpha1.CustomHTTPRoute) (map[string][]Route, error) {
 		var routes []Route
 
 		for _, rule := range cr.Spec.Rules {
-			ruleRoutes := expandRule(cr.Spec.PathPrefixes, &rule)
+			ruleRoutes := expandRule(cr.Spec.PathPrefixes, &rule, externalNames)
 			routes = append(routes, ruleRoutes...)
 		}
 
@@ -70,25 +70,25 @@ func ExpandRoutes(cr *v1alpha1.CustomHTTPRoute) (map[string][]Route, error) {
 }
 
 // expandRule expands a single rule into multiple routes based on path prefixes
-func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []Route {
+func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule, externalNames map[string]string) []Route {
 	var routes []Route
 
-	policy := getEffectivePolicy(specPrefixes, rule)
-	expandTypes := getEffectiveExpandMatchTypes(specPrefixes, rule)
+	policy := GetEffectivePolicy(specPrefixes, rule)
+	expandTypes := GetEffectiveExpandMatchTypes(specPrefixes, rule)
 
 	var prefixes []string
 	if specPrefixes != nil {
 		prefixes = specPrefixes.Values
 	}
 
-	backend := buildBackendString(rule.BackendRefs)
+	backend := buildBackendString(rule.BackendRefs, externalNames)
 	actions := convertActions(rule.Actions)
 
 	for _, match := range rule.Matches {
 		matchType := getMatchType(match.Type)
 		priority := getEffectivePriority(match.Priority)
 
-		shouldExpand := shouldExpandMatchType(match.Type, expandTypes)
+		shouldExpand := ShouldExpandMatchType(match.Type, expandTypes)
 
 		if !shouldExpand {
 			routes = append(routes, Route{
@@ -102,7 +102,7 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []Rout
 		}
 
 		if match.Type == v1alpha1.MatchTypeRegex {
-			expandedPath := expandRegexWithPrefixes(match.Path, prefixes, policy)
+			expandedPath := ExpandRegexWithPrefixes(match.Path, prefixes, policy)
 			routes = append(routes, Route{
 				Path:     expandedPath,
 				Type:     matchType,
@@ -205,8 +205,8 @@ func convertActions(apiActions []v1alpha1.Action) []RouteAction {
 	return actions
 }
 
-// getEffectivePolicy returns the policy to use for a rule
-func getEffectivePolicy(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) v1alpha1.PathPrefixPolicy {
+// GetEffectivePolicy returns the policy to use for a rule
+func GetEffectivePolicy(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) v1alpha1.PathPrefixPolicy {
 	// Rule-level override takes precedence
 	if rule.PathPrefixes != nil {
 		return rule.PathPrefixes.Policy
@@ -221,9 +221,9 @@ func getEffectivePolicy(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule
 	return v1alpha1.PathPrefixPolicyOptional
 }
 
-// getEffectiveExpandMatchTypes returns the list of match types that should be expanded.
+// GetEffectiveExpandMatchTypes returns the list of match types that should be expanded.
 // Rule-level overrides spec-level. Empty list means expand all types (default).
-func getEffectiveExpandMatchTypes(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []v1alpha1.MatchType {
+func GetEffectiveExpandMatchTypes(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule) []v1alpha1.MatchType {
 	if rule.PathPrefixes != nil && len(rule.PathPrefixes.ExpandMatchTypes) > 0 {
 		return rule.PathPrefixes.ExpandMatchTypes
 	}
@@ -235,9 +235,9 @@ func getEffectiveExpandMatchTypes(specPrefixes *v1alpha1.PathPrefixes, rule *v1a
 	return nil
 }
 
-// shouldExpandMatchType returns true if the given match type should be expanded with prefixes.
+// ShouldExpandMatchType returns true if the given match type should be expanded with prefixes.
 // When expandTypes is nil/empty, all types are expanded (default behavior).
-func shouldExpandMatchType(matchType v1alpha1.MatchType, expandTypes []v1alpha1.MatchType) bool {
+func ShouldExpandMatchType(matchType v1alpha1.MatchType, expandTypes []v1alpha1.MatchType) bool {
 	if len(expandTypes) == 0 {
 		return true
 	}
@@ -270,7 +270,7 @@ func getEffectivePriority(priority int32) int32 {
 }
 
 // buildBackendString builds the backend address from BackendRefs
-func buildBackendString(refs []v1alpha1.BackendRef) string {
+func buildBackendString(refs []v1alpha1.BackendRef, externalNames map[string]string) string {
 	if len(refs) == 0 {
 		return ""
 	}
@@ -280,6 +280,12 @@ func buildBackendString(refs []v1alpha1.BackendRef) string {
 	// and don't append the .svc.cluster.local suffix
 	if strings.Contains(ref.Name, ".") {
 		return ref.Name + ":" + strconv.Itoa(int(ref.Port))
+	}
+	// Check if this is an ExternalName service
+	if externalNames != nil {
+		if extName, ok := externalNames[ref.Name+"/"+ref.Namespace]; ok {
+			return extName + ":" + strconv.Itoa(int(ref.Port))
+		}
 	}
 	return ref.Name + "." + ref.Namespace + ".svc.cluster.local:" + strconv.Itoa(int(ref.Port))
 }
@@ -331,13 +337,13 @@ func MergeRoutesConfig(configs ...map[string][]Route) *RoutesConfig {
 	return result
 }
 
-// expandRegexWithPrefixes modifies a regex pattern to include language prefix matching.
+// ExpandRegexWithPrefixes modifies a regex pattern to include language prefix matching.
 // It handles the insertion point carefully to maintain regex validity.
 //
 // For policy Optional: ^/path$ becomes ^(?:/(es|fr|it))?/path$
 // For policy Required: ^/path$ becomes ^/(es|fr|it)/path$
 // For policy Disabled: returns the original regex unchanged
-func expandRegexWithPrefixes(pattern string, prefixes []string, policy v1alpha1.PathPrefixPolicy) string {
+func ExpandRegexWithPrefixes(pattern string, prefixes []string, policy v1alpha1.PathPrefixPolicy) string {
 	// No modification needed for disabled policy or empty prefixes
 	if policy == v1alpha1.PathPrefixPolicyDisabled || len(prefixes) == 0 {
 		return pattern

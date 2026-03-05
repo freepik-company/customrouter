@@ -27,6 +27,7 @@ import (
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	customrouterv1alpha1 "github.com/freepik-company/customrouter/api/v1alpha1"
+	"github.com/freepik-company/customrouter/pkg/routes"
 )
 
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
@@ -193,26 +194,86 @@ type queryParamMatch struct {
 }
 
 // extractCustomRouteMatches returns all unique route matches from a CustomHTTPRoute.
+// It expands paths according to pathPrefixes policy (Required/Optional/Disabled)
+// so that conflict detection compares the actual expanded paths, not raw templates.
 // CustomHTTPRoute does not support Method, header, or query parameter matching,
 // so those fields are always empty (which means "matches all" during comparison).
 func extractCustomRouteMatches(route *customrouterv1alpha1.CustomHTTPRoute) []routeMatch {
 	seen := make(map[string]struct{})
 	var matches []routeMatch
-	for _, rule := range route.Spec.Rules {
+
+	var prefixes []string
+	if route.Spec.PathPrefixes != nil {
+		prefixes = route.Spec.PathPrefixes.Values
+	}
+
+	for i := range route.Spec.Rules {
+		rule := &route.Spec.Rules[i]
+		policy := routes.GetEffectivePolicy(route.Spec.PathPrefixes, rule)
+		expandTypes := routes.GetEffectiveExpandMatchTypes(route.Spec.PathPrefixes, rule)
+
 		for _, m := range rule.Matches {
-			path := normalizePath(m.Path)
-			key := string(m.Type) + ":" + path
-			if _, ok := seen[key]; ok {
-				continue
+			expandedPaths := expandMatchPath(m, prefixes, policy, expandTypes)
+			for _, ep := range expandedPaths {
+				path := normalizePath(ep.path)
+				key := ep.pathType + ":" + path
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				matches = append(matches, routeMatch{
+					PathType: ep.pathType,
+					Path:     path,
+				})
 			}
-			seen[key] = struct{}{}
-			matches = append(matches, routeMatch{
-				PathType: string(m.Type),
-				Path:     path,
-			})
 		}
 	}
 	return matches
+}
+
+type expandedPath struct {
+	pathType string
+	path     string
+}
+
+// expandMatchPath expands a single PathMatch into all effective paths based on
+// the pathPrefixes policy, replicating the operator's expansion logic.
+func expandMatchPath(m customrouterv1alpha1.PathMatch, prefixes []string, policy customrouterv1alpha1.PathPrefixPolicy, expandTypes []customrouterv1alpha1.MatchType) []expandedPath {
+	pathType := string(m.Type)
+
+	if !routes.ShouldExpandMatchType(m.Type, expandTypes) {
+		return []expandedPath{{pathType: pathType, path: m.Path}}
+	}
+
+	// Regex: use the same expansion as the operator
+	if m.Type == customrouterv1alpha1.MatchTypeRegex {
+		expanded := routes.ExpandRegexWithPrefixes(m.Path, prefixes, policy)
+		return []expandedPath{{pathType: pathType, path: expanded}}
+	}
+
+	// Exact and PathPrefix
+	switch policy {
+	case customrouterv1alpha1.PathPrefixPolicyDisabled:
+		return []expandedPath{{pathType: pathType, path: m.Path}}
+
+	case customrouterv1alpha1.PathPrefixPolicyRequired:
+		result := make([]expandedPath, 0, len(prefixes))
+		for _, prefix := range prefixes {
+			result = append(result, expandedPath{pathType: pathType, path: "/" + prefix + m.Path})
+		}
+		return result
+
+	case customrouterv1alpha1.PathPrefixPolicyOptional:
+		result := make([]expandedPath, 0, len(prefixes)+1)
+		for _, prefix := range prefixes {
+			result = append(result, expandedPath{pathType: pathType, path: "/" + prefix + m.Path})
+		}
+		result = append(result, expandedPath{pathType: pathType, path: m.Path})
+		return result
+
+	default:
+		return []expandedPath{{pathType: pathType, path: m.Path}}
+	}
 }
 
 // extractHTTPRouteMatches returns all route matches from a Gateway API HTTPRoute,

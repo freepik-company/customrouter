@@ -107,25 +107,34 @@ func (r *CustomHTTPRouteReconciler) rebuildAllConfigMaps(ctx context.Context) er
 	// Track all active ConfigMap names across all targets
 	allActiveNames := make(map[string]bool)
 
-	// Process each target
-	for target, targetRoutes := range routesByTarget {
-		// Build hostname-to-namespace ownership map.
-		// Each hostname is owned by the namespace that appears first alphabetically
-		// among all CustomHTTPRoutes that declare it. Routes from non-owning
-		// namespaces are dropped to prevent cross-namespace priority hijacking.
-		hostnameOwner := make(map[string]string)
+	// Pre-resolve ExternalName services
+	externalNames := make(map[string]string)
+	for _, targetRoutes := range routesByTarget {
 		for _, route := range targetRoutes {
-			for _, hostname := range route.Spec.Hostnames {
-				if owner, exists := hostnameOwner[hostname]; !exists || route.Namespace < owner {
-					hostnameOwner[hostname] = route.Namespace
+			for _, rule := range route.Spec.Rules {
+				for _, ref := range rule.BackendRefs {
+					key := ref.Name + "/" + ref.Namespace
+					if _, seen := externalNames[key]; seen {
+						continue
+					}
+					svc := &corev1.Service{}
+					if err := r.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: ref.Namespace}, svc); err != nil {
+						continue
+					}
+					if svc.Spec.Type == corev1.ServiceTypeExternalName {
+						externalNames[key] = svc.Spec.ExternalName
+					}
 				}
 			}
 		}
+	}
 
+	// Process each target
+	for target, targetRoutes := range routesByTarget {
 		// Expand routes from all CustomHTTPRoutes for this target
 		allRoutes := make([]map[string][]routes.Route, 0, len(targetRoutes))
 		for _, route := range targetRoutes {
-			expanded, err := routes.ExpandRoutes(route)
+			expanded, err := routes.ExpandRoutes(route, externalNames)
 			if err != nil {
 				logger.Error(err, "skipping CustomHTTPRoute due to route expansion limit",
 					"name", route.Name,
@@ -133,20 +142,6 @@ func (r *CustomHTTPRouteReconciler) rebuildAllConfigMaps(ctx context.Context) er
 					"target", target)
 				continue
 			}
-
-			// Filter out hostnames not owned by this route's namespace
-			for hostname := range expanded {
-				if hostnameOwner[hostname] != route.Namespace {
-					logger.Info("dropping routes for hostname from non-owning namespace",
-						"hostname", hostname,
-						"routeNamespace", route.Namespace,
-						"ownerNamespace", hostnameOwner[hostname],
-						"routeName", route.Name,
-						"target", target)
-					delete(expanded, hostname)
-				}
-			}
-
 			allRoutes = append(allRoutes, expanded)
 		}
 

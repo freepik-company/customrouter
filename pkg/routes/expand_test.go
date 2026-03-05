@@ -125,7 +125,7 @@ func TestExpandRegexWithLangPrefixes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := expandRegexWithPrefixes(tt.input, langPrefixes, tt.policy)
+			result := ExpandRegexWithPrefixes(tt.input, langPrefixes, tt.policy)
 			if result != tt.expected {
 				t.Errorf("\ninput:    %s\nexpected: %s\ngot:      %s", tt.input, tt.expected, result)
 			}
@@ -135,7 +135,7 @@ func TestExpandRegexWithLangPrefixes(t *testing.T) {
 
 func TestExpandRegexWithEmptyPrefixes(t *testing.T) {
 	input := "^/other/[0-9]+/path$"
-	result := expandRegexWithPrefixes(input, []string{}, v1alpha1.PathPrefixPolicyOptional)
+	result := ExpandRegexWithPrefixes(input, []string{}, v1alpha1.PathPrefixPolicyOptional)
 	if result != input {
 		t.Errorf("expected no change with empty prefixes, got: %s", result)
 	}
@@ -157,7 +157,7 @@ func TestExpandedRegexCompiles(t *testing.T) {
 
 	for _, regex := range regexes {
 		t.Run(regex, func(t *testing.T) {
-			result := expandRegexWithPrefixes(regex, langPrefixes, v1alpha1.PathPrefixPolicyOptional)
+			result := ExpandRegexWithPrefixes(regex, langPrefixes, v1alpha1.PathPrefixPolicyOptional)
 			if !IsValidRegex(result) {
 				t.Errorf("expanded regex does not compile:\ninput:  %s\noutput: %s", regex, result)
 			}
@@ -223,7 +223,7 @@ func TestExpandedRegexMatches(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			expanded := expandRegexWithPrefixes(tt.regex, langPrefixes, tt.policy)
+			expanded := ExpandRegexWithPrefixes(tt.regex, langPrefixes, tt.policy)
 
 			for _, path := range tt.shouldMatch {
 				if !matchesRegex(expanded, path) {
@@ -489,7 +489,7 @@ func TestExpandRoutesWithActions(t *testing.T) {
 		},
 	}
 
-	result, err := ExpandRoutes(cr)
+	result, err := ExpandRoutes(cr, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -544,7 +544,7 @@ func TestExpandRoutesWithRedirect(t *testing.T) {
 		},
 	}
 
-	result, err := ExpandRoutes(cr)
+	result, err := ExpandRoutes(cr, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -597,7 +597,7 @@ func TestExpandExactWithPrefixesOptional(t *testing.T) {
 		},
 	}
 
-	result, err := ExpandRoutes(cr)
+	result, err := ExpandRoutes(cr, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -645,7 +645,7 @@ func TestExpandExactWithPrefixesRequired(t *testing.T) {
 		},
 	}
 
-	result, err := ExpandRoutes(cr)
+	result, err := ExpandRoutes(cr, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -692,7 +692,7 @@ func TestExpandExactWithPrefixesDisabled(t *testing.T) {
 		},
 	}
 
-	result, err := ExpandRoutes(cr)
+	result, err := ExpandRoutes(cr, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -730,7 +730,7 @@ func TestExpandMatchTypesPathPrefixOnly(t *testing.T) {
 		},
 	}
 
-	result, err := ExpandRoutes(cr)
+	result, err := ExpandRoutes(cr, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -787,7 +787,7 @@ func TestExpandMatchTypesExactAndPathPrefix(t *testing.T) {
 		},
 	}
 
-	result, err := ExpandRoutes(cr)
+	result, err := ExpandRoutes(cr, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -850,7 +850,7 @@ func TestExpandMatchTypesRuleLevelOverride(t *testing.T) {
 		},
 	}
 
-	result, err := ExpandRoutes(cr)
+	result, err := ExpandRoutes(cr, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -889,7 +889,7 @@ func TestExpandMatchTypesDefaultExpandsAll(t *testing.T) {
 		},
 	}
 
-	result, err := ExpandRoutes(cr)
+	result, err := ExpandRoutes(cr, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -967,7 +967,7 @@ func TestExpandRegexWithInlinePrefix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := expandRegexWithPrefixes(tt.input, tt.prefixes, tt.policy)
+			result := ExpandRegexWithPrefixes(tt.input, tt.prefixes, tt.policy)
 			if result != tt.expected {
 				t.Errorf("\ninput:    %s\nexpected: %s\ngot:      %s", tt.input, tt.expected, result)
 			}
@@ -991,7 +991,7 @@ func TestExpandedInlinePrefixRegexCompiles(t *testing.T) {
 			v1alpha1.PathPrefixPolicyOptional,
 		} {
 			t.Run(regex+"_"+string(policy), func(t *testing.T) {
-				result := expandRegexWithPrefixes(regex, langPrefixes, policy)
+				result := ExpandRegexWithPrefixes(regex, langPrefixes, policy)
 				if !IsValidRegex(result) {
 					t.Errorf("expanded regex does not compile:\ninput:  %s\noutput: %s", regex, result)
 				}
@@ -1060,7 +1060,7 @@ func TestExpandedInlinePrefixRegexMatches(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			expanded := expandRegexWithPrefixes(tt.regex, tt.prefixes, tt.policy)
+			expanded := ExpandRegexWithPrefixes(tt.regex, tt.prefixes, tt.policy)
 
 			for _, path := range tt.shouldMatch {
 				if !matchesRegex(expanded, path) {
@@ -1115,7 +1115,7 @@ func TestExpandRoutesWithInlinePrefixPlaceholder(t *testing.T) {
 		},
 	}
 
-	result, err := ExpandRoutes(cr)
+	result, err := ExpandRoutes(cr, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1184,7 +1184,7 @@ func TestExpandRegexWithoutPlaceholderUnchanged(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input+"_"+string(tt.policy), func(t *testing.T) {
-			result := expandRegexWithPrefixes(tt.input, langPrefixes, tt.policy)
+			result := ExpandRegexWithPrefixes(tt.input, langPrefixes, tt.policy)
 			if result != tt.expected {
 				t.Errorf("backwards compat broken:\ninput:    %s\nexpected: %s\ngot:      %s",
 					tt.input, tt.expected, result)
@@ -1235,5 +1235,90 @@ func TestConvertActionsPassesReplacePrefixMatch(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBuildBackendStringWithExternalNames(t *testing.T) {
+	externalNames := map[string]string{
+		"profile-svc/apps": "stable.profile.apps.internal",
+	}
+
+	tests := []struct {
+		name          string
+		refs          []v1alpha1.BackendRef
+		extNames      map[string]string
+		expected      string
+	}{
+		{
+			name:     "ExternalName service resolved",
+			refs:     []v1alpha1.BackendRef{{Name: "profile-svc", Namespace: "apps", Port: 8080}},
+			extNames: externalNames,
+			expected: "stable.profile.apps.internal:8080",
+		},
+		{
+			name:     "regular service unchanged",
+			refs:     []v1alpha1.BackendRef{{Name: "web", Namespace: "default", Port: 80}},
+			extNames: externalNames,
+			expected: "web.default.svc.cluster.local:80",
+		},
+		{
+			name:     "nil externalNames map",
+			refs:     []v1alpha1.BackendRef{{Name: "profile-svc", Namespace: "apps", Port: 8080}},
+			extNames: nil,
+			expected: "profile-svc.apps.svc.cluster.local:8080",
+		},
+		{
+			name:     "dotted name still takes precedence",
+			refs:     []v1alpha1.BackendRef{{Name: "my.external.host", Namespace: "default", Port: 443}},
+			extNames: externalNames,
+			expected: "my.external.host:443",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildBackendString(tt.refs, tt.extNames)
+			if got != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, got)
+			}
+		})
+	}
+}
+
+func TestExpandRoutesWithExternalNames(t *testing.T) {
+	cr := &v1alpha1.CustomHTTPRoute{
+		Spec: v1alpha1.CustomHTTPRouteSpec{
+			TargetRef: v1alpha1.TargetRef{Name: "default"},
+			Hostnames: []string{"app.example.com"},
+			Rules: []v1alpha1.Rule{
+				{
+					Matches: []v1alpha1.PathMatch{
+						{Path: "/profile", Type: v1alpha1.MatchTypePathPrefix},
+					},
+					BackendRefs: []v1alpha1.BackendRef{
+						{Name: "profile-svc", Namespace: "apps", Port: 8080},
+					},
+				},
+			},
+		},
+	}
+
+	extNames := map[string]string{
+		"profile-svc/apps": "stable.profile.apps.internal",
+	}
+
+	result, err := ExpandRoutes(cr, extNames)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	routes := result["app.example.com"]
+	if len(routes) != 1 {
+		t.Fatalf("expected 1 route, got %d", len(routes))
+	}
+
+	expected := "stable.profile.apps.internal:8080"
+	if routes[0].Backend != expected {
+		t.Errorf("expected backend %q, got %q", expected, routes[0].Backend)
 	}
 }
