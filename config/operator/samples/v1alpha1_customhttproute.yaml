@@ -311,6 +311,25 @@ spec:
           port: 80
 
     # ====================
+    # EXTERNALNAME SERVICES
+    # ====================
+    # When a backendRef points to a Service of type ExternalName, the controller
+    # resolves spec.externalName and uses the real hostname as the backend.
+    # This is necessary because Istio does not create clusters for .svc.cluster.local
+    # FQDNs of ExternalName services.
+
+    # Route to an external service (ExternalName is resolved automatically)
+    - matches:
+        - path: /profile
+          type: PathPrefix
+      backendRefs:
+        - name: profile-external  # Service type: ExternalName -> stable.profile.apps.internal
+          namespace: web
+          port: 80
+      pathPrefixes:
+        policy: Optional
+
+    # ====================
     # DEFAULT FALLBACK
     # ====================
 
