@@ -19,12 +19,16 @@ package customhttproute
 import (
 	"context"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	crv1alpha1 "github.com/freepik-company/customrouter/api/v1alpha1"
 	"github.com/freepik-company/customrouter/internal/controller"
@@ -42,6 +46,7 @@ type CustomHTTPRouteReconciler struct {
 // +kubebuilder:rbac:groups=customrouter.freepik.com,resources=customhttproutes/finalizers,verbs=update
 // +kubebuilder:rbac:groups=customrouter.freepik.com,resources=externalprocessorattachments,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 // +kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -136,6 +141,45 @@ func (r *CustomHTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 func (r *CustomHTTPRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&crv1alpha1.CustomHTTPRoute{}).
+		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(r.findRoutesForService)).
 		Named("customhttproute").
 		Complete(r)
+}
+
+// findRoutesForService returns reconcile requests for all CustomHTTPRoutes that reference the given Service.
+func (r *CustomHTTPRouteReconciler) findRoutesForService(ctx context.Context, obj client.Object) []reconcile.Request {
+	svc, ok := obj.(*corev1.Service)
+	if !ok {
+		return nil
+	}
+
+	routeList := &crv1alpha1.CustomHTTPRouteList{}
+	if err := r.List(ctx, routeList); err != nil {
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, route := range routeList.Items {
+		if routeReferencesService(&route, svc.Name, svc.Namespace) {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      route.Name,
+					Namespace: route.Namespace,
+				},
+			})
+		}
+	}
+	return requests
+}
+
+// routeReferencesService checks if a CustomHTTPRoute has any backendRef pointing to the given service.
+func routeReferencesService(route *crv1alpha1.CustomHTTPRoute, svcName, svcNamespace string) bool {
+	for _, rule := range route.Spec.Rules {
+		for _, ref := range rule.BackendRefs {
+			if ref.Name == svcName && ref.Namespace == svcNamespace {
+				return true
+			}
+		}
+	}
+	return false
 }

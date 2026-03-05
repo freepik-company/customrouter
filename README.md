@@ -384,6 +384,33 @@ Defines routing rules for a set of hostnames. Rules are compiled into an optimiz
 | `rules[].actions` | Optional transformations (redirect, rewrite, headers) |
 | `rules[].backendRefs` | Target services — name must be a valid RFC 1123 label (no dots) |
 
+#### ExternalName Services
+
+When a `backendRef` points to a Kubernetes Service of type `ExternalName`, the controller automatically resolves `spec.externalName` and uses it as the backend hostname. This is necessary because Istio/Envoy does not create clusters for the `.svc.cluster.local` FQDN of ExternalName services.
+
+```yaml
+# Given this Service:
+apiVersion: v1
+kind: Service
+metadata:
+  name: profile-external
+  namespace: web
+spec:
+  type: ExternalName
+  externalName: stable.profile.apps.internal
+
+# This backendRef:
+backendRefs:
+  - name: profile-external
+    namespace: web
+    port: 80
+
+# Resolves to: stable.profile.apps.internal:80
+# Instead of: profile-external.web.svc.cluster.local:80
+```
+
+The controller watches Services and re-reconciles affected CustomHTTPRoutes when an ExternalName service changes.
+
 ### ExternalProcessorAttachment
 
 Connects an external processor to Istio gateway pods by generating EnvoyFilters.

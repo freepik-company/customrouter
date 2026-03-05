@@ -63,6 +63,12 @@ func newCustomHTTPRouteWithPaths(name, namespace, target string, hostnames []str
 	}
 }
 
+func newCustomHTTPRouteWithPathPrefixes(name string, hostnames []string, matches []customrouterv1alpha1.PathMatch, prefixes *customrouterv1alpha1.PathPrefixes) *customrouterv1alpha1.CustomHTTPRoute {
+	cr := newCustomHTTPRouteWithPaths(name, "web", "default", hostnames, matches)
+	cr.Spec.PathPrefixes = prefixes
+	return cr
+}
+
 func newHTTPRoute(hostnames []string) *gatewayv1.HTTPRoute {
 	ghs := make([]gatewayv1.Hostname, len(hostnames))
 	for i, h := range hostnames {
@@ -273,6 +279,73 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 						},
 					},
 				}),
+			},
+			wantErr:     true,
+			errContains: "route conflict",
+		},
+		// --- PathPrefixes expansion ---
+		{
+			name: "no conflict — regex with {prefix} and disjoint prefix sets (Required policy)",
+			route: newCustomHTTPRouteWithPathPrefixes("route-a",
+				[]string{"magnific.com"},
+				[]customrouterv1alpha1.PathMatch{{Path: "^/_next/data/[^/]+/{prefix}([/.]|$)", Type: customrouterv1alpha1.MatchTypeRegex}},
+				&customrouterv1alpha1.PathPrefixes{Policy: customrouterv1alpha1.PathPrefixPolicyRequired, Values: []string{"so", "sw", "za", "zu"}},
+			),
+			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
+				*newCustomHTTPRouteWithPathPrefixes("route-b",
+					[]string{"magnific.com"},
+					[]customrouterv1alpha1.PathMatch{{Path: "^/_next/data/[^/]+/{prefix}([/.]|$)", Type: customrouterv1alpha1.MatchTypeRegex}},
+					&customrouterv1alpha1.PathPrefixes{Policy: customrouterv1alpha1.PathPrefixPolicyRequired, Values: []string{"ceb", "jp", "ph"}},
+				),
+			},
+			wantErr: false,
+		},
+		{
+			name: "conflict — regex with {prefix} and same prefix sets",
+			route: newCustomHTTPRouteWithPathPrefixes("route-a",
+				[]string{"magnific.com"},
+				[]customrouterv1alpha1.PathMatch{{Path: "^/_next/data/[^/]+/{prefix}([/.]|$)", Type: customrouterv1alpha1.MatchTypeRegex}},
+				&customrouterv1alpha1.PathPrefixes{Policy: customrouterv1alpha1.PathPrefixPolicyRequired, Values: []string{"es", "fr"}},
+			),
+			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
+				*newCustomHTTPRouteWithPathPrefixes("route-b",
+					[]string{"magnific.com"},
+					[]customrouterv1alpha1.PathMatch{{Path: "^/_next/data/[^/]+/{prefix}([/.]|$)", Type: customrouterv1alpha1.MatchTypeRegex}},
+					&customrouterv1alpha1.PathPrefixes{Policy: customrouterv1alpha1.PathPrefixPolicyRequired, Values: []string{"es", "fr"}},
+				),
+			},
+			wantErr:     true,
+			errContains: "route conflict",
+		},
+		{
+			name: "no conflict — PathPrefix with Required policy and disjoint prefixes",
+			route: newCustomHTTPRouteWithPathPrefixes("route-a",
+				[]string{"example.com"},
+				[]customrouterv1alpha1.PathMatch{{Path: "/user/me", Type: customrouterv1alpha1.MatchTypePathPrefix}},
+				&customrouterv1alpha1.PathPrefixes{Policy: customrouterv1alpha1.PathPrefixPolicyRequired, Values: []string{"es", "fr"}},
+			),
+			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
+				*newCustomHTTPRouteWithPathPrefixes("route-b",
+					[]string{"example.com"},
+					[]customrouterv1alpha1.PathMatch{{Path: "/user/me", Type: customrouterv1alpha1.MatchTypePathPrefix}},
+					&customrouterv1alpha1.PathPrefixes{Policy: customrouterv1alpha1.PathPrefixPolicyRequired, Values: []string{"de", "it"}},
+				),
+			},
+			wantErr: false,
+		},
+		{
+			name: "conflict — PathPrefix with Optional policy shares unprefixed path",
+			route: newCustomHTTPRouteWithPathPrefixes("route-a",
+				[]string{"example.com"},
+				[]customrouterv1alpha1.PathMatch{{Path: "/user/me", Type: customrouterv1alpha1.MatchTypePathPrefix}},
+				&customrouterv1alpha1.PathPrefixes{Policy: customrouterv1alpha1.PathPrefixPolicyOptional, Values: []string{"es", "fr"}},
+			),
+			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
+				*newCustomHTTPRouteWithPathPrefixes("route-b",
+					[]string{"example.com"},
+					[]customrouterv1alpha1.PathMatch{{Path: "/user/me", Type: customrouterv1alpha1.MatchTypePathPrefix}},
+					&customrouterv1alpha1.PathPrefixes{Policy: customrouterv1alpha1.PathPrefixPolicyOptional, Values: []string{"de", "it"}},
+				),
 			},
 			wantErr:     true,
 			errContains: "route conflict",
