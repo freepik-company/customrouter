@@ -1244,10 +1244,10 @@ func TestBuildBackendStringWithExternalNames(t *testing.T) {
 	}
 
 	tests := []struct {
-		name          string
-		refs          []v1alpha1.BackendRef
-		extNames      map[string]string
-		expected      string
+		name     string
+		refs     []v1alpha1.BackendRef
+		extNames map[string]string
+		expected string
 	}{
 		{
 			name:     "ExternalName service resolved",
