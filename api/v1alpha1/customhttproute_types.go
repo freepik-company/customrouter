@@ -134,11 +134,11 @@ type PathMatch struct {
 
 // BackendRef defines a reference to a backend service
 type BackendRef struct {
-	// name is the name of the Service (must be a valid RFC 1123 label: lowercase alphanumeric or '-')
+	// name is the name of the Service or an external hostname/IP (RFC 1123 DNS name)
 	// +required
 	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	Name string `json:"name"`
 
 	// namespace is the namespace of the Service

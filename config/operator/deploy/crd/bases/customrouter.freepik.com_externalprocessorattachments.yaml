@@ -66,11 +66,11 @@ spec:
                       This is used when no CustomHTTPRoute matches the request.
                     properties:
                       name:
-                        description: 'name is the name of the Service (must be a valid
-                          RFC 1123 label: lowercase alphanumeric or ''-'')'
-                        maxLength: 63
+                        description: name is the name of the Service or an external
+                          hostname/IP (RFC 1123 DNS name)
+                        maxLength: 253
                         minLength: 1
-                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                         type: string
                       namespace:
                         description: namespace is the namespace of the Service
