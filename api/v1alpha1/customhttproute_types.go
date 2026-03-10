@@ -351,7 +351,7 @@ type CustomHTTPRouteSpec struct {
 	// rules defines the routing rules
 	// +required
 	// +kubebuilder:validation:MinItems=1
-	// +kubebuilder:validation:MaxItems=100
+	// +kubebuilder:validation:MaxItems=5000
 	Rules []Rule `json:"rules"`
 }
 
