@@ -7,14 +7,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - services
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - ""
-  resources:
   - configmaps
   verbs:
   - create
@@ -32,6 +24,14 @@ rules:
   - create
   - get
   - update
+- apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - get
+  - list
+  - watch
 - apiGroups:
   - admissionregistration.k8s.io
   resources:

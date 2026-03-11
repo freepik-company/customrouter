@@ -127,7 +127,7 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule, extern
 		case v1alpha1.PathPrefixPolicyRequired:
 			for _, prefix := range prefixes {
 				routes = append(routes, Route{
-					Path:     "/" + prefix + match.Path,
+					Path:     prefixPath(prefix, match.Path),
 					Type:     matchType,
 					Backend:  backend,
 					Priority: priority,
@@ -138,7 +138,7 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule, extern
 		case v1alpha1.PathPrefixPolicyOptional:
 			for _, prefix := range prefixes {
 				routes = append(routes, Route{
-					Path:     "/" + prefix + match.Path,
+					Path:     prefixPath(prefix, match.Path),
 					Type:     matchType,
 					Backend:  backend,
 					Priority: priority,
@@ -156,6 +156,15 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule, extern
 	}
 
 	return routes
+}
+
+// prefixPath prepends a language prefix to a path, avoiding double slashes.
+// For path "/", it returns "/<prefix>" instead of "/<prefix>/".
+func prefixPath(prefix, path string) string {
+	if path == "/" {
+		return "/" + prefix
+	}
+	return "/" + prefix + path
 }
 
 // convertActions converts API actions to route actions

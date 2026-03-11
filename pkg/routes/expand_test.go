@@ -623,6 +623,54 @@ func TestExpandExactWithPrefixesOptional(t *testing.T) {
 	}
 }
 
+func TestExpandExactRootPathWithPrefixes(t *testing.T) {
+	// Regression: path "/" Exact with prefix should produce "/v1", not "/v1/"
+	cr := &v1alpha1.CustomHTTPRoute{
+		Spec: v1alpha1.CustomHTTPRouteSpec{
+			TargetRef: v1alpha1.TargetRef{Name: "default"},
+			Hostnames: []string{"example.com"},
+			PathPrefixes: &v1alpha1.PathPrefixes{
+				Values: []string{"v1", "v2"},
+				Policy: v1alpha1.PathPrefixPolicyRequired,
+			},
+			Rules: []v1alpha1.Rule{
+				{
+					Matches: []v1alpha1.PathMatch{
+						{Path: "/", Type: v1alpha1.MatchTypeExact},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := ExpandRoutes(cr, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	routes := result["example.com"]
+
+	if len(routes) != 2 {
+		t.Fatalf("expected 2 routes, got %d: %+v", len(routes), routes)
+	}
+
+	paths := make(map[string]bool)
+	for _, r := range routes {
+		paths[r.Path] = true
+		if r.Type != RouteTypeExact {
+			t.Errorf("expected exact type, got %s for path %s", r.Type, r.Path)
+		}
+	}
+
+	for _, expected := range []string{"/v1", "/v2"} {
+		if !paths[expected] {
+			t.Errorf("missing expected path %s; got paths: %v", expected, paths)
+		}
+	}
+	if paths["/v1/"] {
+		t.Error("/v1/ should not be generated (double slash from root path)")
+	}
+}
+
 func TestExpandExactWithPrefixesRequired(t *testing.T) {
 	cr := &v1alpha1.CustomHTTPRoute{
 		Spec: v1alpha1.CustomHTTPRouteSpec{
