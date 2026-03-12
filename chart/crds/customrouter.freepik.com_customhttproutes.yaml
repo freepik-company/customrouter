@@ -274,6 +274,13 @@ spec:
                         - type
                         type: object
                       type: array
+                    allowOverlap:
+                      description: |-
+                        allowOverlap permits this rule to overlap with rules in other CustomHTTPRoutes.
+                        When true and a conflict is detected, the webhook emits a warning instead of
+                        rejecting the resource. Useful for migrating rules between CustomHTTPRoutes
+                        without downtime.
+                      type: boolean
                     backendRefs:
                       description: |-
                         backendRefs defines the backend services to route to
