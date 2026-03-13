@@ -317,7 +317,8 @@ type Rule struct {
 	// allowOverlap permits this rule to overlap with rules in other CustomHTTPRoutes.
 	// When true and a conflict is detected, the webhook emits a warning instead of
 	// rejecting the resource. Useful for migrating rules between CustomHTTPRoutes
-	// without downtime.
+	// without downtime. Note: conflicts with Gateway API HTTPRoute resources are
+	// always rejected regardless of this setting.
 	// +optional
 	AllowOverlap bool `json:"allowOverlap,omitempty"`
 }

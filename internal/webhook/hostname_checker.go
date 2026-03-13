@@ -18,6 +18,7 @@ package webhook
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -79,7 +80,7 @@ func (c *HostnameChecker) CheckCustomHTTPRouteHostnames(ctx context.Context, rou
 		conflictContext := fmt.Sprintf("CustomHTTPRoute %s (target %q)", formatNamespacedName(other), route.Spec.TargetRef.Name)
 		result := classifyOverlaps(routeMatches, otherMatches, hostConflicts, conflictContext)
 		if len(result.Errors) > 0 {
-			return nil, fmt.Errorf("%s", strings.Join(result.Errors, "; "))
+			return nil, errors.New(strings.Join(result.Errors, "; "))
 		}
 		allWarnings = append(allWarnings, result.Warnings...)
 	}
@@ -366,6 +367,14 @@ type overlapResult struct {
 	Errors   []string
 }
 
+// matchesOverlap returns true if two route matches overlap (could match the same HTTP request).
+func matchesOverlap(a, b routeMatch) bool {
+	return a.PathType == b.PathType && a.Path == b.Path &&
+		methodsCompatible(a.Method, b.Method) &&
+		headersCompatible(a.Headers, b.Headers) &&
+		queryParamsCompatible(a.QueryParams, b.QueryParams)
+}
+
 // classifyOverlaps checks newMatches against existingMatches for overlaps.
 // If an overlapping match in newMatches has AllowOverlap=true, it is classified
 // as a warning; otherwise it is classified as an error.
@@ -373,18 +382,19 @@ func classifyOverlaps(newMatches, existingMatches []routeMatch, hostConflicts []
 	var result overlapResult
 	for _, nm := range newMatches {
 		for _, em := range existingMatches {
-			if nm.PathType == em.PathType && nm.Path == em.Path &&
-				methodsCompatible(nm.Method, em.Method) &&
-				headersCompatible(nm.Headers, em.Headers) &&
-				queryParamsCompatible(nm.QueryParams, em.QueryParams) {
-				msg := fmt.Sprintf(
-					"route conflict on hostnames %v: %v already defined in %s",
-					hostConflicts, nm, conflictContext,
-				)
+			if matchesOverlap(nm, em) {
 				if nm.AllowOverlap {
-					result.Warnings = append(result.Warnings, msg)
+					warnMsg := fmt.Sprintf(
+						"route conflict on hostnames %v: %v already defined in %s (allowed via allowOverlap)",
+						hostConflicts, nm, conflictContext,
+					)
+					result.Warnings = append(result.Warnings, warnMsg)
 				} else {
-					result.Errors = append(result.Errors, msg)
+					errMsg := fmt.Sprintf(
+						"route conflict on hostnames %v: %v already defined in %s",
+						hostConflicts, nm, conflictContext,
+					)
+					result.Errors = append(result.Errors, errMsg)
 				}
 				break
 			}
@@ -401,10 +411,7 @@ func findRouteMatchOverlap(a, b []routeMatch) []routeMatch {
 	var overlaps []routeMatch
 	for _, ma := range a {
 		for _, mb := range b {
-			if ma.PathType == mb.PathType && ma.Path == mb.Path &&
-				methodsCompatible(ma.Method, mb.Method) &&
-				headersCompatible(ma.Headers, mb.Headers) &&
-				queryParamsCompatible(ma.QueryParams, mb.QueryParams) {
+			if matchesOverlap(ma, mb) {
 				overlaps = append(overlaps, ma)
 				break
 			}
