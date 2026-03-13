@@ -69,8 +69,8 @@ func newCustomHTTPRouteWithPathPrefixes(name string, hostnames []string, matches
 	return cr
 }
 
-func newCustomHTTPRouteWithOverlap(name, namespace, target string, hostnames []string, matches []customrouterv1alpha1.PathMatch, allowOverlap bool) *customrouterv1alpha1.CustomHTTPRoute {
-	cr := newCustomHTTPRouteWithPaths(name, namespace, target, hostnames, matches)
+func newCustomHTTPRouteWithOverlap(namespace, target string, hostnames []string, matches []customrouterv1alpha1.PathMatch, allowOverlap bool) *customrouterv1alpha1.CustomHTTPRoute {
+	cr := newCustomHTTPRouteWithPaths("route-a", namespace, target, hostnames, matches)
 	for i := range cr.Spec.Rules {
 		cr.Spec.Rules[i].AllowOverlap = allowOverlap
 	}
@@ -426,7 +426,7 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 		// --- allowOverlap tests ---
 		{
 			name: "allowOverlap=true + CustomHTTPRoute conflict — warning, no error",
-			route: newCustomHTTPRouteWithOverlap("route-a", "default", "default", []string{"example.com"},
+			route: newCustomHTTPRouteWithOverlap("default", "default", []string{"example.com"},
 				[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}}, true,
 			),
 			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
@@ -440,7 +440,7 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 		},
 		{
 			name: "allowOverlap=false + CustomHTTPRoute conflict — error (default behavior)",
-			route: newCustomHTTPRouteWithOverlap("route-a", "default", "default", []string{"example.com"},
+			route: newCustomHTTPRouteWithOverlap("default", "default", []string{"example.com"},
 				[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}}, false,
 			),
 			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
@@ -453,7 +453,7 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 		},
 		{
 			name: "allowOverlap=true + HTTPRoute conflict — always error",
-			route: newCustomHTTPRouteWithOverlap("route-a", "default", "default", []string{"example.com"},
+			route: newCustomHTTPRouteWithOverlap("default", "default", []string{"example.com"},
 				[]customrouterv1alpha1.PathMatch{{Path: "/", Type: customrouterv1alpha1.MatchTypePathPrefix}}, true,
 			),
 			existingHR: []gatewayv1.HTTPRoute{
@@ -485,7 +485,7 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 		},
 		{
 			name: "allowOverlap=true + multiple existing overlaps — multiple warnings",
-			route: newCustomHTTPRouteWithOverlap("route-a", "default", "default", []string{"example.com"},
+			route: newCustomHTTPRouteWithOverlap("default", "default", []string{"example.com"},
 				[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}}, true,
 			),
 			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
