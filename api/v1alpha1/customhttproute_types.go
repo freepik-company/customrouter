@@ -89,7 +89,7 @@ const (
 type PathPrefixes struct {
 	// values is the list of prefixes to prepend to paths (e.g., ["es", "fr", "it"])
 	// +optional
-	// +kubebuilder:validation:MaxItems=30
+	// +kubebuilder:validation:MaxItems=100
 	Values []string `json:"values,omitempty"`
 
 	// policy defines how prefixes are applied

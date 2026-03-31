@@ -136,7 +136,7 @@ spec:
                       (e.g., ["es", "fr", "it"])
                     items:
                       type: string
-                    maxItems: 30
+                    maxItems: 100
                     type: array
                 type: object
               rules:
