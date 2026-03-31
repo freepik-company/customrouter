@@ -378,7 +378,7 @@ Defines routing rules for a set of hostnames. Rules are compiled into an optimiz
 |-------|-------------|
 | `targetRef.name` | Which external processor handles these routes |
 | `hostnames` | List of hostnames this route applies to (max 50) |
-| `pathPrefixes` | Optional prefixes to prepend to all paths (max 30 values) |
+| `pathPrefixes` | Optional prefixes to prepend to all paths (max 100 values) |
 | `pathPrefixes.expandMatchTypes` | Which match types are expanded with prefixes (default: all) |
 | `rules[].matches` | Path matching conditions (max 50 per rule) |
 | `rules[].actions` | Optional transformations (redirect, rewrite, headers) |
@@ -631,7 +631,7 @@ The CRD enforces the following limits to prevent resource exhaustion:
 | `spec.hostnames[]` | Max 50 items |
 | `spec.rules[]` | Max 100 items |
 | `rules[].matches[]` | Max 50 items per rule |
-| `pathPrefixes.values[]` | Max 30 items |
+| `pathPrefixes.values[]` | Max 100 items |
 | `matches[].priority` | Range 1–10000 |
 | `backendRefs[].name` | RFC 1123 label (max 63 chars, no dots) |
 | `backendRefs[].namespace` | RFC 1123 label (max 63 chars, no dots) |
