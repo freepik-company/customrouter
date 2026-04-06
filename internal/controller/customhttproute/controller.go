@@ -18,6 +18,7 @@ package customhttproute
 
 import (
 	"context"
+	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -25,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -34,11 +36,14 @@ import (
 	"github.com/freepik-company/customrouter/internal/controller"
 )
 
+const targetRefIndexField = ".spec.targetRef.name"
+
 // CustomHTTPRouteReconciler reconciles a CustomHTTPRoute object
 type CustomHTTPRouteReconciler struct {
 	client.Client
-	Scheme             *runtime.Scheme
-	ConfigMapNamespace string
+	Scheme                  *runtime.Scheme
+	ConfigMapNamespace      string
+	MaxConcurrentReconciles int
 }
 
 // +kubebuilder:rbac:groups=customrouter.freepik.com,resources=customhttproutes,verbs=get;list;watch;create;update;patch;delete
@@ -139,9 +144,27 @@ func (r *CustomHTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *CustomHTTPRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(),
+		&crv1alpha1.CustomHTTPRoute{},
+		targetRefIndexField,
+		func(obj client.Object) []string {
+			route := obj.(*crv1alpha1.CustomHTTPRoute)
+			return []string{route.Spec.TargetRef.Name}
+		},
+	); err != nil {
+		return fmt.Errorf("failed to create field indexer for %s: %w", targetRefIndexField, err)
+	}
+
+	maxConcurrent := r.MaxConcurrentReconciles
+	if maxConcurrent <= 0 {
+		maxConcurrent = 1
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&crv1alpha1.CustomHTTPRoute{}).
 		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(r.findRoutesForService)).
+		WithOptions(ctrlcontroller.Options{MaxConcurrentReconciles: maxConcurrent}).
 		Named("customhttproute").
 		Complete(r)
 }

@@ -68,6 +68,7 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var routesConfigMapNamespace string
+	var maxConcurrentReconciles int
 	var enableWebhooks bool
 	var webhookConfigName string
 	var webhookServiceName string
@@ -92,6 +93,8 @@ func main() {
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.StringVar(&routesConfigMapNamespace, "routes-configmap-namespace", "default",
 		"The namespace where route ConfigMaps will be stored")
+	flag.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", 5,
+		"Maximum number of concurrent reconciliations for CustomHTTPRoute controller")
 	flag.BoolVar(&enableWebhooks, "enable-webhooks", false,
 		"Enable validating admission webhooks for hostname conflict detection")
 	flag.StringVar(&webhookConfigName, "webhook-config-name", "",
@@ -243,9 +246,10 @@ func main() {
 	}
 
 	if err := (&customhttproute.CustomHTTPRouteReconciler{
-		Client:             mgr.GetClient(),
-		Scheme:             mgr.GetScheme(),
-		ConfigMapNamespace: routesConfigMapNamespace,
+		Client:                  mgr.GetClient(),
+		Scheme:                  mgr.GetScheme(),
+		ConfigMapNamespace:      routesConfigMapNamespace,
+		MaxConcurrentReconciles: maxConcurrentReconciles,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "CustomHTTPRoute")
 		os.Exit(1)
