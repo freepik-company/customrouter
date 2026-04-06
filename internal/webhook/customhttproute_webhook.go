@@ -46,10 +46,11 @@ func (v *CustomHTTPRouteValidator) ValidateCreate(ctx context.Context, obj runti
 	if err := route.Validate(); err != nil {
 		return nil, err
 	}
-	if err := v.checker.CheckCustomHTTPRouteHostnames(ctx, route); err != nil {
+	warnings, err := v.checker.CheckCustomHTTPRouteHostnames(ctx, route)
+	if err != nil {
 		return nil, err
 	}
-	return nil, nil
+	return warnings, nil
 }
 
 // ValidateUpdate validates a CustomHTTPRoute on update.
@@ -62,10 +63,11 @@ func (v *CustomHTTPRouteValidator) ValidateUpdate(ctx context.Context, _ runtime
 	if err := route.Validate(); err != nil {
 		return nil, err
 	}
-	if err := v.checker.CheckCustomHTTPRouteHostnames(ctx, route); err != nil {
+	warnings, err := v.checker.CheckCustomHTTPRouteHostnames(ctx, route)
+	if err != nil {
 		return nil, err
 	}
-	return nil, nil
+	return warnings, nil
 }
 
 // ValidateDelete is a no-op for CustomHTTPRoute.

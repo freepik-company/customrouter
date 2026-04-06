@@ -383,6 +383,7 @@ Defines routing rules for a set of hostnames. Rules are compiled into an optimiz
 | `rules[].matches` | Path matching conditions (max 50 per rule) |
 | `rules[].actions` | Optional transformations (redirect, rewrite, headers) |
 | `rules[].backendRefs` | Target services — name must be a valid RFC 1123 label (no dots) |
+| `rules[].allowOverlap` | Permit overlap with other CustomHTTPRoutes (warn instead of reject) |
 
 #### ExternalName Services
 
@@ -687,6 +688,89 @@ operator:
 ```
 
 See [chart/values.yaml](chart/values.yaml) for all webhook options including `timeoutSeconds`, `namespaceSelector`, `failurePolicy`, and `caBundle`.
+
+### Allowing Overlapping Routes (`allowOverlap`)
+
+The `allowOverlap` field on a rule lets it overlap with rules in other CustomHTTPRoutes. When `true`, the webhook emits a **warning** instead of rejecting the resource. This enables **zero-downtime migrations** between CustomHTTPRoutes.
+
+> **Note**: Conflicts with Gateway API HTTPRoute resources are **always rejected** regardless of this setting.
+
+#### Migrating a route between CustomHTTPRoutes
+
+Given an existing route in `legacy-routes`:
+
+```yaml
+apiVersion: customrouter.freepik.com/v1alpha1
+kind: CustomHTTPRoute
+metadata:
+  name: legacy-routes
+spec:
+  targetRef:
+    name: default
+  hostnames:
+    - www.example.com
+  rules:
+    - matches:
+        - path: /api/users
+      backendRefs:
+        - name: users-service
+          namespace: backend
+          port: 8080
+```
+
+Create the new route with `allowOverlap: true` to avoid rejection:
+
+```yaml
+apiVersion: customrouter.freepik.com/v1alpha1
+kind: CustomHTTPRoute
+metadata:
+  name: new-routes
+spec:
+  targetRef:
+    name: default
+  hostnames:
+    - www.example.com
+  rules:
+    - matches:
+        - path: /api/users
+      backendRefs:
+        - name: users-service-v2
+          namespace: backend
+          port: 8080
+      allowOverlap: true
+```
+
+The webhook accepts the resource with a warning:
+
+```
+Warning: route conflict on hostnames [www.example.com]: PathPrefix /api/users
+already defined in CustomHTTPRoute legacy-routes (allowed via allowOverlap)
+```
+
+Once verified, remove the rule from `legacy-routes` and drop `allowOverlap` from `new-routes`.
+
+#### Selective overlap per rule
+
+`allowOverlap` is set per rule, so only the rules that need it are affected:
+
+```yaml
+rules:
+  - matches:
+      - path: /api/users
+    backendRefs:
+      - name: users-service-v2
+        namespace: backend
+        port: 8080
+    allowOverlap: true   # Warning on conflict
+
+  - matches:
+      - path: /api/orders
+    backendRefs:
+      - name: orders-service
+        namespace: backend
+        port: 8080
+    # allowOverlap defaults to false — conflicts are rejected
+```
 
 ## License
 

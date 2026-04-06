@@ -18,12 +18,14 @@ package webhook
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	customrouterv1alpha1 "github.com/freepik-company/customrouter/api/v1alpha1"
@@ -41,18 +43,24 @@ type HostnameChecker struct {
 // conflicts with another CustomHTTPRoute (same targetRef) or any HTTPRoute in the cluster.
 // A conflict requires overlapping hostnames AND overlapping route matches
 // (path + method + headers + query parameters). It excludes self by UID to allow updates.
-func (c *HostnameChecker) CheckCustomHTTPRouteHostnames(ctx context.Context, route *customrouterv1alpha1.CustomHTTPRoute) error {
+//
+// When a conflicting route match has AllowOverlap=true and the conflict is with another
+// CustomHTTPRoute, the overlap is reported as a warning instead of an error.
+// Conflicts with HTTPRoutes are always errors regardless of AllowOverlap.
+func (c *HostnameChecker) CheckCustomHTTPRouteHostnames(ctx context.Context, route *customrouterv1alpha1.CustomHTTPRoute) (admission.Warnings, error) {
 	hostnames := route.Spec.Hostnames
 	if len(hostnames) == 0 {
-		return nil
+		return nil, nil
 	}
 	hostnameSet := toSet(hostnames)
 	routeMatches := extractCustomRouteMatches(route)
 
+	var allWarnings admission.Warnings
+
 	// Check against other CustomHTTPRoutes with the same targetRef
 	var customRoutes customrouterv1alpha1.CustomHTTPRouteList
 	if err := c.Client.List(ctx, &customRoutes); err != nil {
-		return fmt.Errorf("listing CustomHTTPRoutes: %w", err)
+		return nil, fmt.Errorf("listing CustomHTTPRoutes: %w", err)
 	}
 
 	for i := range customRoutes.Items {
@@ -69,18 +77,18 @@ func (c *HostnameChecker) CheckCustomHTTPRouteHostnames(ctx context.Context, rou
 		}
 		// Same target + same hostname: only conflict if route matches overlap
 		otherMatches := extractCustomRouteMatches(other)
-		if matchConflicts := findRouteMatchOverlap(routeMatches, otherMatches); len(matchConflicts) > 0 {
-			return fmt.Errorf(
-				"route conflict on hostnames %v: %v already defined in CustomHTTPRoute %s (target %q)",
-				hostConflicts, matchConflicts, formatNamespacedName(other), route.Spec.TargetRef.Name,
-			)
+		conflictContext := fmt.Sprintf("CustomHTTPRoute %s (target %q)", formatNamespacedName(other), route.Spec.TargetRef.Name)
+		result := classifyOverlaps(routeMatches, otherMatches, hostConflicts, conflictContext)
+		if len(result.Errors) > 0 {
+			return nil, errors.New(strings.Join(result.Errors, "; "))
 		}
+		allWarnings = append(allWarnings, result.Warnings...)
 	}
 
-	// Check against HTTPRoutes (hostname + path + header overlap is a conflict)
+	// Check against HTTPRoutes (hostname + path + header overlap is always an error)
 	var httpRoutes gatewayv1.HTTPRouteList
 	if err := c.Client.List(ctx, &httpRoutes); err != nil {
-		return fmt.Errorf("listing HTTPRoutes: %w", err)
+		return nil, fmt.Errorf("listing HTTPRoutes: %w", err)
 	}
 
 	for i := range httpRoutes.Items {
@@ -95,14 +103,14 @@ func (c *HostnameChecker) CheckCustomHTTPRouteHostnames(ctx context.Context, rou
 		}
 		hrMatches := extractHTTPRouteMatches(hr)
 		if matchConflicts := findRouteMatchOverlap(routeMatches, hrMatches); len(matchConflicts) > 0 {
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"route conflict on hostnames %v: %v already defined in HTTPRoute %s/%s",
 				hostConflicts, matchConflicts, hr.Namespace, hr.Name,
 			)
 		}
 	}
 
-	return nil
+	return allWarnings, nil
 }
 
 // CheckHTTPRouteHostnames checks whether any hostname in the given HTTPRoute
@@ -144,11 +152,12 @@ func (c *HostnameChecker) CheckHTTPRouteHostnames(ctx context.Context, httpRoute
 // Two routeMatches conflict when they could match the same HTTP request,
 // determined by: path + method + headers + query parameters.
 type routeMatch struct {
-	PathType    string
-	Path        string
-	Method      string
-	Headers     []headerMatch
-	QueryParams []queryParamMatch
+	PathType     string
+	Path         string
+	Method       string
+	Headers      []headerMatch
+	QueryParams  []queryParamMatch
+	AllowOverlap bool
 }
 
 func (r routeMatch) String() string {
@@ -193,13 +202,21 @@ type queryParamMatch struct {
 	Value string
 }
 
+// seenEntry tracks the index and allowOverlap status of a previously seen route match.
+type seenEntry struct {
+	index        int
+	allowOverlap bool
+}
+
 // extractCustomRouteMatches returns all unique route matches from a CustomHTTPRoute.
 // It expands paths according to pathPrefixes policy (Required/Optional/Disabled)
 // so that conflict detection compares the actual expanded paths, not raw templates.
 // CustomHTTPRoute does not support Method, header, or query parameter matching,
 // so those fields are always empty (which means "matches all" during comparison).
+// When two rules in the same CRD produce the same expanded path but differ in
+// AllowOverlap, the conservative value (false) wins.
 func extractCustomRouteMatches(route *customrouterv1alpha1.CustomHTTPRoute) []routeMatch {
-	seen := make(map[string]struct{})
+	seen := make(map[string]seenEntry)
 	var matches []routeMatch
 
 	var prefixes []string
@@ -217,13 +234,19 @@ func extractCustomRouteMatches(route *customrouterv1alpha1.CustomHTTPRoute) []ro
 			for _, ep := range expandedPaths {
 				path := normalizePath(ep.path)
 				key := ep.pathType + ":" + path
-				if _, ok := seen[key]; ok {
+				if entry, ok := seen[key]; ok {
+					// Conservative: if new rule disables allowOverlap, override
+					if entry.allowOverlap && !rule.AllowOverlap {
+						matches[entry.index].AllowOverlap = false
+						seen[key] = seenEntry{index: entry.index, allowOverlap: false}
+					}
 					continue
 				}
-				seen[key] = struct{}{}
+				seen[key] = seenEntry{index: len(matches), allowOverlap: rule.AllowOverlap}
 				matches = append(matches, routeMatch{
-					PathType: ep.pathType,
-					Path:     path,
+					PathType:     ep.pathType,
+					Path:         path,
+					AllowOverlap: rule.AllowOverlap,
 				})
 			}
 		}
@@ -338,6 +361,48 @@ func extractHTTPRouteMatches(hr *gatewayv1.HTTPRoute) []routeMatch {
 	return matches
 }
 
+// overlapResult holds the classified results of an overlap check.
+type overlapResult struct {
+	Warnings []string
+	Errors   []string
+}
+
+// matchesOverlap returns true if two route matches overlap (could match the same HTTP request).
+func matchesOverlap(a, b routeMatch) bool {
+	return a.PathType == b.PathType && a.Path == b.Path &&
+		methodsCompatible(a.Method, b.Method) &&
+		headersCompatible(a.Headers, b.Headers) &&
+		queryParamsCompatible(a.QueryParams, b.QueryParams)
+}
+
+// classifyOverlaps checks newMatches against existingMatches for overlaps.
+// If an overlapping match in newMatches has AllowOverlap=true, it is classified
+// as a warning; otherwise it is classified as an error.
+func classifyOverlaps(newMatches, existingMatches []routeMatch, hostConflicts []string, conflictContext string) overlapResult {
+	var result overlapResult
+	for _, nm := range newMatches {
+		for _, em := range existingMatches {
+			if matchesOverlap(nm, em) {
+				if nm.AllowOverlap {
+					warnMsg := fmt.Sprintf(
+						"route conflict on hostnames %v: %v already defined in %s (allowed via allowOverlap)",
+						hostConflicts, nm, conflictContext,
+					)
+					result.Warnings = append(result.Warnings, warnMsg)
+				} else {
+					errMsg := fmt.Sprintf(
+						"route conflict on hostnames %v: %v already defined in %s",
+						hostConflicts, nm, conflictContext,
+					)
+					result.Errors = append(result.Errors, errMsg)
+				}
+				break
+			}
+		}
+	}
+	return result
+}
+
 // findRouteMatchOverlap returns matches from a that overlap with matches in b.
 // Two matches overlap when they have the same path type and path value,
 // compatible methods, compatible headers, and compatible query parameters
@@ -346,10 +411,7 @@ func findRouteMatchOverlap(a, b []routeMatch) []routeMatch {
 	var overlaps []routeMatch
 	for _, ma := range a {
 		for _, mb := range b {
-			if ma.PathType == mb.PathType && ma.Path == mb.Path &&
-				methodsCompatible(ma.Method, mb.Method) &&
-				headersCompatible(ma.Headers, mb.Headers) &&
-				queryParamsCompatible(ma.QueryParams, mb.QueryParams) {
+			if matchesOverlap(ma, mb) {
 				overlaps = append(overlaps, ma)
 				break
 			}
