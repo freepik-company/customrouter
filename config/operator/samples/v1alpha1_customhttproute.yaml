@@ -17,7 +17,7 @@ spec:
 
   # Path prefixes (languages, regions, etc.)
   # Automatically prepended to the paths defined in the rules
-  # max 30 values
+  # max 100 values
   pathPrefixes:
     values: [es, fr, it, de, pt, ja, ko]
     policy: Optional  # Optional | Required | Disabled
