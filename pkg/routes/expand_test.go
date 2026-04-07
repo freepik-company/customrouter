@@ -1174,30 +1174,33 @@ func TestExpandRoutesWithInlinePrefixPlaceholder(t *testing.T) {
 		t.Fatalf("expected 2 routes, got %d: %+v", len(routes), routes)
 	}
 
-	var inlineRoute, normalRoute *Route
+	var inlineIdx, normalIdx int
+	var foundInline, foundNormal bool
 	for i := range routes {
 		if strings.Contains(routes[i].Path, "_app") {
-			inlineRoute = &routes[i]
+			inlineIdx = i
+			foundInline = true
 		} else {
-			normalRoute = &routes[i]
+			normalIdx = i
+			foundNormal = true
 		}
 	}
 
-	if inlineRoute == nil {
+	if !foundInline {
 		t.Fatal("inline prefix route not found")
 	}
-	if normalRoute == nil {
+	if !foundNormal {
 		t.Fatal("normal route not found")
 	}
 
 	expectedInline := "^/_app/data/[^/]+/(es|fr|de)/"
-	if inlineRoute.Path != expectedInline {
-		t.Errorf("inline route:\nexpected: %s\ngot:      %s", expectedInline, inlineRoute.Path)
+	if routes[inlineIdx].Path != expectedInline {
+		t.Errorf("inline route:\nexpected: %s\ngot:      %s", expectedInline, routes[inlineIdx].Path)
 	}
 
 	expectedNormal := "^/(es|fr|de)/users/[0-9]+$"
-	if normalRoute.Path != expectedNormal {
-		t.Errorf("normal route:\nexpected: %s\ngot:      %s", expectedNormal, normalRoute.Path)
+	if routes[normalIdx].Path != expectedNormal {
+		t.Errorf("normal route:\nexpected: %s\ngot:      %s", expectedNormal, routes[normalIdx].Path)
 	}
 }
 
@@ -1275,13 +1278,14 @@ func TestConvertActionsPassesReplacePrefixMatch(t *testing.T) {
 				if got != nil {
 					t.Errorf("expected nil, got %v", *got)
 				}
-			} else {
-				if got == nil {
-					t.Fatalf("expected non-nil, got nil")
-				}
-				if *got != tt.wantVal {
-					t.Errorf("expected %v, got %v", tt.wantVal, *got)
-				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("expected non-nil, got nil")
+				return
+			}
+			if *got != tt.wantVal {
+				t.Errorf("expected %v, got %v", tt.wantVal, *got)
 			}
 		})
 	}

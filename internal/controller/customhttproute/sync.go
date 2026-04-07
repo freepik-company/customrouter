@@ -97,9 +97,9 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 		}
 	}
 
-	// Update the last-target annotation
+	// Update the last-target annotation — must succeed to ensure future target changes are tracked
 	if err := r.ensureLastTargetAnnotation(ctx, resourceManifest, target); err != nil {
-		logger.Error(err, "failed to update last-target annotation", "name", resourceManifest.Name)
+		return fmt.Errorf("failed to update last-target annotation: %w", err)
 	}
 
 	// Rebuild ConfigMaps for the current target
@@ -377,7 +377,7 @@ func (r *CustomHTTPRouteReconciler) splitHostRoutes(
 	var partitions []ConfigMapPartition
 	partIndex := startIndex
 
-	currentRoutes := make([]routes.Route, 0)
+	currentRoutes := make([]routes.Route, 0, len(hostRoutes))
 	currentSize := 0
 	baseSize := len(fmt.Sprintf(`{"version":1,"hosts":{"%s":[]}}`, host))
 
@@ -523,7 +523,7 @@ func (r *CustomHTTPRouteReconciler) deleteStaleConfigMapsForTarget(
 	configMapList := &corev1.ConfigMapList{}
 	labelSelector := labels.SelectorFromSet(map[string]string{
 		configMapManagedByLabel: configMapManagedByValue,
-		configMapTargetLabel:   target,
+		configMapTargetLabel:    target,
 	})
 
 	if err := r.List(ctx, configMapList, &client.ListOptions{

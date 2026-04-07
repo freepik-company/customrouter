@@ -166,8 +166,8 @@ func TestRebuildConfigMapsForTarget_CleansStalePartitions(t *testing.T) {
 			Namespace: "test-ns",
 			Labels: map[string]string{
 				configMapManagedByLabel: configMapManagedByValue,
-				configMapTargetLabel:   "target-a",
-				configMapPartLabel:     "1",
+				configMapTargetLabel:    "target-a",
+				configMapPartLabel:      "1",
 			},
 		},
 		Data: map[string]string{routesDataKey: `{"version":1,"hosts":{}}`},
@@ -219,8 +219,8 @@ func TestRebuildConfigMapsForTarget_DeletesAllCMsWhenNoRoutes(t *testing.T) {
 			Namespace: "test-ns",
 			Labels: map[string]string{
 				configMapManagedByLabel: configMapManagedByValue,
-				configMapTargetLabel:   "target-a",
-				configMapPartLabel:     "0",
+				configMapTargetLabel:    "target-a",
+				configMapPartLabel:      "0",
 			},
 		},
 		Data: map[string]string{routesDataKey: `{"version":1,"hosts":{"a.com":[]}}`},
@@ -325,7 +325,7 @@ func TestResolveExternalNames(t *testing.T) {
 
 	r := newReconciler(extSvc, normalSvc)
 
-	routes := []*v1alpha1.CustomHTTPRoute{
+	testRoutes := []*v1alpha1.CustomHTTPRoute{
 		{
 			Spec: v1alpha1.CustomHTTPRouteSpec{
 				Rules: []v1alpha1.Rule{
@@ -339,7 +339,7 @@ func TestResolveExternalNames(t *testing.T) {
 		},
 	}
 
-	result := r.resolveExternalNames(context.Background(), routes)
+	result := r.resolveExternalNames(context.Background(), testRoutes)
 
 	if result["ext-svc/ns"] != "external.example.com" {
 		t.Errorf("expected ExternalName to be resolved, got %q", result["ext-svc/ns"])
@@ -359,7 +359,7 @@ func TestDeleteStaleConfigMapsForTarget_OnlyDeletesOwnTarget(t *testing.T) {
 			Namespace: "test-ns",
 			Labels: map[string]string{
 				configMapManagedByLabel: configMapManagedByValue,
-				configMapTargetLabel:   "target-a",
+				configMapTargetLabel:    "target-a",
 			},
 		},
 	}
@@ -369,7 +369,7 @@ func TestDeleteStaleConfigMapsForTarget_OnlyDeletesOwnTarget(t *testing.T) {
 			Namespace: "test-ns",
 			Labels: map[string]string{
 				configMapManagedByLabel: configMapManagedByValue,
-				configMapTargetLabel:   "target-b",
+				configMapTargetLabel:    "target-b",
 			},
 		},
 	}
