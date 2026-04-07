@@ -476,7 +476,9 @@ func (r *CustomHTTPRouteReconciler) upsertSingleConfigMap(
 		Jitter:   0.2,
 	}
 
-	return retry.RetryOnConflict(backoff, func() error {
+	return retry.OnError(backoff, func(err error) bool {
+		return errors.IsConflict(err) || errors.IsAlreadyExists(err)
+	}, func() error {
 		existingCM := &corev1.ConfigMap{}
 		err := r.Get(ctx, configMapKey, existingCM)
 
