@@ -28,26 +28,26 @@ func TestRouteMatch(t *testing.T) {
 		// Prefix match basics
 		{
 			name:      "prefix match exact",
-			route:     Route{Path: "/audio/download", Type: RouteTypePrefix},
-			path:      "/audio/download",
+			route:     Route{Path: "/api/v1", Type: RouteTypePrefix},
+			path:      "/api/v1",
 			wantMatch: true,
 		},
 		{
 			name:      "prefix match subpath",
-			route:     Route{Path: "/audio/download", Type: RouteTypePrefix},
-			path:      "/audio/download/file",
+			route:     Route{Path: "/api/v1", Type: RouteTypePrefix},
+			path:      "/api/v1/users",
 			wantMatch: true,
 		},
 		{
-			name:      "prefix match query",
-			route:     Route{Path: "/audio/download", Type: RouteTypePrefix},
-			path:      "/audio/download?track_id=1182",
+			name:      "prefix match query string",
+			route:     Route{Path: "/api/v1", Type: RouteTypePrefix},
+			path:      "/api/v1?key=123",
 			wantMatch: true,
 		},
 		{
 			name:      "prefix no match",
-			route:     Route{Path: "/audio/download", Type: RouteTypePrefix},
-			path:      "/audio/upload",
+			route:     Route{Path: "/api/v1", Type: RouteTypePrefix},
+			path:      "/api/v2",
 			wantMatch: false,
 		},
 
@@ -55,33 +55,33 @@ func TestRouteMatch(t *testing.T) {
 		{
 			name: "trailing slash prefix matches without slash",
 			route: Route{
-				Path: "/audio/download/", Type: RouteTypePrefix,
+				Path: "/api/v1/", Type: RouteTypePrefix,
 			},
-			path:      "/audio/download",
+			path:      "/api/v1",
 			wantMatch: true,
 		},
 		{
 			name: "trailing slash prefix matches with slash",
 			route: Route{
-				Path: "/audio/download/", Type: RouteTypePrefix,
+				Path: "/api/v1/", Type: RouteTypePrefix,
 			},
-			path:      "/audio/download/",
+			path:      "/api/v1/",
 			wantMatch: true,
 		},
 		{
 			name: "trailing slash prefix matches subpath",
 			route: Route{
-				Path: "/audio/download/", Type: RouteTypePrefix,
+				Path: "/api/v1/", Type: RouteTypePrefix,
 			},
-			path:      "/audio/download/file",
+			path:      "/api/v1/users",
 			wantMatch: true,
 		},
 		{
 			name: "trailing slash prefix no match different path",
 			route: Route{
-				Path: "/audio/download/", Type: RouteTypePrefix,
+				Path: "/api/v1/", Type: RouteTypePrefix,
 			},
-			path:      "/audio/upload",
+			path:      "/api/v2",
 			wantMatch: false,
 		},
 	}
