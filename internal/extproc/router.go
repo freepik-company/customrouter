@@ -280,6 +280,11 @@ func (p *Processor) buildForwardResponse(route *routes.Route, vars *requestVars,
 				rewrittenBase := substituteVariables(action.RewritePath, vars)
 				if shouldReplacePrefixMatch(action, route, rewrittenBase) {
 					suffix := strings.TrimPrefix(vars.path, route.Path)
+					// Handle trailing-slash route matching path without slash:
+					// e.g. route.Path="/audio/download/", vars.path="/audio/download"
+					if suffix == vars.path && strings.HasSuffix(route.Path, "/") {
+						suffix = strings.TrimPrefix(vars.path, strings.TrimSuffix(route.Path, "/"))
+					}
 					finalPath = rewrittenBase + suffix
 				} else {
 					finalPath = rewrittenBase

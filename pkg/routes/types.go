@@ -118,7 +118,15 @@ func (r *Route) Match(path string) bool {
 	case RouteTypeExact:
 		return path == r.Path
 	case RouteTypePrefix:
-		return strings.HasPrefix(path, r.Path)
+		if strings.HasPrefix(path, r.Path) {
+			return true
+		}
+		// Match path without trailing slash, consistent with Gateway API HTTPRoute behavior.
+		// A prefix "/audio/download/" should also match "/audio/download".
+		if strings.HasSuffix(r.Path, "/") && path == strings.TrimSuffix(r.Path, "/") {
+			return true
+		}
+		return false
 	case RouteTypeRegex:
 		if r.compiledRegex != nil {
 			return r.compiledRegex.MatchString(path)
