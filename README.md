@@ -639,6 +639,75 @@ This generates the following expanded routes:
 | `/es/old-blog` | `/es/new-blog` |
 | `/fr/old-blog` | `/fr/new-blog` |
 
+**More examples:**
+
+Localized app with a CMS backend — the CMS needs the language prefix to serve the right content:
+
+```yaml
+spec:
+  pathPrefixes:
+    values: [es, fr, de, it, pt]
+    policy: Required   # All routes must have a language prefix
+  rules:
+    - matches:
+        - path: /
+      actions:
+        - type: rewrite
+          rewrite:
+            path: /app
+            preservePrefix: true
+      backendRefs:
+        - name: frontend
+          namespace: web
+          port: 3000
+```
+
+| Request | Route match | Rewrite |
+|---|---|---|
+| `/es` | `/es` | `/es/app` |
+| `/fr/products/123` | `/fr` | `/fr/app/products/123` |
+
+Selective `preservePrefix` — only the CMS rewrite needs it, the API rewrite doesn't:
+
+```yaml
+spec:
+  pathPrefixes:
+    values: [es, fr]
+    policy: Optional
+  rules:
+    # CMS needs the language to serve localized content
+    - matches:
+        - path: /blog
+      actions:
+        - type: rewrite
+          rewrite:
+            path: /cms/blog
+            preservePrefix: true
+      backendRefs:
+        - name: cms
+          namespace: backend
+          port: 8080
+
+    # API is language-agnostic, no preservePrefix needed
+    - matches:
+        - path: /api
+      actions:
+        - type: rewrite
+          rewrite:
+            path: /v2/api
+      backendRefs:
+        - name: api
+          namespace: backend
+          port: 8080
+```
+
+| Request | Rewrite |
+|---|---|
+| `/es/blog/post1` | `/es/cms/blog/post1` |
+| `/blog/post1` | `/cms/blog/post1` |
+| `/es/api/users` | `/v2/api/users` |
+| `/api/users` | `/v2/api/users` |
+
 **Notes:**
 - Works with `PathPrefix` and `Exact` match types. **Not supported for `Regex`** (rejected at validation).
 - When `preservePrefix` is `false` or not set, all expanded routes share the same rewrite/redirect path (existing behavior).
