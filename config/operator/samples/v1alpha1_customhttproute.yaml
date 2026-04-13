@@ -274,6 +274,97 @@ spec:
         policy: Disabled
 
     # ====================
+    # PRESERVE PREFIX IN REWRITES/REDIRECTS
+    # ====================
+    # When pathPrefixes expands routes, rewrite/redirect paths are shared
+    # across all expanded routes by default, losing the language prefix.
+    # Use preservePrefix: true to prepend the prefix to the rewrite/redirect
+    # path at expansion time. Only works with PathPrefix and Exact matches.
+
+    # Localized CMS rewrite: the CMS backend needs the language prefix
+    # /es/blog/post1 -> /es/cms/blog/post1  (prefix preserved)
+    # /fr/blog/post1 -> /fr/cms/blog/post1  (prefix preserved)
+    # /blog/post1    -> /cms/blog/post1      (no prefix, unchanged)
+    - matches:
+        - path: /blog
+          type: PathPrefix
+      actions:
+        - type: rewrite
+          rewrite:
+            path: /cms/blog
+            preservePrefix: true
+      backendRefs:
+        - name: cms
+          namespace: backend
+          port: 8080
+
+    # Localized redirect: old path to new path, keeping language
+    # /es/old-blog/x -> redirect /es/new-blog (301)
+    # /fr/old-blog/x -> redirect /fr/new-blog (301)
+    # /old-blog/x    -> redirect /new-blog    (301)
+    - matches:
+        - path: /old-blog
+          type: PathPrefix
+      actions:
+        - type: redirect
+          redirect:
+            path: /new-blog
+            statusCode: 301
+            preservePrefix: true
+
+    # Exact match with preservePrefix
+    # /es/about -> rewrite /es/pages/about
+    # /fr/about -> rewrite /fr/pages/about
+    # /about    -> rewrite /pages/about
+    - matches:
+        - path: /about
+          type: Exact
+      actions:
+        - type: rewrite
+          rewrite:
+            path: /pages/about
+            preservePrefix: true
+      backendRefs:
+        - name: web-en
+          namespace: web
+          port: 80
+
+    # Rewrite with variables + preservePrefix
+    # /es/blog/post1 -> /es/cms/${path.segment.2}
+    # /fr/blog/post1 -> /fr/cms/${path.segment.2}
+    - matches:
+        - path: /content
+          type: PathPrefix
+      actions:
+        - type: rewrite
+          rewrite:
+            path: /cms/${path.segment.1}
+            preservePrefix: true
+      backendRefs:
+        - name: cms
+          namespace: backend
+          port: 8080
+
+    # preservePrefix with Required policy (only prefixed routes generated)
+    # /es/ -> rewrite /es/app
+    # /fr/ -> rewrite /fr/app
+    # (no unprefixed route)
+    - matches:
+        - path: /
+          type: PathPrefix
+      actions:
+        - type: rewrite
+          rewrite:
+            path: /app
+            preservePrefix: true
+      backendRefs:
+        - name: frontend
+          namespace: web
+          port: 3000
+      pathPrefixes:
+        policy: Required
+
+    # ====================
     # INLINE {prefix} PLACEHOLDER
     # ====================
     # Use {prefix} anywhere in a Regex pattern to insert the language
