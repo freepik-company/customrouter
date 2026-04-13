@@ -186,6 +186,13 @@ type RewriteConfig struct {
 	// +optional
 	// +kubebuilder:validation:MaxLength=253
 	Hostname string `json:"hostname,omitempty"`
+
+	// preservePrefix controls whether the language/version prefix from pathPrefixes
+	// expansion is prepended to the rewrite path. When true, each expanded route
+	// gets the prefix prepended (e.g., "/es" + "/cms/blog" = "/es/cms/blog").
+	// Only effective for PathPrefix and Exact match types. Not supported for Regex.
+	// +optional
+	PreservePrefix *bool `json:"preservePrefix,omitempty"`
 }
 
 // RedirectConfig defines HTTP redirect configuration
@@ -221,6 +228,13 @@ type RedirectConfig struct {
 	// +kubebuilder:default=302
 	// +kubebuilder:validation:Enum=301;302;303;307;308
 	StatusCode int32 `json:"statusCode,omitempty"`
+
+	// preservePrefix controls whether the language/version prefix from pathPrefixes
+	// expansion is prepended to the redirect path. When true, each expanded route
+	// gets the prefix prepended (e.g., "/es" + "/new-blog" = "/es/new-blog").
+	// Only effective for PathPrefix and Exact match types. Not supported for Regex.
+	// +optional
+	PreservePrefix *bool `json:"preservePrefix,omitempty"`
 }
 
 // HeaderConfig defines a header name-value pair

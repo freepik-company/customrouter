@@ -305,6 +305,182 @@ func TestValidateCustomHTTPRoute(t *testing.T) {
 	}
 }
 
+func boolPtr(v bool) *bool { return &v }
+
+func TestValidatePreservePrefixWithRegex(t *testing.T) {
+	tests := []struct {
+		name        string
+		route       *CustomHTTPRoute
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "preservePrefix on rewrite with regex match is rejected",
+			route: &CustomHTTPRoute{
+				Spec: CustomHTTPRouteSpec{
+					TargetRef: TargetRef{Name: "default"},
+					Hostnames: []string{"example.com"},
+					Rules: []Rule{
+						{
+							Matches: []PathMatch{
+								{Path: "^/api/[0-9]+$", Type: MatchTypeRegex},
+							},
+							Actions: []Action{
+								{
+									Type: ActionTypeRewrite,
+									Rewrite: &RewriteConfig{
+										Path:           "/v2/api",
+										PreservePrefix: boolPtr(true),
+									},
+								},
+							},
+							BackendRefs: []BackendRef{
+								{Name: "api", Namespace: "default", Port: 8080},
+							},
+						},
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: "preservePrefix is not supported with Regex",
+		},
+		{
+			name: "preservePrefix on redirect with regex match is rejected",
+			route: &CustomHTTPRoute{
+				Spec: CustomHTTPRouteSpec{
+					TargetRef: TargetRef{Name: "default"},
+					Hostnames: []string{"example.com"},
+					Rules: []Rule{
+						{
+							Matches: []PathMatch{
+								{Path: "^/old/[0-9]+$", Type: MatchTypeRegex},
+							},
+							Actions: []Action{
+								{
+									Type: ActionTypeRedirect,
+									Redirect: &RedirectConfig{
+										Path:           "/new",
+										StatusCode:     301,
+										PreservePrefix: boolPtr(true),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: "preservePrefix is not supported with Regex",
+		},
+		{
+			name: "preservePrefix with PathPrefix match is allowed",
+			route: &CustomHTTPRoute{
+				Spec: CustomHTTPRouteSpec{
+					TargetRef: TargetRef{Name: "default"},
+					Hostnames: []string{"example.com"},
+					Rules: []Rule{
+						{
+							Matches: []PathMatch{
+								{Path: "/blog", Type: MatchTypePathPrefix},
+							},
+							Actions: []Action{
+								{
+									Type: ActionTypeRewrite,
+									Rewrite: &RewriteConfig{
+										Path:           "/cms/blog",
+										PreservePrefix: boolPtr(true),
+									},
+								},
+							},
+							BackendRefs: []BackendRef{
+								{Name: "cms", Namespace: "default", Port: 8080},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "preservePrefix with Exact match is allowed",
+			route: &CustomHTTPRoute{
+				Spec: CustomHTTPRouteSpec{
+					TargetRef: TargetRef{Name: "default"},
+					Hostnames: []string{"example.com"},
+					Rules: []Rule{
+						{
+							Matches: []PathMatch{
+								{Path: "/about", Type: MatchTypeExact},
+							},
+							Actions: []Action{
+								{
+									Type: ActionTypeRewrite,
+									Rewrite: &RewriteConfig{
+										Path:           "/pages/about",
+										PreservePrefix: boolPtr(true),
+									},
+								},
+							},
+							BackendRefs: []BackendRef{
+								{Name: "web", Namespace: "default", Port: 80},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "preservePrefix=false with regex is allowed",
+			route: &CustomHTTPRoute{
+				Spec: CustomHTTPRouteSpec{
+					TargetRef: TargetRef{Name: "default"},
+					Hostnames: []string{"example.com"},
+					Rules: []Rule{
+						{
+							Matches: []PathMatch{
+								{Path: "^/api/[0-9]+$", Type: MatchTypeRegex},
+							},
+							Actions: []Action{
+								{
+									Type: ActionTypeRewrite,
+									Rewrite: &RewriteConfig{
+										Path:           "/v2/api",
+										PreservePrefix: boolPtr(false),
+									},
+								},
+							},
+							BackendRefs: []BackendRef{
+								{Name: "api", Namespace: "default", Port: 8080},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.route.Validate()
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error containing %q, got nil", tt.errContains)
+					return
+				}
+				if !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("expected error containing %q, got %q", tt.errContains, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Errorf("expected no error, got %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestHasRedirectAction(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -125,24 +125,34 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule, extern
 			})
 
 		case v1alpha1.PathPrefixPolicyRequired:
+			needsPreserve := actionsNeedPreservePrefix(actions)
 			for _, prefix := range prefixes {
+				prefixedActions := actions
+				if needsPreserve {
+					prefixedActions = applyPreservePrefix(actions, prefix)
+				}
 				routes = append(routes, Route{
 					Path:     prefixPath(prefix, match.Path),
 					Type:     matchType,
 					Backend:  backend,
 					Priority: priority,
-					Actions:  actions,
+					Actions:  prefixedActions,
 				})
 			}
 
 		case v1alpha1.PathPrefixPolicyOptional:
+			needsPreserve := actionsNeedPreservePrefix(actions)
 			for _, prefix := range prefixes {
+				prefixedActions := actions
+				if needsPreserve {
+					prefixedActions = applyPreservePrefix(actions, prefix)
+				}
 				routes = append(routes, Route{
 					Path:     prefixPath(prefix, match.Path),
 					Type:     matchType,
 					Backend:  backend,
 					Priority: priority,
-					Actions:  actions,
+					Actions:  prefixedActions,
 				})
 			}
 			routes = append(routes, Route{
@@ -192,12 +202,18 @@ func convertActions(apiActions []v1alpha1.Action) []RouteAction {
 				if action.RedirectStatusCode == 0 {
 					action.RedirectStatusCode = 302
 				}
+				if a.Redirect.PreservePrefix != nil && *a.Redirect.PreservePrefix {
+					action.preservePrefix = true
+				}
 			}
 		case v1alpha1.ActionTypeRewrite:
 			if a.Rewrite != nil {
 				action.RewritePath = a.Rewrite.Path
 				action.RewriteHostname = a.Rewrite.Hostname
 				action.RewriteReplacePrefixMatch = a.Rewrite.ReplacePrefixMatch
+				if a.Rewrite.PreservePrefix != nil && *a.Rewrite.PreservePrefix {
+					action.preservePrefix = true
+				}
 			}
 		case v1alpha1.ActionTypeHeaderSet, v1alpha1.ActionTypeHeaderAdd:
 			if a.Header != nil {
@@ -212,6 +228,42 @@ func convertActions(apiActions []v1alpha1.Action) []RouteAction {
 	}
 
 	return actions
+}
+
+// actionsNeedPreservePrefix returns true if any action has preservePrefix set
+func actionsNeedPreservePrefix(actions []RouteAction) bool {
+	for _, a := range actions {
+		if a.preservePrefix {
+			return true
+		}
+	}
+	return false
+}
+
+// applyPreservePrefix clones the actions slice and prepends the prefix to
+// rewrite/redirect paths for actions that have preservePrefix=true.
+func applyPreservePrefix(actions []RouteAction, prefix string) []RouteAction {
+	cloned := make([]RouteAction, len(actions))
+	copy(cloned, actions)
+	pfx := "/" + prefix
+	for i := range cloned {
+		if !cloned[i].preservePrefix {
+			continue
+		}
+		if cloned[i].RewritePath != "" {
+			cloned[i].RewritePath = pfx + cloned[i].RewritePath
+		}
+		if cloned[i].RedirectPath != "" {
+			cloned[i].RedirectPath = pfx + cloned[i].RedirectPath
+		}
+		// RewriteReplacePrefixMatch is a pointer; if the original was non-nil,
+		// we must allocate a new bool so the cloned action doesn't share memory.
+		if cloned[i].RewriteReplacePrefixMatch != nil {
+			v := *cloned[i].RewriteReplacePrefixMatch
+			cloned[i].RewriteReplacePrefixMatch = &v
+		}
+	}
+	return cloned
 }
 
 // GetEffectivePolicy returns the policy to use for a rule

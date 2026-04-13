@@ -206,6 +206,13 @@ spec:
                                 maximum: 65535
                                 minimum: 1
                                 type: integer
+                              preservePrefix:
+                                description: |-
+                                  preservePrefix controls whether the language/version prefix from pathPrefixes
+                                  expansion is prepended to the redirect path. When true, each expanded route
+                                  gets the prefix prepended (e.g., "/es" + "/new-blog" = "/es/new-blog").
+                                  Only effective for PathPrefix and Exact match types. Not supported for Regex.
+                                type: boolean
                               scheme:
                                 description: scheme is the scheme to redirect to (http
                                   or https)
@@ -252,6 +259,13 @@ spec:
                                   This automatic behavior can be overridden with replacePrefixMatch.
                                 maxLength: 4096
                                 type: string
+                              preservePrefix:
+                                description: |-
+                                  preservePrefix controls whether the language/version prefix from pathPrefixes
+                                  expansion is prepended to the rewrite path. When true, each expanded route
+                                  gets the prefix prepended (e.g., "/es" + "/cms/blog" = "/es/cms/blog").
+                                  Only effective for PathPrefix and Exact match types. Not supported for Regex.
+                                type: boolean
                               replacePrefixMatch:
                                 description: |-
                                   replacePrefixMatch explicitly controls whether prefix rewrite is used.

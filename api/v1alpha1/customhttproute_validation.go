@@ -65,7 +65,35 @@ func validateRule(index int, rule *Rule) error {
 		}
 	}
 
+	// Validate preservePrefix is not used with Regex match types
+	if ruleHasPreservePrefix(rule) && ruleHasRegexMatch(rule) {
+		return fmt.Errorf("rules[%d]: preservePrefix is not supported with Regex match type", index)
+	}
+
 	return nil
+}
+
+// ruleHasPreservePrefix returns true if any action in the rule has preservePrefix enabled
+func ruleHasPreservePrefix(rule *Rule) bool {
+	for _, action := range rule.Actions {
+		if action.Rewrite != nil && action.Rewrite.PreservePrefix != nil && *action.Rewrite.PreservePrefix {
+			return true
+		}
+		if action.Redirect != nil && action.Redirect.PreservePrefix != nil && *action.Redirect.PreservePrefix {
+			return true
+		}
+	}
+	return false
+}
+
+// ruleHasRegexMatch returns true if any match in the rule uses Regex type
+func ruleHasRegexMatch(rule *Rule) bool {
+	for _, match := range rule.Matches {
+		if match.Type == MatchTypeRegex {
+			return true
+		}
+	}
+	return false
 }
 
 // validateAction validates a single action

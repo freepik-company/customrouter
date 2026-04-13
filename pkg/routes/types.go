@@ -43,6 +43,11 @@ type RouteAction struct {
 	// For header operations
 	HeaderName string `json:"headerName,omitempty"`
 	Value      string `json:"value,omitempty"`
+
+	// preservePrefix is an expansion-time flag, not serialized to JSON.
+	// When true, the prefix from pathPrefixes expansion is prepended to the
+	// rewrite/redirect path for prefixed routes.
+	preservePrefix bool
 }
 
 // Route represents a single expanded route for the proxy
