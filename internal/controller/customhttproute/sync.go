@@ -61,6 +61,9 @@ const (
 
 	// lastTargetAnnotation tracks the previous targetRef to clean up stale ConfigMaps on target changes
 	lastTargetAnnotation = "customrouter.freepik.com/last-target"
+
+	// hadCatchAllAnnotation tracks whether the route previously had catchAllRoute configured
+	hadCatchAllAnnotation = "customrouter.freepik.com/had-catch-all"
 )
 
 // ReconcileObject handles the reconciliation logic for CustomHTTPRoute resources.
@@ -97,9 +100,11 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 		}
 	}
 
-	// Update the last-target annotation — must succeed to ensure future target changes are tracked
-	if err := r.ensureLastTargetAnnotation(ctx, resourceManifest, target); err != nil {
-		return fmt.Errorf("failed to update last-target annotation: %w", err)
+	// Update the last-target annotation — skip for deletions as the resource is being removed
+	if eventType != watch.Deleted {
+		if err := r.ensureLastTargetAnnotation(ctx, resourceManifest, target); err != nil {
+			return fmt.Errorf("failed to update last-target annotation: %w", err)
+		}
 	}
 
 	// Rebuild ConfigMaps for the current target
@@ -107,10 +112,24 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 		return err
 	}
 
-	// Reconcile catch-all EnvoyFilter only if this route has a catchAllRoute configured
-	if resourceManifest.Spec.CatchAllRoute != nil || eventType == watch.Deleted {
+	// Reconcile catch-all EnvoyFilter when:
+	// - the route currently has catchAllRoute configured
+	// - the route is being deleted (may have had catch-all entries)
+	// - the route previously had catchAllRoute but it was removed (annotation present, field nil)
+	hadCatchAll := resourceManifest.Annotations[hadCatchAllAnnotation] == "true"
+	hasCatchAll := resourceManifest.Spec.CatchAllRoute != nil
+	needsCatchAllReconcile := hasCatchAll || eventType == watch.Deleted || hadCatchAll
+
+	if needsCatchAllReconcile {
 		if err := r.reconcileCatchAllFromAllRoutes(ctx); err != nil {
 			return fmt.Errorf("failed to reconcile catch-all routes: %w", err)
+		}
+	}
+
+	// Track whether this route has catchAllRoute for future change detection — skip for deletions
+	if eventType != watch.Deleted {
+		if err := r.ensureHadCatchAllAnnotation(ctx, resourceManifest, hasCatchAll); err != nil {
+			return fmt.Errorf("failed to update had-catch-all annotation: %w", err)
 		}
 	}
 
@@ -130,6 +149,31 @@ func (r *CustomHTTPRouteReconciler) ensureLastTargetAnnotation(
 		resource.Annotations = make(map[string]string)
 	}
 	resource.Annotations[lastTargetAnnotation] = target
+	return r.Update(ctx, resource)
+}
+
+// ensureHadCatchAllAnnotation sets or removes the had-catch-all annotation to track catchAllRoute presence.
+func (r *CustomHTTPRouteReconciler) ensureHadCatchAllAnnotation(
+	ctx context.Context,
+	resource *v1alpha1.CustomHTTPRoute,
+	hasCatchAll bool,
+) error {
+	currentValue := resource.Annotations[hadCatchAllAnnotation]
+	desiredValue := ""
+	if hasCatchAll {
+		desiredValue = "true"
+	}
+	if currentValue == desiredValue {
+		return nil
+	}
+	if resource.Annotations == nil {
+		resource.Annotations = make(map[string]string)
+	}
+	if hasCatchAll {
+		resource.Annotations[hadCatchAllAnnotation] = "true"
+	} else {
+		delete(resource.Annotations, hadCatchAllAnnotation)
+	}
 	return r.Update(ctx, resource)
 }
 
