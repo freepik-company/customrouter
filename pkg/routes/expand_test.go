@@ -9,6 +9,7 @@ import (
 )
 
 const testPathUserMe = "/user/me"
+const testPathCmsBlog = "/cms/blog"
 
 // matchesRegex is a test helper that checks if a path matches a regex pattern
 func matchesRegex(pattern, path string) bool {
@@ -384,7 +385,7 @@ func TestConvertActions(t *testing.T) {
 			input: []v1alpha1.Action{
 				{
 					Type:    v1alpha1.ActionTypeRewrite,
-					Rewrite: &v1alpha1.RewriteConfig{Path: "/cms/blog"},
+					Rewrite: &v1alpha1.RewriteConfig{Path: testPathCmsBlog},
 				},
 				{
 					Type:   v1alpha1.ActionTypeHeaderSet,
@@ -400,7 +401,7 @@ func TestConvertActions(t *testing.T) {
 				},
 			},
 			expected: []RouteAction{
-				{Type: "rewrite", RewritePath: "/cms/blog"},
+				{Type: "rewrite", RewritePath: testPathCmsBlog},
 				{Type: "header-set", HeaderName: "X-Forwarded-Host", Value: "www.example.com"},
 				{Type: "header-set", HeaderName: "X-Real-IP", Value: "${client_ip}"},
 				{Type: "header-remove", HeaderName: "X-Internal-Only"},
@@ -474,7 +475,7 @@ func TestExpandRoutesWithActions(t *testing.T) {
 					Actions: []v1alpha1.Action{
 						{
 							Type:    v1alpha1.ActionTypeRewrite,
-							Rewrite: &v1alpha1.RewriteConfig{Path: "/cms/blog"},
+							Rewrite: &v1alpha1.RewriteConfig{Path: testPathCmsBlog},
 						},
 						{
 							Type:   v1alpha1.ActionTypeHeaderSet,
@@ -508,7 +509,7 @@ func TestExpandRoutesWithActions(t *testing.T) {
 		t.Fatalf("expected 2 actions, got %d", len(route.Actions))
 	}
 
-	if route.Actions[0].Type != "rewrite" || route.Actions[0].RewritePath != "/cms/blog" {
+	if route.Actions[0].Type != "rewrite" || route.Actions[0].RewritePath != testPathCmsBlog {
 		t.Errorf("unexpected first action: %+v", route.Actions[0])
 	}
 
@@ -1353,7 +1354,7 @@ func TestPreservePrefixPathPrefixRewriteOptional(t *testing.T) {
 						{
 							Type: v1alpha1.ActionTypeRewrite,
 							Rewrite: &v1alpha1.RewriteConfig{
-								Path:           "/cms/blog",
+								Path:           testPathCmsBlog,
 								PreservePrefix: boolPtr(true),
 							},
 						},
@@ -1378,7 +1379,7 @@ func TestPreservePrefixPathPrefixRewriteOptional(t *testing.T) {
 	}
 
 	expected := map[string]string{
-		"/blog":    "/cms/blog",
+		"/blog":    testPathCmsBlog,
 		"/es/blog": "/es/cms/blog",
 		"/fr/blog": "/fr/cms/blog",
 	}
@@ -1413,7 +1414,7 @@ func TestPreservePrefixPathPrefixRewriteRequired(t *testing.T) {
 						{
 							Type: v1alpha1.ActionTypeRewrite,
 							Rewrite: &v1alpha1.RewriteConfig{
-								Path:           "/cms/blog",
+								Path:           testPathCmsBlog,
 								PreservePrefix: boolPtr(true),
 							},
 						},
@@ -1471,7 +1472,7 @@ func TestPreservePrefixDisabledPolicyNoop(t *testing.T) {
 						{
 							Type: v1alpha1.ActionTypeRewrite,
 							Rewrite: &v1alpha1.RewriteConfig{
-								Path:           "/cms/blog",
+								Path:           testPathCmsBlog,
 								PreservePrefix: boolPtr(true),
 							},
 						},
@@ -1493,7 +1494,7 @@ func TestPreservePrefixDisabledPolicyNoop(t *testing.T) {
 	if len(routes) != 1 {
 		t.Fatalf("expected 1 route, got %d", len(routes))
 	}
-	if routes[0].Actions[0].RewritePath != "/cms/blog" {
+	if routes[0].Actions[0].RewritePath != testPathCmsBlog {
 		t.Errorf("expected rewrite /cms/blog, got %s", routes[0].Actions[0].RewritePath)
 	}
 }
@@ -1635,7 +1636,7 @@ func TestPreservePrefixFalseBackwardCompat(t *testing.T) {
 						{
 							Type: v1alpha1.ActionTypeRewrite,
 							Rewrite: &v1alpha1.RewriteConfig{
-								Path: "/cms/blog",
+								Path: testPathCmsBlog,
 							},
 						},
 					},
@@ -1655,7 +1656,7 @@ func TestPreservePrefixFalseBackwardCompat(t *testing.T) {
 
 	// All routes should share the same rewrite path (no prefix prepended)
 	for _, r := range routes {
-		if r.Actions[0].RewritePath != "/cms/blog" {
+		if r.Actions[0].RewritePath != testPathCmsBlog {
 			t.Errorf("path %s: expected rewrite /cms/blog (unchanged), got %q",
 				r.Path, r.Actions[0].RewritePath)
 		}
@@ -1676,7 +1677,7 @@ func TestPreservePrefixNoPathPrefixesDefined(t *testing.T) {
 						{
 							Type: v1alpha1.ActionTypeRewrite,
 							Rewrite: &v1alpha1.RewriteConfig{
-								Path:           "/cms/blog",
+								Path:           testPathCmsBlog,
 								PreservePrefix: boolPtr(true),
 							},
 						},
@@ -1698,7 +1699,7 @@ func TestPreservePrefixNoPathPrefixesDefined(t *testing.T) {
 	if len(routes) != 1 {
 		t.Fatalf("expected 1 route, got %d", len(routes))
 	}
-	if routes[0].Actions[0].RewritePath != "/cms/blog" {
+	if routes[0].Actions[0].RewritePath != testPathCmsBlog {
 		t.Errorf("expected rewrite /cms/blog (no-op), got %s", routes[0].Actions[0].RewritePath)
 	}
 }
@@ -1829,7 +1830,7 @@ func TestPreservePrefixWithReplacePrefixMatchFalse(t *testing.T) {
 						{
 							Type: v1alpha1.ActionTypeRewrite,
 							Rewrite: &v1alpha1.RewriteConfig{
-								Path:               "/cms/blog",
+								Path:               testPathCmsBlog,
 								ReplacePrefixMatch: boolPtr(false),
 								PreservePrefix:     boolPtr(true),
 							},
@@ -1850,7 +1851,7 @@ func TestPreservePrefixWithReplacePrefixMatchFalse(t *testing.T) {
 	routes := result["example.com"]
 
 	expected := map[string]string{
-		"/blog":    "/cms/blog",
+		"/blog":    testPathCmsBlog,
 		"/es/blog": "/es/cms/blog",
 	}
 
@@ -1942,7 +1943,7 @@ func TestPreservePrefixActionsCloned(t *testing.T) {
 						{
 							Type: v1alpha1.ActionTypeRewrite,
 							Rewrite: &v1alpha1.RewriteConfig{
-								Path:           "/cms/blog",
+								Path:           testPathCmsBlog,
 								PreservePrefix: boolPtr(true),
 							},
 						},
@@ -1981,7 +1982,7 @@ func TestPreservePrefixActionsCloned(t *testing.T) {
 	if frRoute.Actions[0].RewritePath != "/fr/cms/blog" {
 		t.Errorf("fr route: expected /fr/cms/blog, got %s", frRoute.Actions[0].RewritePath)
 	}
-	if baseRoute.Actions[0].RewritePath != "/cms/blog" {
+	if baseRoute.Actions[0].RewritePath != testPathCmsBlog {
 		t.Errorf("base route: expected /cms/blog, got %s", baseRoute.Actions[0].RewritePath)
 	}
 }
