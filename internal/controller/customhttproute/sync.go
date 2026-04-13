@@ -64,6 +64,9 @@ const (
 
 	// hadCatchAllAnnotation tracks whether the route previously had catchAllRoute configured
 	hadCatchAllAnnotation = "customrouter.freepik.com/had-catch-all"
+
+	// annotationValueTrue is the canonical string value for boolean true annotations
+	annotationValueTrue = "true"
 )
 
 // ReconcileObject handles the reconciliation logic for CustomHTTPRoute resources.
@@ -116,7 +119,7 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 	// - the route currently has catchAllRoute configured
 	// - the route is being deleted (may have had catch-all entries)
 	// - the route previously had catchAllRoute but it was removed (annotation present, field nil)
-	hadCatchAll := resourceManifest.Annotations[hadCatchAllAnnotation] == "true"
+	hadCatchAll := resourceManifest.Annotations[hadCatchAllAnnotation] == annotationValueTrue
 	hasCatchAll := resourceManifest.Spec.CatchAllRoute != nil
 	needsCatchAllReconcile := hasCatchAll || eventType == watch.Deleted || hadCatchAll
 
@@ -170,7 +173,7 @@ func (r *CustomHTTPRouteReconciler) ensureHadCatchAllAnnotation(
 		resource.Annotations = make(map[string]string)
 	}
 	if hasCatchAll {
-		resource.Annotations[hadCatchAllAnnotation] = "true"
+		resource.Annotations[hadCatchAllAnnotation] = annotationValueTrue
 	} else {
 		delete(resource.Annotations, hadCatchAllAnnotation)
 	}
