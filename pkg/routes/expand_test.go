@@ -1704,111 +1704,99 @@ func TestPreservePrefixNoPathPrefixesDefined(t *testing.T) {
 	}
 }
 
-func TestPreservePrefixRootPath(t *testing.T) {
-	cr := &v1alpha1.CustomHTTPRoute{
-		Spec: v1alpha1.CustomHTTPRouteSpec{
-			TargetRef: v1alpha1.TargetRef{Name: "default"},
-			Hostnames: []string{"example.com"},
-			PathPrefixes: &v1alpha1.PathPrefixes{
-				Values: []string{"es"},
-				Policy: v1alpha1.PathPrefixPolicyOptional,
+func TestPreservePrefixPathVariants(t *testing.T) {
+	tests := []struct {
+		name        string
+		matchPath   string
+		rewritePath string
+		backendName string
+		backendPort int32
+		expected    map[string]string
+	}{
+		{
+			name:        "root path",
+			matchPath:   "/",
+			rewritePath: "/app",
+			backendName: "app",
+			backendPort: 80,
+			expected: map[string]string{
+				"/":   "/app",
+				"/es": "/es/app",
 			},
-			Rules: []v1alpha1.Rule{
-				{
-					Matches: []v1alpha1.PathMatch{
-						{Path: "/", Type: v1alpha1.MatchTypePathPrefix},
-					},
-					Actions: []v1alpha1.Action{
-						{
-							Type: v1alpha1.ActionTypeRewrite,
-							Rewrite: &v1alpha1.RewriteConfig{
-								Path:           "/app",
-								PreservePrefix: boolPtr(true),
-							},
-						},
-					},
-					BackendRefs: []v1alpha1.BackendRef{
-						{Name: "app", Namespace: "default", Port: 80},
-					},
-				},
+		},
+		{
+			name:        "trailing slash",
+			matchPath:   "/blog/",
+			rewritePath: "/cms/blog/",
+			backendName: "cms",
+			backendPort: 8080,
+			expected: map[string]string{
+				"/blog/":    "/cms/blog/",
+				"/es/blog/": "/es/cms/blog/",
+			},
+		},
+		{
+			name:        "with variables",
+			matchPath:   "/blog",
+			rewritePath: "/cms/${path.segment.1}",
+			backendName: "cms",
+			backendPort: 8080,
+			expected: map[string]string{
+				"/blog":    "/cms/${path.segment.1}",
+				"/es/blog": "/es/cms/${path.segment.1}",
 			},
 		},
 	}
 
-	result, err := ExpandRoutes(cr, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	routes := result["example.com"]
-
-	expected := map[string]string{
-		"/":   "/app",
-		"/es": "/es/app",
-	}
-
-	for _, r := range routes {
-		wantRewrite, ok := expected[r.Path]
-		if !ok {
-			t.Errorf("unexpected route path: %s", r.Path)
-			continue
-		}
-		if r.Actions[0].RewritePath != wantRewrite {
-			t.Errorf("path %s: expected rewrite %q, got %q", r.Path, wantRewrite, r.Actions[0].RewritePath)
-		}
-	}
-}
-
-func TestPreservePrefixTrailingSlash(t *testing.T) {
-	cr := &v1alpha1.CustomHTTPRoute{
-		Spec: v1alpha1.CustomHTTPRouteSpec{
-			TargetRef: v1alpha1.TargetRef{Name: "default"},
-			Hostnames: []string{"example.com"},
-			PathPrefixes: &v1alpha1.PathPrefixes{
-				Values: []string{"es"},
-				Policy: v1alpha1.PathPrefixPolicyOptional,
-			},
-			Rules: []v1alpha1.Rule{
-				{
-					Matches: []v1alpha1.PathMatch{
-						{Path: "/blog/", Type: v1alpha1.MatchTypePathPrefix},
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cr := &v1alpha1.CustomHTTPRoute{
+				Spec: v1alpha1.CustomHTTPRouteSpec{
+					TargetRef: v1alpha1.TargetRef{Name: "default"},
+					Hostnames: []string{"example.com"},
+					PathPrefixes: &v1alpha1.PathPrefixes{
+						Values: []string{"es"},
+						Policy: v1alpha1.PathPrefixPolicyOptional,
 					},
-					Actions: []v1alpha1.Action{
+					Rules: []v1alpha1.Rule{
 						{
-							Type: v1alpha1.ActionTypeRewrite,
-							Rewrite: &v1alpha1.RewriteConfig{
-								Path:           "/cms/blog/",
-								PreservePrefix: boolPtr(true),
+							Matches: []v1alpha1.PathMatch{
+								{Path: tt.matchPath, Type: v1alpha1.MatchTypePathPrefix},
+							},
+							Actions: []v1alpha1.Action{
+								{
+									Type: v1alpha1.ActionTypeRewrite,
+									Rewrite: &v1alpha1.RewriteConfig{
+										Path:           tt.rewritePath,
+										PreservePrefix: boolPtr(true),
+									},
+								},
+							},
+							BackendRefs: []v1alpha1.BackendRef{
+								{Name: tt.backendName, Namespace: "default", Port: tt.backendPort},
 							},
 						},
 					},
-					BackendRefs: []v1alpha1.BackendRef{
-						{Name: "cms", Namespace: "default", Port: 8080},
-					},
 				},
-			},
-		},
-	}
+			}
 
-	result, err := ExpandRoutes(cr, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	routes := result["example.com"]
+			result, err := ExpandRoutes(cr, nil)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			routes := result["example.com"]
 
-	expected := map[string]string{
-		"/blog/":    "/cms/blog/",
-		"/es/blog/": "/es/cms/blog/",
-	}
-
-	for _, r := range routes {
-		wantRewrite, ok := expected[r.Path]
-		if !ok {
-			t.Errorf("unexpected route path: %s", r.Path)
-			continue
-		}
-		if r.Actions[0].RewritePath != wantRewrite {
-			t.Errorf("path %s: expected rewrite %q, got %q", r.Path, wantRewrite, r.Actions[0].RewritePath)
-		}
+			for _, r := range routes {
+				wantRewrite, ok := tt.expected[r.Path]
+				if !ok {
+					t.Errorf("unexpected route path: %s", r.Path)
+					continue
+				}
+				if r.Actions[0].RewritePath != wantRewrite {
+					t.Errorf("path %s: expected rewrite %q, got %q", r.Path, wantRewrite, r.Actions[0].RewritePath)
+				}
+			}
+		})
 	}
 }
 
@@ -1867,60 +1855,6 @@ func TestPreservePrefixWithReplacePrefixMatchFalse(t *testing.T) {
 		// Verify replacePrefixMatch is preserved
 		if r.Actions[0].RewriteReplacePrefixMatch == nil || *r.Actions[0].RewriteReplacePrefixMatch != false {
 			t.Errorf("path %s: expected replacePrefixMatch=false", r.Path)
-		}
-	}
-}
-
-func TestPreservePrefixWithVariables(t *testing.T) {
-	cr := &v1alpha1.CustomHTTPRoute{
-		Spec: v1alpha1.CustomHTTPRouteSpec{
-			TargetRef: v1alpha1.TargetRef{Name: "default"},
-			Hostnames: []string{"example.com"},
-			PathPrefixes: &v1alpha1.PathPrefixes{
-				Values: []string{"es"},
-				Policy: v1alpha1.PathPrefixPolicyOptional,
-			},
-			Rules: []v1alpha1.Rule{
-				{
-					Matches: []v1alpha1.PathMatch{
-						{Path: "/blog", Type: v1alpha1.MatchTypePathPrefix},
-					},
-					Actions: []v1alpha1.Action{
-						{
-							Type: v1alpha1.ActionTypeRewrite,
-							Rewrite: &v1alpha1.RewriteConfig{
-								Path:           "/cms/${path.segment.1}",
-								PreservePrefix: boolPtr(true),
-							},
-						},
-					},
-					BackendRefs: []v1alpha1.BackendRef{
-						{Name: "cms", Namespace: "default", Port: 8080},
-					},
-				},
-			},
-		},
-	}
-
-	result, err := ExpandRoutes(cr, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	routes := result["example.com"]
-
-	expected := map[string]string{
-		"/blog":    "/cms/${path.segment.1}",
-		"/es/blog": "/es/cms/${path.segment.1}",
-	}
-
-	for _, r := range routes {
-		wantRewrite, ok := expected[r.Path]
-		if !ok {
-			t.Errorf("unexpected route path: %s", r.Path)
-			continue
-		}
-		if r.Actions[0].RewritePath != wantRewrite {
-			t.Errorf("path %s: expected rewrite %q, got %q", r.Path, wantRewrite, r.Actions[0].RewritePath)
 		}
 	}
 }
