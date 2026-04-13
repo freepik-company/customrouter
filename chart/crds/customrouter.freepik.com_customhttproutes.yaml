@@ -98,7 +98,7 @@ spec:
                   to
                 items:
                   type: string
-                maxItems: 50
+                maxItems: 128
                 minItems: 1
                 type: array
               pathPrefixes:
@@ -363,7 +363,7 @@ spec:
                         required:
                         - path
                         type: object
-                      maxItems: 50
+                      maxItems: 128
                       minItems: 1
                       type: array
                     pathPrefixes:
