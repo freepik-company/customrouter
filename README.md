@@ -382,6 +382,8 @@ Defines routing rules for a set of hostnames. Rules are compiled into an optimiz
 | `pathPrefixes.expandMatchTypes` | Which match types are expanded with prefixes (default: all) |
 | `rules[].matches` | Path matching conditions (max 50 per rule) |
 | `rules[].actions` | Optional transformations (redirect, rewrite, headers) |
+| `rules[].actions[].rewrite.preservePrefix` | Prepend language prefix to rewrite path in expanded routes |
+| `rules[].actions[].redirect.preservePrefix` | Prepend language prefix to redirect path in expanded routes |
 | `rules[].backendRefs` | Target services — name must be a valid RFC 1123 label (no dots) |
 | `rules[].allowOverlap` | Permit overlap with other CustomHTTPRoutes (warn instead of reject) |
 
@@ -585,6 +587,63 @@ rules:
         namespace: backend
         port: 8080
 ```
+
+#### Preserve Prefix in Rewrites and Redirects
+
+When using `pathPrefixes`, expanded routes normally share the same rewrite/redirect path. This means the language prefix is lost during rewrite:
+
+```
+Request: /es/blog/post1 → match /es/blog → rewrite /cms/blog/post1  (prefix /es lost)
+```
+
+The `preservePrefix` option prepends the language prefix to the rewrite/redirect path at expansion time, so each expanded route gets its own prefixed path:
+
+```yaml
+spec:
+  pathPrefixes:
+    values: [es, fr]
+    policy: Optional
+  rules:
+    # Rewrite with preservePrefix
+    - matches:
+        - path: /blog
+      actions:
+        - type: rewrite
+          rewrite:
+            path: /cms/blog
+            preservePrefix: true
+      backendRefs:
+        - name: cms-service
+          namespace: backend
+          port: 8080
+
+    # Redirect with preservePrefix
+    - matches:
+        - path: /old-blog
+      actions:
+        - type: redirect
+          redirect:
+            path: /new-blog
+            statusCode: 301
+            preservePrefix: true
+```
+
+This generates the following expanded routes:
+
+| Route path | Rewrite/Redirect path |
+|---|---|
+| `/blog` | `/cms/blog` |
+| `/es/blog` | `/es/cms/blog` |
+| `/fr/blog` | `/fr/cms/blog` |
+| `/old-blog` | `/new-blog` |
+| `/es/old-blog` | `/es/new-blog` |
+| `/fr/old-blog` | `/fr/new-blog` |
+
+**Notes:**
+- Works with `PathPrefix` and `Exact` match types. **Not supported for `Regex`** (rejected at validation).
+- When `preservePrefix` is `false` or not set, all expanded routes share the same rewrite/redirect path (existing behavior).
+- When no `pathPrefixes` are defined, `preservePrefix` is a no-op.
+- Zero runtime overhead: prefix is resolved at expansion time, not per-request.
 
 #### Header Manipulation Example
 
