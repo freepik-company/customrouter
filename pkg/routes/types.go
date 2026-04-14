@@ -124,7 +124,12 @@ func (r *Route) Match(path string) bool {
 		return path == r.Path
 	case RouteTypePrefix:
 		if strings.HasPrefix(path, r.Path) {
-			return true
+			// Ensure match is on a complete path segment boundary per Gateway API spec.
+			// "/academy" must match "/academy", "/academy/" but NOT "/academy-test".
+			rest := path[len(r.Path):]
+			if len(rest) == 0 || rest[0] == '/' || strings.HasSuffix(r.Path, "/") {
+				return true
+			}
 		}
 		// Match path without trailing slash, consistent with Gateway API HTTPRoute behavior.
 		// A prefix "/audio/download/" should also match "/audio/download".
