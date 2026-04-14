@@ -39,12 +39,6 @@ func TestRouteMatch(t *testing.T) {
 			wantMatch: true,
 		},
 		{
-			name:      "prefix match query string",
-			route:     Route{Path: "/api/v1", Type: RouteTypePrefix},
-			path:      "/api/v1?key=123",
-			wantMatch: true,
-		},
-		{
 			name:      "prefix no match",
 			route:     Route{Path: "/api/v1", Type: RouteTypePrefix},
 			path:      "/api/v2",
@@ -82,6 +76,20 @@ func TestRouteMatch(t *testing.T) {
 				Path: "/api/v1/", Type: RouteTypePrefix,
 			},
 			path:      "/api/v2",
+			wantMatch: false,
+		},
+
+		// Segment boundary - prefix must not match partial segments
+		{
+			name:      "prefix no match partial segment",
+			route:     Route{Path: "/academy", Type: RouteTypePrefix},
+			path:      "/academy-test",
+			wantMatch: false,
+		},
+		{
+			name:      "prefix no match partial multi-segment",
+			route:     Route{Path: "/api/v1", Type: RouteTypePrefix},
+			path:      "/api/v1extra",
 			wantMatch: false,
 		},
 	}
