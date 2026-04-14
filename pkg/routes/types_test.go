@@ -92,6 +92,48 @@ func TestRouteMatch(t *testing.T) {
 			path:      "/api/v1extra",
 			wantMatch: false,
 		},
+		{
+			name:      "prefix no match sitemap with shared start",
+			route:     Route{Path: "/audio", Type: RouteTypePrefix},
+			path:      "/audio-sitemap.xml",
+			wantMatch: false,
+		},
+		{
+			name:      "prefix multi-segment no match different leaf",
+			route:     Route{Path: "/audio/api", Type: RouteTypePrefix},
+			path:      "/audio/api-docs",
+			wantMatch: false,
+		},
+		{
+			name:      "prefix multi-segment matches subpath",
+			route:     Route{Path: "/audio/api", Type: RouteTypePrefix},
+			path:      "/audio/api/v1",
+			wantMatch: true,
+		},
+		{
+			name:      "prefix multi-segment matches exact",
+			route:     Route{Path: "/audio/api", Type: RouteTypePrefix},
+			path:      "/audio/api",
+			wantMatch: true,
+		},
+		{
+			name:      "prefix root matches everything",
+			route:     Route{Path: "/", Type: RouteTypePrefix},
+			path:      "/anything/here",
+			wantMatch: true,
+		},
+		{
+			name:      "prefix no match suffix hyphenated word",
+			route:     Route{Path: "/blog", Type: RouteTypePrefix},
+			path:      "/blog-post-title",
+			wantMatch: false,
+		},
+		{
+			name:      "prefix no match suffix dot extension",
+			route:     Route{Path: "/assets", Type: RouteTypePrefix},
+			path:      "/assets.json",
+			wantMatch: false,
+		},
 	}
 
 	for _, tt := range tests {
