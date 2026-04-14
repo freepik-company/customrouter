@@ -74,6 +74,12 @@ operator:
   # -- Affinity rules
   affinity: {}
 
+  # -- Deployment metadata annotations (e.g. for Admitik policies)
+  deploymentAnnotations: {}
+
+  # -- Deployment metadata labels (e.g. for Admitik policies)
+  deploymentLabels: {}
+
   # -- Pod annotations
   podAnnotations: {}
 
@@ -275,6 +281,12 @@ externalProcessors:
 
     # -- Affinity rules
     affinity: {}
+
+    # -- Deployment metadata annotations (e.g. for Admitik policies)
+    deploymentAnnotations: {}
+
+    # -- Deployment metadata labels (e.g. for Admitik policies)
+    deploymentLabels: {}
 
     # -- Pod annotations
     podAnnotations: {}

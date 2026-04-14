@@ -79,6 +79,7 @@ func (p *Processor) Process(stream extprocv3.ExternalProcessor_ProcessServer) er
 
 		resp, reqCtx, err := p.processRequest(req)
 		if err != nil {
+			processingErrorsTotal.Inc()
 			p.logger.Error("failed to process request", zap.Error(err))
 			return err
 		}

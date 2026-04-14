@@ -365,6 +365,7 @@ The external processor reads route ConfigMaps and makes routing decisions for En
 | `--target-name` | `""` | Target name to filter ConfigMaps (matches `spec.targetRef.name`) |
 | `--routes-configmap-namespace` | `""` | Namespace to read ConfigMaps from (empty = all namespaces) |
 | `--access-log` | `true` | Enable access logging |
+| `--metrics-addr` | `:9090` | Address for Prometheus metrics (empty to disable) |
 | `--debug` | `false` | Enable debug logging and gRPC reflection |
 | `--kubeconfig` | `""` | Path to kubeconfig (uses in-cluster config if not set) |
 
@@ -899,6 +900,115 @@ rules:
         port: 8080
     # allowOverlap defaults to false — conflicts are rejected
 ```
+
+## Observability
+
+### Prometheus Metrics
+
+The external processor exposes Prometheus metrics via an HTTP endpoint on a separate port from the gRPC server.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--metrics-addr` | `:9090` | Address for Prometheus metrics endpoint (empty to disable) |
+
+**Available metrics:**
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `customrouter_requests_total` | Counter | `route_found` | Total requests processed |
+| `customrouter_request_duration_seconds` | Histogram | `route_found` | Request processing latency |
+| `customrouter_route_matches_total` | Counter | `match_type` | Route matches by type (prefix, exact, regex) |
+| `customrouter_route_not_found_total` | Counter | — | Requests with no matching route |
+| `customrouter_processing_errors_total` | Counter | — | Errors during request processing |
+
+### Helm Chart: Metrics and ServiceMonitor
+
+Enable the metrics port and Prometheus Operator ServiceMonitor in `values.yaml`:
+
+```yaml
+externalProcessors:
+  default:
+    args:
+      - --metrics-addr=:9090
+    metrics:
+      enabled: true
+      port: 9090
+      serviceMonitor:
+        enabled: true
+        interval: 30s
+        labels: {}            # Additional labels for ServiceMonitor
+        metricRelabelings: [] # Metric relabeling configs
+        relabelings: []       # Relabeling configs
+```
+
+When `metrics.enabled` is `true`, the chart exposes a `metrics` port on both the Deployment and Service. When `serviceMonitor.enabled` is `true`, a `ServiceMonitor` resource is created for auto-discovery by Prometheus Operator.
+
+### Deployment and Pod Labels/Annotations
+
+The chart supports custom labels and annotations on both the Deployment metadata and pod template. This is useful for integrations like Admitik that watch Deployment resources (generation policies) and mutate Pods (sidecar injection):
+
+```yaml
+externalProcessors:
+  default:
+    # Labels/annotations on the Deployment metadata
+    deploymentLabels: {}
+    deploymentAnnotations: {}
+    # Labels/annotations on the Pod template
+    podLabels: {}
+    podAnnotations: {}
+
+operator:
+    deploymentLabels: {}
+    deploymentAnnotations: {}
+    podLabels: {}
+    podAnnotations: {}
+```
+
+### Logging to OpenSearch (Admitik + FluentBit)
+
+If your cluster uses [Admitik](https://github.com/freepik-company/admitik) with FluentBit sidecar injection, add the logging labels and annotations to ship logs to OpenSearch via Vector:
+
+```yaml
+externalProcessors:
+  default:
+    # Deployment metadata: triggers FluentBit ConfigMap generation
+    deploymentLabels:
+      admitik.policy.v1/logging: "true"
+    deploymentAnnotations:
+      admitik.policy.v1/loggingConfig: |
+        - container: external-processor
+          index: prod-customrouter
+
+    # Pod template: triggers FluentBit sidecar injection
+    podLabels:
+      admitik.policy.v1/logging: "true"
+```
+
+The external processor already outputs structured JSON logs to stdout (via `zap`), so no log format changes are needed.
+
+### Recommended Alerts
+
+The following PrometheusRule alerts are recommended for production deployments:
+
+| Alert | Severity | Description |
+|-------|----------|-------------|
+| `CritCustomrouterHighRouteNotFoundRate` | critical | >10% of requests not matching any route for 5m |
+| `WarnCustomrouterRouteNotFoundRate` | warning | >5% of requests not matching any route for 5m |
+| `CritCustomrouterExtprocDown` | critical | 0 available extproc replicas for 2m |
+| `CritCustomrouterCrashLoopBackOff` | critical | Pod in CrashLoopBackOff for 5m |
+| `CritCustomrouterHPAMaxReplicas` | critical | HPA at max replicas for 10m |
+
+These can be deployed as a `PrometheusRule` resource via `extraObjects` in the Helm chart values. See the [chart/values.yaml](chart/values.yaml) for the `extraObjects` field.
+
+### Grafana Dashboard
+
+Key panels for a CustomRouter Grafana dashboard:
+
+- **Request rate**: `sum(rate(customrouter_requests_total[5m])) by (route_found)`
+- **Route not found rate**: `sum(rate(customrouter_route_not_found_total[5m])) / sum(rate(customrouter_requests_total[5m]))`
+- **Latency p50/p95/p99**: `histogram_quantile(0.95, sum(rate(customrouter_request_duration_seconds_bucket[5m])) by (le))`
+- **Match type distribution**: `sum(rate(customrouter_route_matches_total[5m])) by (match_type)`
+- **Processing errors**: `sum(rate(customrouter_processing_errors_total[5m]))`
 
 ## License
 

@@ -6,6 +6,13 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "customrouter.operator.labels" . | nindent 4 }}
+    {{- with .Values.operator.deploymentLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.operator.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   {{- if not .Values.operator.hpa.enabled }}
   replicas: {{ .Values.operator.replicaCount }}

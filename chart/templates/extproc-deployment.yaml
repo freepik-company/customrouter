@@ -8,6 +8,13 @@ metadata:
   namespace: {{ $.Release.Namespace }}
   labels:
     {{- include "customrouter.extproc.labels" (dict "name" $name "root" $) | nindent 4 }}
+    {{- with $config.deploymentLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with $config.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   {{- if not $config.hpa.enabled }}
   replicas: {{ $config.replicaCount }}
