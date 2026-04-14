@@ -24,6 +24,36 @@ func TestRouteMatch(t *testing.T) {
 			path:      "/foo/bar",
 			wantMatch: false,
 		},
+		{
+			name:      "exact match blog post title",
+			route:     Route{Path: "/blog-post-title", Type: RouteTypeExact},
+			path:      "/blog-post-title",
+			wantMatch: true,
+		},
+		{
+			name:      "exact no match blog post title subpath",
+			route:     Route{Path: "/blog-post-title", Type: RouteTypeExact},
+			path:      "/blog-post-title/comments",
+			wantMatch: false,
+		},
+		{
+			name:      "exact match audio sitemap",
+			route:     Route{Path: "/audio-sitemap.xml", Type: RouteTypeExact},
+			path:      "/audio-sitemap.xml",
+			wantMatch: true,
+		},
+		{
+			name:      "exact no match audio sitemap different extension",
+			route:     Route{Path: "/audio-sitemap.xml", Type: RouteTypeExact},
+			path:      "/audio-sitemap.json",
+			wantMatch: false,
+		},
+		{
+			name:      "exact match assets json",
+			route:     Route{Path: "/assets.json", Type: RouteTypeExact},
+			path:      "/assets.json",
+			wantMatch: true,
+		},
 
 		// Prefix match basics
 		{
