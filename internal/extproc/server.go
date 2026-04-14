@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"time"
 
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
@@ -135,12 +136,36 @@ func (s *Server) Start(ctx context.Context) error {
 		zap.Duration("max_connection_idle", s.config.MaxConnectionIdle),
 		zap.Duration("max_connection_age", s.config.MaxConnectionAge),
 		zap.Bool("access_log_enabled", s.config.AccessLogEnabled),
+		zap.String("metrics_addr", s.config.MetricsAddr),
 	)
+
+	// Start metrics HTTP server if configured
+	var metricsServer *http.Server
+	if s.config.MetricsAddr != "" {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", MetricsHandler())
+		metricsServer = &http.Server{
+			Addr:              s.config.MetricsAddr,
+			Handler:           mux,
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		go func() {
+			s.logger.Info("starting metrics server",
+				zap.String("addr", s.config.MetricsAddr),
+			)
+			if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				s.logger.Error("metrics server error", zap.Error(err))
+			}
+		}()
+	}
 
 	// Handle graceful shutdown
 	go func() {
 		<-ctx.Done()
 		s.logger.Info("shutting down extproc server")
+		if metricsServer != nil {
+			_ = metricsServer.Close()
+		}
 		s.grpcServer.GracefulStop()
 		if err := s.loader.Close(); err != nil {
 			s.logger.Warn("failed to close loader", zap.Error(err))

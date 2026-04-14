@@ -1,0 +1,31 @@
+{{- range $name, $config := .Values.externalProcessors }}
+{{- if and $config.enabled $config.metrics $config.metrics.enabled $config.metrics.serviceMonitor $config.metrics.serviceMonitor.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "customrouter.extproc.name" (dict "name" $name "root" $) }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "customrouter.extproc.labels" (dict "name" $name "root" $) | nindent 4 }}
+    {{- with $config.metrics.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "customrouter.extproc.selectorLabels" (dict "name" $name "root" $) | nindent 6 }}
+  endpoints:
+    - port: metrics
+      interval: {{ $config.metrics.serviceMonitor.interval | default "30s" }}
+      path: /metrics
+      {{- with $config.metrics.serviceMonitor.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $config.metrics.serviceMonitor.relabelings }}
+      relabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}

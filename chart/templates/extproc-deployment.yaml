@@ -45,6 +45,11 @@ spec:
             - name: grpc
               containerPort: {{ $config.service.port }}
               protocol: TCP
+            {{- if and $config.metrics $config.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ $config.metrics.port | default 9090 }}
+              protocol: TCP
+            {{- end }}
           {{- with $config.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}

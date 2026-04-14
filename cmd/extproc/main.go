@@ -48,6 +48,8 @@ func main() {
 	flag.BoolVar(&config.AccessLogEnabled, "access-log", config.AccessLogEnabled, "Enable access logging")
 	flag.StringVar(&config.RoutesNamespace, "routes-configmap-namespace", config.RoutesNamespace,
 		"Namespace to read route ConfigMaps from (empty = all namespaces)")
+	flag.StringVar(&config.MetricsAddr, "metrics-addr", config.MetricsAddr,
+		"Address to expose Prometheus metrics on (empty to disable)")
 
 	// gRPC server configuration flags
 	flag.IntVar(&config.MaxRecvMsgSize, "grpc-max-recv-msg-size",

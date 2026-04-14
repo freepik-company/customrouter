@@ -20,6 +20,7 @@ package extproc
 import (
 	"fmt"
 	"io"
+	"strconv"
 	"time"
 
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
@@ -97,6 +98,17 @@ func (p *Processor) Process(stream extprocv3.ExternalProcessor_ProcessServer) er
 
 func (p *Processor) logAccess(ctx *requestContext) {
 	ctx.processingTimeNs = time.Since(ctx.startTime).Nanoseconds()
+
+	// Record metrics
+	found := strconv.FormatBool(ctx.routeFound)
+	durationSec := float64(ctx.processingTimeNs) / 1e9
+	requestsTotal.WithLabelValues(found).Inc()
+	requestDuration.WithLabelValues(found).Observe(durationSec)
+	if ctx.routeFound {
+		routeMatchesTotal.WithLabelValues(ctx.matchedType).Inc()
+	} else {
+		routeNotFoundTotal.Inc()
+	}
 
 	if ctx.routeFound {
 		p.logger.Info("access",

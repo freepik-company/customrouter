@@ -69,6 +69,10 @@ type ServerConfig struct {
 	// RoutesNamespace restricts ConfigMap loading to a specific namespace.
 	// Empty string means all namespaces (backward compatible).
 	RoutesNamespace string
+
+	// MetricsAddr is the address to expose Prometheus metrics on (e.g. ":9090").
+	// Empty string disables the metrics endpoint.
+	MetricsAddr string
 }
 
 // DefaultServerConfig returns a ServerConfig with production-ready defaults
@@ -85,5 +89,6 @@ func DefaultServerConfig() *ServerConfig {
 		MaxConnectionAge:      30 * time.Minute, // Force reconnect after 30m for load balancing
 		MaxConnectionAgeGrace: 10 * time.Second, // Grace period for in-flight requests
 		AccessLogEnabled:      true,
+		MetricsAddr:           ":9090",
 	}
 }
