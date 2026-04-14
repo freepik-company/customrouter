@@ -311,7 +311,7 @@ type Rule struct {
 	// matches defines the conditions for matching this rule
 	// +required
 	// +kubebuilder:validation:MinItems=1
-	// +kubebuilder:validation:MaxItems=50
+	// +kubebuilder:validation:MaxItems=128
 	Matches []PathMatch `json:"matches"`
 
 	// actions defines transformations to apply to matched requests
@@ -356,7 +356,7 @@ type CustomHTTPRouteSpec struct {
 	// hostnames is a list of hostnames that this route applies to
 	// +required
 	// +kubebuilder:validation:MinItems=1
-	// +kubebuilder:validation:MaxItems=50
+	// +kubebuilder:validation:MaxItems=128
 	Hostnames []string `json:"hostnames"`
 
 	// pathPrefixes defines prefixes to prepend to paths (e.g., language prefixes)

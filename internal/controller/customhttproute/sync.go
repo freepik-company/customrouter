@@ -55,82 +55,169 @@ const (
 
 	// configMapBaseName is the base name for all route ConfigMaps
 	configMapBaseName = "customrouter-routes"
+
+	// routesDataKey is the key used in ConfigMap data for the routes JSON
+	routesDataKey = "routes.json"
+
+	// lastTargetAnnotation tracks the previous targetRef to clean up stale ConfigMaps on target changes
+	lastTargetAnnotation = "customrouter.freepik.com/last-target"
+
+	// hadCatchAllAnnotation tracks whether the route previously had catchAllRoute configured
+	hadCatchAllAnnotation = "customrouter.freepik.com/had-catch-all"
+
+	// annotationValueTrue is the canonical string value for boolean true annotations
+	annotationValueTrue = "true"
 )
 
 // ReconcileObject handles the reconciliation logic for CustomHTTPRoute resources.
-// It rebuilds the ConfigMaps with all routes whenever a CustomHTTPRoute is created, updated, or deleted.
+// It rebuilds only the ConfigMaps for the affected target, not all targets.
 func (r *CustomHTTPRouteReconciler) ReconcileObject(
 	ctx context.Context,
 	eventType watch.EventType,
 	resourceManifest *v1alpha1.CustomHTTPRoute,
 ) error {
 	logger := log.FromContext(ctx)
+	target := resourceManifest.Spec.TargetRef.Name
 
 	switch eventType {
 	case watch.Modified:
 		logger.Info("CustomHTTPRoute modified, rebuilding routes ConfigMaps",
 			"name", resourceManifest.Name,
 			"namespace", resourceManifest.Namespace,
-			"target", resourceManifest.Spec.TargetRef.Name)
+			"target", target)
 	case watch.Deleted:
 		logger.Info("CustomHTTPRoute deleted, rebuilding routes ConfigMaps",
 			"name", resourceManifest.Name,
 			"namespace", resourceManifest.Namespace,
-			"target", resourceManifest.Spec.TargetRef.Name)
+			"target", target)
 	}
 
-	return r.rebuildAllConfigMaps(ctx)
+	// If the target changed, also rebuild the old target to clean up its stale ConfigMaps
+	if previousTarget, ok := resourceManifest.Annotations[lastTargetAnnotation]; ok && previousTarget != target {
+		logger.Info("Target changed, also rebuilding previous target",
+			"name", resourceManifest.Name,
+			"previousTarget", previousTarget,
+			"newTarget", target)
+		if err := r.rebuildConfigMapsForTarget(ctx, previousTarget); err != nil {
+			return fmt.Errorf("failed to rebuild ConfigMaps for previous target %s: %w", previousTarget, err)
+		}
+	}
+
+	// Update the last-target annotation — skip for deletions as the resource is being removed
+	if eventType != watch.Deleted {
+		if err := r.ensureLastTargetAnnotation(ctx, resourceManifest, target); err != nil {
+			return fmt.Errorf("failed to update last-target annotation: %w", err)
+		}
+	}
+
+	// Rebuild ConfigMaps for the current target
+	if err := r.rebuildConfigMapsForTarget(ctx, target); err != nil {
+		return err
+	}
+
+	// Reconcile catch-all EnvoyFilter when:
+	// - the route currently has catchAllRoute configured
+	// - the route is being deleted (may have had catch-all entries)
+	// - the route previously had catchAllRoute but it was removed (annotation present, field nil)
+	hadCatchAll := resourceManifest.Annotations[hadCatchAllAnnotation] == annotationValueTrue
+	hasCatchAll := resourceManifest.Spec.CatchAllRoute != nil
+	needsCatchAllReconcile := hasCatchAll || eventType == watch.Deleted || hadCatchAll
+
+	if needsCatchAllReconcile {
+		if err := r.reconcileCatchAllFromAllRoutes(ctx); err != nil {
+			return fmt.Errorf("failed to reconcile catch-all routes: %w", err)
+		}
+	}
+
+	// Track whether this route has catchAllRoute for future change detection — skip for deletions
+	if eventType != watch.Deleted {
+		if err := r.ensureHadCatchAllAnnotation(ctx, resourceManifest, hasCatchAll); err != nil {
+			return fmt.Errorf("failed to update had-catch-all annotation: %w", err)
+		}
+	}
+
+	return nil
 }
 
-// rebuildAllConfigMaps fetches all CustomHTTPRoutes, groups them by target, and rebuilds ConfigMaps
-func (r *CustomHTTPRouteReconciler) rebuildAllConfigMaps(ctx context.Context) error {
-	logger := log.FromContext(ctx)
+// ensureLastTargetAnnotation sets the last-target annotation on the resource if not already correct.
+func (r *CustomHTTPRouteReconciler) ensureLastTargetAnnotation(
+	ctx context.Context,
+	resource *v1alpha1.CustomHTTPRoute,
+	target string,
+) error {
+	if resource.Annotations != nil && resource.Annotations[lastTargetAnnotation] == target {
+		return nil
+	}
+	if resource.Annotations == nil {
+		resource.Annotations = make(map[string]string)
+	}
+	resource.Annotations[lastTargetAnnotation] = target
+	return r.Update(ctx, resource)
+}
 
-	// List all CustomHTTPRoutes in the cluster
+// ensureHadCatchAllAnnotation sets or removes the had-catch-all annotation to track catchAllRoute presence.
+func (r *CustomHTTPRouteReconciler) ensureHadCatchAllAnnotation(
+	ctx context.Context,
+	resource *v1alpha1.CustomHTTPRoute,
+	hasCatchAll bool,
+) error {
+	currentValue := resource.Annotations[hadCatchAllAnnotation]
+	desiredValue := ""
+	if hasCatchAll {
+		desiredValue = "true"
+	}
+	if currentValue == desiredValue {
+		return nil
+	}
+	if resource.Annotations == nil {
+		resource.Annotations = make(map[string]string)
+	}
+	if hasCatchAll {
+		resource.Annotations[hadCatchAllAnnotation] = annotationValueTrue
+	} else {
+		delete(resource.Annotations, hadCatchAllAnnotation)
+	}
+	return r.Update(ctx, resource)
+}
+
+// reconcileCatchAllFromAllRoutes lists all routes and reconciles catch-all EnvoyFilters.
+// This is only called when a route with catchAllRoute is modified or any route is deleted.
+func (r *CustomHTTPRouteReconciler) reconcileCatchAllFromAllRoutes(ctx context.Context) error {
 	routeList := &v1alpha1.CustomHTTPRouteList{}
 	if err := r.List(ctx, routeList); err != nil {
-		return fmt.Errorf("failed to list CustomHTTPRoutes: %w", err)
+		return fmt.Errorf("failed to list CustomHTTPRoutes for catch-all reconciliation: %w", err)
+	}
+	return r.reconcileCatchAllFromRoutes(ctx, routeList)
+}
+
+// rebuildConfigMapsForTarget rebuilds ConfigMaps only for a specific target
+func (r *CustomHTTPRouteReconciler) rebuildConfigMapsForTarget(ctx context.Context, target string) error {
+	logger := log.FromContext(ctx)
+
+	// List only CustomHTTPRoutes for this target using the field indexer
+	routeList := &v1alpha1.CustomHTTPRouteList{}
+	if err := r.List(ctx, routeList, client.MatchingFields{
+		targetRefIndexField: target,
+	}); err != nil {
+		return fmt.Errorf("failed to list CustomHTTPRoutes for target %s: %w", target, err)
 	}
 
-	// Group routes by target
-	routesByTarget := make(map[string][]*v1alpha1.CustomHTTPRoute)
+	// Collect active (non-deleting) routes for this target
+	var targetRoutes []*v1alpha1.CustomHTTPRoute
 	for i := range routeList.Items {
 		route := &routeList.Items[i]
-		// Skip routes that are being deleted
-		if !route.DeletionTimestamp.IsZero() {
-			continue
-		}
-		target := route.Spec.TargetRef.Name
-		routesByTarget[target] = append(routesByTarget[target], route)
-	}
-
-	// Track all active ConfigMap names across all targets
-	allActiveNames := make(map[string]bool)
-
-	// Pre-resolve ExternalName services
-	externalNames := make(map[string]string)
-	for _, targetRoutes := range routesByTarget {
-		for _, route := range targetRoutes {
-			for _, rule := range route.Spec.Rules {
-				for _, ref := range rule.BackendRefs {
-					key := ref.Name + "/" + ref.Namespace
-					if _, seen := externalNames[key]; seen {
-						continue
-					}
-					svc := &corev1.Service{}
-					if err := r.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: ref.Namespace}, svc); err != nil {
-						continue
-					}
-					if svc.Spec.Type == corev1.ServiceTypeExternalName {
-						externalNames[key] = svc.Spec.ExternalName
-					}
-				}
-			}
+		if route.DeletionTimestamp.IsZero() {
+			targetRoutes = append(targetRoutes, route)
 		}
 	}
 
-	// Process each target
-	for target, targetRoutes := range routesByTarget {
+	// Track active ConfigMap names for this target
+	activeNames := make(map[string]bool)
+
+	if len(targetRoutes) > 0 {
+		// Pre-resolve ExternalName services for this target's routes
+		externalNames := r.resolveExternalNames(ctx, targetRoutes)
+
 		// Expand routes from all CustomHTTPRoutes for this target
 		allRoutes := make([]map[string][]routes.Route, 0, len(targetRoutes))
 		for _, route := range targetRoutes {
@@ -156,9 +243,8 @@ func (r *CustomHTTPRouteReconciler) rebuildAllConfigMaps(ctx context.Context) er
 			return fmt.Errorf("failed to upsert ConfigMaps for target %s: %w", target, err)
 		}
 
-		// Track active names
 		for _, p := range partitions {
-			allActiveNames[p.Name] = true
+			activeNames[p.Name] = true
 		}
 
 		logger.Info("ConfigMaps updated successfully",
@@ -168,17 +254,42 @@ func (r *CustomHTTPRouteReconciler) rebuildAllConfigMaps(ctx context.Context) er
 			"partitions", len(partitions))
 	}
 
-	// Delete stale ConfigMaps (from targets that no longer have routes)
-	if err := r.deleteStaleConfigMaps(ctx, allActiveNames); err != nil {
+	// Delete stale ConfigMaps for this target
+	if err := r.deleteStaleConfigMapsForTarget(ctx, target, activeNames); err != nil {
 		return err
 	}
 
-	// Reconcile catch-all EnvoyFilter from aggregated catchAllRoute declarations
-	if err := r.reconcileCatchAllFromRoutes(ctx, routeList); err != nil {
-		return fmt.Errorf("failed to reconcile catch-all routes: %w", err)
-	}
-
 	return nil
+}
+
+// resolveExternalNames pre-resolves ExternalName services referenced by the given routes.
+// Services that are not ExternalName type are marked as seen to avoid redundant lookups.
+func (r *CustomHTTPRouteReconciler) resolveExternalNames(
+	ctx context.Context,
+	targetRoutes []*v1alpha1.CustomHTTPRoute,
+) map[string]string {
+	externalNames := make(map[string]string)
+	seen := make(map[string]bool)
+
+	for _, route := range targetRoutes {
+		for _, rule := range route.Spec.Rules {
+			for _, ref := range rule.BackendRefs {
+				key := ref.Name + "/" + ref.Namespace
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				svc := &corev1.Service{}
+				if err := r.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: ref.Namespace}, svc); err != nil {
+					continue
+				}
+				if svc.Spec.Type == corev1.ServiceTypeExternalName {
+					externalNames[key] = svc.Spec.ExternalName
+				}
+			}
+		}
+	}
+	return externalNames
 }
 
 // partitionConfig splits the routes config into multiple partitions if it exceeds the size limit
@@ -313,7 +424,7 @@ func (r *CustomHTTPRouteReconciler) splitHostRoutes(
 	var partitions []ConfigMapPartition
 	partIndex := startIndex
 
-	currentRoutes := make([]routes.Route, 0)
+	currentRoutes := make([]routes.Route, 0, len(hostRoutes))
 	currentSize := 0
 	baseSize := len(fmt.Sprintf(`{"version":1,"hosts":{"%s":[]}}`, host))
 
@@ -412,7 +523,9 @@ func (r *CustomHTTPRouteReconciler) upsertSingleConfigMap(
 		Jitter:   0.2,
 	}
 
-	return retry.RetryOnConflict(backoff, func() error {
+	return retry.OnError(backoff, func(err error) bool {
+		return errors.IsConflict(err) || errors.IsAlreadyExists(err)
+	}, func() error {
 		existingCM := &corev1.ConfigMap{}
 		err := r.Get(ctx, configMapKey, existingCM)
 
@@ -424,7 +537,7 @@ func (r *CustomHTTPRouteReconciler) upsertSingleConfigMap(
 					Labels:    configMapLabels,
 				},
 				Data: map[string]string{
-					"routes.json": partition.Data,
+					routesDataKey: partition.Data,
 				},
 			}
 			return r.Create(ctx, cm)
@@ -434,36 +547,41 @@ func (r *CustomHTTPRouteReconciler) upsertSingleConfigMap(
 			return err
 		}
 
+		// Skip update if content and labels are already correct
+		if existingCM.Data[routesDataKey] == partition.Data &&
+			mapsEqual(existingCM.Labels, configMapLabels) {
+			return nil
+		}
+
 		existingCM.Labels = configMapLabels
 		existingCM.Data = map[string]string{
-			"routes.json": partition.Data,
+			routesDataKey: partition.Data,
 		}
 		return r.Update(ctx, existingCM)
 	})
 }
 
-// deleteStaleConfigMaps removes ConfigMaps that are no longer needed
-func (r *CustomHTTPRouteReconciler) deleteStaleConfigMaps(
+// deleteStaleConfigMapsForTarget removes ConfigMaps for a specific target that are no longer needed
+func (r *CustomHTTPRouteReconciler) deleteStaleConfigMapsForTarget(
 	ctx context.Context,
+	target string,
 	activeNames map[string]bool,
 ) error {
-	// List all ConfigMaps managed by this controller
 	configMapList := &corev1.ConfigMapList{}
 	labelSelector := labels.SelectorFromSet(map[string]string{
 		configMapManagedByLabel: configMapManagedByValue,
+		configMapTargetLabel:    target,
 	})
 
 	if err := r.List(ctx, configMapList, &client.ListOptions{
 		Namespace:     r.ConfigMapNamespace,
 		LabelSelector: labelSelector,
 	}); err != nil {
-		return fmt.Errorf("failed to list ConfigMaps: %w", err)
+		return fmt.Errorf("failed to list ConfigMaps for target %s: %w", target, err)
 	}
 
-	// Delete ConfigMaps that are not in the active set
 	for i := range configMapList.Items {
 		cm := &configMapList.Items[i]
-		// Only delete if it starts with our base name (to avoid deleting unrelated ConfigMaps)
 		if !strings.HasPrefix(cm.Name, configMapBaseName) {
 			continue
 		}
@@ -475,4 +593,17 @@ func (r *CustomHTTPRouteReconciler) deleteStaleConfigMaps(
 	}
 
 	return nil
+}
+
+// mapsEqual returns true if two string maps have identical keys and values.
+func mapsEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
 }
