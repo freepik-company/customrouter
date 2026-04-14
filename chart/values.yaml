@@ -218,11 +218,31 @@ externalProcessors:
       - --grpc-max-connection-idle=5m
       - --grpc-max-connection-age=30m
       - --grpc-max-connection-age-grace=10s
+      - --metrics-addr=:9090
 
     # -- Service configuration
     service:
       type: ClusterIP
       port: 9001
+
+    # -- Prometheus metrics configuration
+    metrics:
+      # -- Enable Prometheus metrics endpoint
+      enabled: true
+      # -- Port to expose metrics on
+      port: 9090
+      # -- Create a ServiceMonitor resource for Prometheus Operator
+      serviceMonitor:
+        # -- Enable ServiceMonitor creation
+        enabled: false
+        # -- Scrape interval
+        interval: 30s
+        # -- Additional labels for the ServiceMonitor
+        labels: {}
+        # -- Metric relabeling configs
+        metricRelabelings: []
+        # -- Relabeling configs
+        relabelings: []
 
     # -- Pod security context
     podSecurityContext:

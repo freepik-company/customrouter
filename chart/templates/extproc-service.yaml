@@ -15,6 +15,12 @@ spec:
       port: {{ $config.service.port }}
       targetPort: grpc
       protocol: TCP
+    {{- if and $config.metrics $config.metrics.enabled }}
+    - name: metrics
+      port: {{ $config.metrics.port | default 9090 }}
+      targetPort: metrics
+      protocol: TCP
+    {{- end }}
   selector:
     {{- include "customrouter.extproc.selectorLabels" (dict "name" $name "root" $) | nindent 4 }}
 {{- end }}
