@@ -13,16 +13,10 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  OPERATOR_IMAGE_NAME: ${{ github.repository }}/operator
-  EXTERNAL_PROCESSOR_IMAGE_NAME: ${{ github.repository }}/external-processor
 
 jobs:
-  build-and-push:
+  test:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -35,8 +29,23 @@ jobs:
       - name: Run tests
         run: make test
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        image:
+          - name: operator
+            file: ./build/Dockerfile.controller
+          - name: external-processor
+            file: ./build/Dockerfile.extproc
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -48,11 +57,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata for Operator
-        id: meta-operator
+      - name: Extract metadata
+        id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.OPERATOR_IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image.name }}
           tags: |
             type=semver,pattern=v{{version}},enable=${{ github.event_name == 'push' }}
             type=semver,pattern=v{{major}}.{{minor}},enable=${{ github.event_name == 'push' }}
@@ -60,39 +69,15 @@ jobs:
             type=sha,enable=${{ github.event_name == 'push' }}
             type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
 
-      - name: Extract metadata for External Processor
-        id: meta-external-processor
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.EXTERNAL_PROCESSOR_IMAGE_NAME }}
-          tags: |
-            type=semver,pattern=v{{version}},enable=${{ github.event_name == 'push' }}
-            type=semver,pattern=v{{major}}.{{minor}},enable=${{ github.event_name == 'push' }}
-            type=semver,pattern=v{{major}},enable=${{ github.event_name == 'push' }}
-            type=sha,enable=${{ github.event_name == 'push' }}
-            type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
-
-      - name: Build and push Operator image
+      - name: Build and push image
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./build/Dockerfile.controller
+          file: ${{ matrix.image.file }}
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta-operator.outputs.tags }}
-          labels: ${{ steps.meta-operator.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build and push External Processor image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./build/Dockerfile.extproc
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta-external-processor.outputs.tags }}
-          labels: ${{ steps.meta-external-processor.outputs.labels }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
