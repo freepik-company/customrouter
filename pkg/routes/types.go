@@ -125,7 +125,7 @@ func (r *Route) Match(path string) bool {
 	case RouteTypePrefix:
 		if strings.HasPrefix(path, r.Path) {
 			// Ensure match is on a complete path segment boundary per Gateway API spec.
-			// "/academy" must match "/academy", "/academy/" but NOT "/academy-test".
+			// "/app" must match "/app", "/app/" but NOT "/app-settings".
 			rest := path[len(r.Path):]
 			if len(rest) == 0 || rest[0] == '/' || strings.HasSuffix(r.Path, "/") {
 				return true
