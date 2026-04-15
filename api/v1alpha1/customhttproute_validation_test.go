@@ -459,6 +459,61 @@ func TestValidatePreservePrefixWithRegex(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name: "redirect.replacePrefixMatch with regex match is rejected",
+			route: &CustomHTTPRoute{
+				Spec: CustomHTTPRouteSpec{
+					TargetRef: TargetRef{Name: "default"},
+					Hostnames: []string{"example.com"},
+					Rules: []Rule{
+						{
+							Matches: []PathMatch{
+								{Path: "^/old/[0-9]+$", Type: MatchTypeRegex},
+							},
+							Actions: []Action{
+								{
+									Type: ActionTypeRedirect,
+									Redirect: &RedirectConfig{
+										Path:               "/new",
+										StatusCode:         301,
+										ReplacePrefixMatch: boolPtr(true),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: "redirect.replacePrefixMatch is not supported with Regex",
+		},
+		{
+			name: "redirect.replacePrefixMatch with PathPrefix match is allowed",
+			route: &CustomHTTPRoute{
+				Spec: CustomHTTPRouteSpec{
+					TargetRef: TargetRef{Name: "default"},
+					Hostnames: []string{"example.com"},
+					Rules: []Rule{
+						{
+							Matches: []PathMatch{
+								{Path: "/pikaso", Type: MatchTypePathPrefix},
+							},
+							Actions: []Action{
+								{
+									Type: ActionTypeRedirect,
+									Redirect: &RedirectConfig{
+										Path:               "/app",
+										StatusCode:         302,
+										ReplacePrefixMatch: boolPtr(true),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

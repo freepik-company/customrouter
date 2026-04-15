@@ -70,7 +70,22 @@ func validateRule(index int, rule *Rule) error {
 		return fmt.Errorf("rules[%d]: preservePrefix is not supported with Regex match type", index)
 	}
 
+	// Validate redirect.replacePrefixMatch is only used with PathPrefix match types
+	if ruleHasRedirectReplacePrefixMatch(rule) && ruleHasRegexMatch(rule) {
+		return fmt.Errorf("rules[%d]: redirect.replacePrefixMatch is not supported with Regex match type", index)
+	}
+
 	return nil
+}
+
+// ruleHasRedirectReplacePrefixMatch returns true if any redirect action in the rule has replacePrefixMatch enabled
+func ruleHasRedirectReplacePrefixMatch(rule *Rule) bool {
+	for _, action := range rule.Actions {
+		if action.Redirect != nil && action.Redirect.ReplacePrefixMatch != nil && *action.Redirect.ReplacePrefixMatch {
+			return true
+		}
+	}
+	return false
 }
 
 // ruleHasPreservePrefix returns true if any action in the rule has preservePrefix enabled

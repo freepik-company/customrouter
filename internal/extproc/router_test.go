@@ -71,6 +71,56 @@ func TestShouldReplacePrefixMatch(t *testing.T) {
 	}
 }
 
+func TestShouldReplacePrefixMatchForRedirect(t *testing.T) {
+	tests := []struct {
+		name      string
+		action    routes.RouteAction
+		routeType string
+		want      bool
+	}{
+		{
+			name:      "nil flag on prefix route -> off (backwards compatible)",
+			action:    routes.RouteAction{RedirectPath: "/app"},
+			routeType: routes.RouteTypePrefix,
+			want:      false,
+		},
+		{
+			name:      "explicit false on prefix route -> off",
+			action:    routes.RouteAction{RedirectPath: "/app", RedirectReplacePrefixMatch: boolPtr(false)},
+			routeType: routes.RouteTypePrefix,
+			want:      false,
+		},
+		{
+			name:      "explicit true on prefix route -> on",
+			action:    routes.RouteAction{RedirectPath: "/app", RedirectReplacePrefixMatch: boolPtr(true)},
+			routeType: routes.RouteTypePrefix,
+			want:      true,
+		},
+		{
+			name:      "explicit true on exact route -> off (only prefix supported)",
+			action:    routes.RouteAction{RedirectPath: "/app", RedirectReplacePrefixMatch: boolPtr(true)},
+			routeType: routes.RouteTypeExact,
+			want:      false,
+		},
+		{
+			name:      "explicit true on regex route -> off",
+			action:    routes.RouteAction{RedirectPath: "/app", RedirectReplacePrefixMatch: boolPtr(true)},
+			routeType: routes.RouteTypeRegex,
+			want:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			route := &routes.Route{Type: tt.routeType}
+			got := shouldReplacePrefixMatchForRedirect(tt.action, route)
+			if got != tt.want {
+				t.Errorf("shouldReplacePrefixMatchForRedirect() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSplitPath(t *testing.T) {
 	tests := []struct {
 		path string
