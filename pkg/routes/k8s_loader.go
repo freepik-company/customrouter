@@ -84,16 +84,25 @@ func NewK8sLoader(client kubernetes.Interface, config K8sLoaderConfig) *K8sLoade
 	}
 }
 
-// Load loads all route ConfigMaps and merges them
+// Load loads all route ConfigMaps and merges them.
+// It builds the new config without holding the lock, then swaps it in
+// atomically so that FindRoute is never blocked on API calls.
 func (l *K8sLoader) Load() error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	config, err := l.buildConfig()
+	if err != nil {
+		return err
+	}
 
-	return l.loadLocked()
+	l.mu.Lock()
+	l.config = config
+	l.mu.Unlock()
+
+	return nil
 }
 
-// loadLocked loads ConfigMaps (caller must hold lock)
-func (l *K8sLoader) loadLocked() error {
+// buildConfig fetches and merges all ConfigMaps into a new RoutesConfig.
+// This is done without holding any lock.
+func (l *K8sLoader) buildConfig() (*RoutesConfig, error) {
 	// List all ConfigMaps with our labels (managed-by and target)
 	labelSelector := labels.SelectorFromSet(map[string]string{
 		configMapManagedByLabel: configMapManagedByValue,
@@ -104,7 +113,7 @@ func (l *K8sLoader) loadLocked() error {
 		LabelSelector: labelSelector.String(),
 	})
 	if err != nil {
-		return fmt.Errorf("failed to list ConfigMaps: %w", err)
+		return nil, fmt.Errorf("failed to list ConfigMaps: %w", err)
 	}
 
 	// Sort by name for deterministic ordering
@@ -126,7 +135,7 @@ func (l *K8sLoader) loadLocked() error {
 
 		var config RoutesConfig
 		if err := json.Unmarshal([]byte(data), &config); err != nil {
-			return fmt.Errorf("failed to parse ConfigMap %s: %w", cm.Name, err)
+			return nil, fmt.Errorf("failed to parse ConfigMap %s: %w", cm.Name, err)
 		}
 
 		// Merge hosts
@@ -146,11 +155,10 @@ func (l *K8sLoader) loadLocked() error {
 
 	// Compile regexes
 	if err := mergedConfig.CompileRegexes(); err != nil {
-		return fmt.Errorf("failed to compile regexes: %w", err)
+		return nil, fmt.Errorf("failed to compile regexes: %w", err)
 	}
 
-	l.config = mergedConfig
-	return nil
+	return mergedConfig, nil
 }
 
 // GetConfig returns the current routes configuration
@@ -240,11 +248,7 @@ func (l *K8sLoader) handleWatchEvents(watcher watch.Interface) {
 			switch event.Type {
 			case watch.Added, watch.Modified, watch.Deleted:
 				// Reload all ConfigMaps for this target
-				l.mu.Lock()
-				err := l.loadLocked()
-				l.mu.Unlock()
-
-				if err == nil && l.onChange != nil {
+				if err := l.Load(); err == nil && l.onChange != nil {
 					l.onChange(l.config)
 				}
 
