@@ -33,7 +33,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.checkout_from_master == 'true' && 'master' || github.event.inputs.tag) || github.event.workflow_run.head_sha }}
           fetch-depth: 0
