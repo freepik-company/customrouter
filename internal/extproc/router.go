@@ -194,15 +194,7 @@ func (p *Processor) buildRedirectResponse(action routes.RouteAction, route *rout
 		if suffix == vars.path && strings.HasSuffix(route.Path, "/") {
 			suffix = strings.TrimPrefix(vars.path, strings.TrimSuffix(route.Path, "/"))
 		}
-		if suffix != "" {
-			// Avoid double "/" when joining.
-			if strings.HasSuffix(path, "/") && strings.HasPrefix(suffix, "/") {
-				path = strings.TrimSuffix(path, "/")
-			} else if !strings.HasSuffix(path, "/") && !strings.HasPrefix(suffix, "/") {
-				path += "/"
-			}
-			path += suffix
-		}
+		path = joinRedirectPath(path, suffix)
 	}
 
 	// Build port string
@@ -471,6 +463,31 @@ func splitPath(path string) []string {
 		}
 	}
 	return segments
+}
+
+// joinRedirectPath appends the stripped suffix to the redirect basePath
+// without producing a duplicate "/" between path segments, and without
+// inserting a "/" in front of a query ("?") or fragment ("#") delimiter
+// (RFC 3986 §3.3). The suffix comes from stripping the matched PathPrefix
+// from vars.path, which includes query/fragment as-is.
+func joinRedirectPath(basePath, suffix string) string {
+	if suffix == "" {
+		return basePath
+	}
+	switch suffix[0] {
+	case '?', '#':
+		return basePath + suffix
+	case '/':
+		if strings.HasSuffix(basePath, "/") {
+			return basePath + suffix[1:]
+		}
+		return basePath + suffix
+	default:
+		if strings.HasSuffix(basePath, "/") {
+			return basePath + suffix
+		}
+		return basePath + "/" + suffix
+	}
 }
 
 // shouldReplacePrefixMatchForRedirect determines whether a redirect should strip the

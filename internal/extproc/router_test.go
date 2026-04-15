@@ -71,6 +71,34 @@ func TestShouldReplacePrefixMatch(t *testing.T) {
 	}
 }
 
+func TestJoinRedirectPath(t *testing.T) {
+	tests := []struct {
+		basePath string
+		suffix   string
+		want     string
+	}{
+		{"/app", "", "/app"},
+		{"/app", "/foo", "/app/foo"},
+		{"/app/", "/foo", "/app/foo"},
+		{"/app/", "foo", "/app/foo"},
+		{"/app", "foo", "/app/foo"},
+		{"/app", "?q=1", "/app?q=1"},
+		{"/app/", "?q=1", "/app/?q=1"},
+		{"/app", "#frag", "/app#frag"},
+		{"/app", "/foo?q=1", "/app/foo?q=1"},
+		{"/app", "/foo#frag", "/app/foo#frag"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.basePath+"+"+tt.suffix, func(t *testing.T) {
+			got := joinRedirectPath(tt.basePath, tt.suffix)
+			if got != tt.want {
+				t.Errorf("joinRedirectPath(%q, %q) = %q, want %q", tt.basePath, tt.suffix, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestShouldReplacePrefixMatchForRedirect(t *testing.T) {
 	tests := []struct {
 		name      string
