@@ -202,6 +202,7 @@ func convertActions(apiActions []v1alpha1.Action) []RouteAction {
 				if action.RedirectStatusCode == 0 {
 					action.RedirectStatusCode = 302
 				}
+				action.RedirectReplacePrefixMatch = a.Redirect.ReplacePrefixMatch
 				if a.Redirect.PreservePrefix != nil && *a.Redirect.PreservePrefix {
 					action.preservePrefix = true
 				}
@@ -256,11 +257,15 @@ func applyPreservePrefix(actions []RouteAction, prefix string) []RouteAction {
 		if cloned[i].RedirectPath != "" {
 			cloned[i].RedirectPath = pfx + cloned[i].RedirectPath
 		}
-		// RewriteReplacePrefixMatch is a pointer; if the original was non-nil,
+		// *ReplacePrefixMatch are pointers; if the original was non-nil,
 		// we must allocate a new bool so the cloned action doesn't share memory.
 		if cloned[i].RewriteReplacePrefixMatch != nil {
 			v := *cloned[i].RewriteReplacePrefixMatch
 			cloned[i].RewriteReplacePrefixMatch = &v
+		}
+		if cloned[i].RedirectReplacePrefixMatch != nil {
+			v := *cloned[i].RedirectReplacePrefixMatch
+			cloned[i].RedirectReplacePrefixMatch = &v
 		}
 	}
 	return cloned

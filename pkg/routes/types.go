@@ -29,11 +29,12 @@ type RouteAction struct {
 	Type string `json:"type"` // "redirect", "rewrite", "header-set", "header-add", "header-remove"
 
 	// For redirect
-	RedirectScheme     string `json:"redirectScheme,omitempty"`
-	RedirectHostname   string `json:"redirectHostname,omitempty"`
-	RedirectPath       string `json:"redirectPath,omitempty"`
-	RedirectPort       int32  `json:"redirectPort,omitempty"`
-	RedirectStatusCode int32  `json:"redirectStatusCode,omitempty"`
+	RedirectScheme             string `json:"redirectScheme,omitempty"`
+	RedirectHostname           string `json:"redirectHostname,omitempty"`
+	RedirectPath               string `json:"redirectPath,omitempty"`
+	RedirectPort               int32  `json:"redirectPort,omitempty"`
+	RedirectStatusCode         int32  `json:"redirectStatusCode,omitempty"`
+	RedirectReplacePrefixMatch *bool  `json:"redirectReplacePrefixMatch,omitempty"`
 
 	// For rewrite
 	RewritePath               string `json:"rewritePath,omitempty"`

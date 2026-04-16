@@ -217,6 +217,16 @@ type RedirectConfig struct {
 	// +kubebuilder:validation:MaxLength=4096
 	Path string `json:"path,omitempty"`
 
+	// replacePrefixMatch, when true, strips the matched PathPrefix from the
+	// request path and appends the remaining suffix (and query parameters)
+	// to the redirect Path. Mirrors Gateway API's ReplacePrefixMatch modifier.
+	// For example, with match prefix "/old-api" and redirect path "/v2",
+	// "/old-api/foo" redirects to "/v2/foo".
+	// Only effective for PathPrefix match type. When not set or false, the
+	// redirect Path is used as-is (full replacement).
+	// +optional
+	ReplacePrefixMatch *bool `json:"replacePrefixMatch,omitempty"`
+
 	// port is the port to redirect to
 	// +optional
 	// +kubebuilder:validation:Minimum=1

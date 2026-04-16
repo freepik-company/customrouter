@@ -580,7 +580,7 @@ func TestExpandExactWithPrefixesOptional(t *testing.T) {
 	cr := &v1alpha1.CustomHTTPRoute{
 		Spec: v1alpha1.CustomHTTPRouteSpec{
 			TargetRef: v1alpha1.TargetRef{Name: "default"},
-			Hostnames: []string{"magnific.com"},
+			Hostnames: []string{"example.com"},
 			PathPrefixes: &v1alpha1.PathPrefixes{
 				Values: []string{"es", "fr", "de"},
 				Policy: v1alpha1.PathPrefixPolicyOptional,
@@ -602,7 +602,7 @@ func TestExpandExactWithPrefixesOptional(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	routes := result["magnific.com"]
+	routes := result["example.com"]
 
 	// 3 prefixed + 1 unprefixed = 4
 	if len(routes) != 4 {
@@ -676,7 +676,7 @@ func TestExpandExactWithPrefixesRequired(t *testing.T) {
 	cr := &v1alpha1.CustomHTTPRoute{
 		Spec: v1alpha1.CustomHTTPRouteSpec{
 			TargetRef: v1alpha1.TargetRef{Name: "default"},
-			Hostnames: []string{"magnific.com"},
+			Hostnames: []string{"example.com"},
 			PathPrefixes: &v1alpha1.PathPrefixes{
 				Values: []string{"es", "fr"},
 				Policy: v1alpha1.PathPrefixPolicyRequired,
@@ -698,7 +698,7 @@ func TestExpandExactWithPrefixesRequired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	routes := result["magnific.com"]
+	routes := result["example.com"]
 
 	if len(routes) != 2 {
 		t.Fatalf("expected 2 routes, got %d: %+v", len(routes), routes)
@@ -723,7 +723,7 @@ func TestExpandExactWithPrefixesDisabled(t *testing.T) {
 	cr := &v1alpha1.CustomHTTPRoute{
 		Spec: v1alpha1.CustomHTTPRouteSpec{
 			TargetRef: v1alpha1.TargetRef{Name: "default"},
-			Hostnames: []string{"magnific.com"},
+			Hostnames: []string{"example.com"},
 			PathPrefixes: &v1alpha1.PathPrefixes{
 				Values: []string{"es", "fr"},
 				Policy: v1alpha1.PathPrefixPolicyDisabled,
@@ -745,7 +745,7 @@ func TestExpandExactWithPrefixesDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	routes := result["magnific.com"]
+	routes := result["example.com"]
 
 	if len(routes) != 1 {
 		t.Fatalf("expected 1 route, got %d", len(routes))

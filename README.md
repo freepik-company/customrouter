@@ -385,6 +385,7 @@ Defines routing rules for a set of hostnames. Rules are compiled into an optimiz
 | `rules[].actions` | Optional transformations (redirect, rewrite, headers) |
 | `rules[].actions[].rewrite.preservePrefix` | Prepend language prefix to rewrite path in expanded routes |
 | `rules[].actions[].redirect.preservePrefix` | Prepend language prefix to redirect path in expanded routes |
+| `rules[].actions[].redirect.replacePrefixMatch` | Strip matched PathPrefix and append remaining suffix to redirect path (Gateway API-style) |
 | `rules[].backendRefs` | Target services — name must be a valid RFC 1123 label (no dots) |
 | `rules[].allowOverlap` | Permit overlap with other CustomHTTPRoutes (warn instead of reject) |
 
@@ -529,7 +530,21 @@ rules:
           path: /new-page
           statusCode: 301
     # No backendRefs needed for redirects
+
+  # ReplacePrefixMatch redirect (Gateway API-style):
+  # /old-api/users/1 -> 302 Location: /v2/users/1
+  - matches:
+      - path: /old-api
+        type: PathPrefix
+    actions:
+      - type: redirect
+        redirect:
+          path: /v2
+          replacePrefixMatch: true
+          statusCode: 302
 ```
+
+`replacePrefixMatch` is opt-in and only effective for `PathPrefix` matches. When omitted or set to `false`, the redirect `path` is used as-is (every matched request redirects to the same URL). Not supported with `Regex` matches.
 
 #### Rewrite Example
 

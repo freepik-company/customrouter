@@ -161,7 +161,7 @@ func (p *Processor) processRequestHeaders(headers *extprocv3.HttpHeaders) (*extp
 	// Check if there's a redirect action - redirects take precedence
 	for _, action := range route.Actions {
 		if action.Type == routes.ActionTypeRedirect {
-			return p.buildRedirectResponse(action, vars, reqCtx)
+			return p.buildRedirectResponse(action, route, vars, reqCtx)
 		}
 	}
 
@@ -170,7 +170,7 @@ func (p *Processor) processRequestHeaders(headers *extprocv3.HttpHeaders) (*extp
 }
 
 // buildRedirectResponse creates an immediate redirect response
-func (p *Processor) buildRedirectResponse(action routes.RouteAction, vars *requestVars, reqCtx *requestContext) (*extprocv3.ProcessingResponse, *requestContext, error) {
+func (p *Processor) buildRedirectResponse(action routes.RouteAction, route *routes.Route, vars *requestVars, reqCtx *requestContext) (*extprocv3.ProcessingResponse, *requestContext, error) {
 	// Build redirect URL components
 	scheme := action.RedirectScheme
 	if scheme == "" {
@@ -185,6 +185,16 @@ func (p *Processor) buildRedirectResponse(action routes.RouteAction, vars *reque
 	path := substituteVariables(action.RedirectPath, vars)
 	if path == "" {
 		path = vars.path
+	} else if shouldReplacePrefixMatchForRedirect(action, route) {
+		// Strip the matched PathPrefix from the request path and append the
+		// remaining suffix to the redirect path (Gateway API ReplacePrefixMatch).
+		suffix := strings.TrimPrefix(vars.path, route.Path)
+		// Handle trailing-slash route matching path without slash:
+		// e.g. route.Path="/old-api/", vars.path="/old-api"
+		if suffix == vars.path && strings.HasSuffix(route.Path, "/") {
+			suffix = strings.TrimPrefix(vars.path, strings.TrimSuffix(route.Path, "/"))
+		}
+		path = joinRedirectPath(path, suffix)
 	}
 
 	// Build port string
@@ -453,6 +463,42 @@ func splitPath(path string) []string {
 		}
 	}
 	return segments
+}
+
+// joinRedirectPath appends the stripped suffix to the redirect basePath
+// without producing a duplicate "/" between path segments, and without
+// inserting a "/" in front of a query ("?") or fragment ("#") delimiter
+// (RFC 3986 §3.3). The suffix comes from stripping the matched PathPrefix
+// from vars.path, which includes query/fragment as-is.
+func joinRedirectPath(basePath, suffix string) string {
+	if suffix == "" {
+		return basePath
+	}
+	switch suffix[0] {
+	case '?', '#':
+		return basePath + suffix
+	case '/':
+		if strings.HasSuffix(basePath, "/") {
+			return basePath + suffix[1:]
+		}
+		return basePath + suffix
+	default:
+		if strings.HasSuffix(basePath, "/") {
+			return basePath + suffix
+		}
+		return basePath + "/" + suffix
+	}
+}
+
+// shouldReplacePrefixMatchForRedirect determines whether a redirect should strip the
+// matched PathPrefix and append the remaining suffix to the redirect path.
+// Strictly opt-in (preserves backwards-compatible behaviour): only active when
+// the user explicitly sets replacePrefixMatch=true and the route is a PathPrefix.
+func shouldReplacePrefixMatchForRedirect(action routes.RouteAction, route *routes.Route) bool {
+	if action.RedirectReplacePrefixMatch == nil || !*action.RedirectReplacePrefixMatch {
+		return false
+	}
+	return route.Type == routes.RouteTypePrefix
 }
 
 // shouldReplacePrefixMatch determines whether a rewrite should use prefix replacement.
