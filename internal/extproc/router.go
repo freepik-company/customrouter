@@ -190,7 +190,7 @@ func (p *Processor) buildRedirectResponse(action routes.RouteAction, route *rout
 		// remaining suffix to the redirect path (Gateway API ReplacePrefixMatch).
 		suffix := strings.TrimPrefix(vars.path, route.Path)
 		// Handle trailing-slash route matching path without slash:
-		// e.g. route.Path="/pikaso/", vars.path="/pikaso"
+		// e.g. route.Path="/old-api/", vars.path="/old-api"
 		if suffix == vars.path && strings.HasSuffix(route.Path, "/") {
 			suffix = strings.TrimPrefix(vars.path, strings.TrimSuffix(route.Path, "/"))
 		}

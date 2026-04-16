@@ -297,13 +297,13 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 		{
 			name: "no conflict — regex with {prefix} and disjoint prefix sets (Required policy)",
 			route: newCustomHTTPRouteWithPathPrefixes("route-a",
-				[]string{"magnific.com"},
+				[]string{"example.com"},
 				[]customrouterv1alpha1.PathMatch{{Path: "^/_next/data/[^/]+/{prefix}([/.]|$)", Type: customrouterv1alpha1.MatchTypeRegex}},
 				&customrouterv1alpha1.PathPrefixes{Policy: customrouterv1alpha1.PathPrefixPolicyRequired, Values: []string{"so", "sw", "za", "zu"}},
 			),
 			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
 				*newCustomHTTPRouteWithPathPrefixes("route-b",
-					[]string{"magnific.com"},
+					[]string{"example.com"},
 					[]customrouterv1alpha1.PathMatch{{Path: "^/_next/data/[^/]+/{prefix}([/.]|$)", Type: customrouterv1alpha1.MatchTypeRegex}},
 					&customrouterv1alpha1.PathPrefixes{Policy: customrouterv1alpha1.PathPrefixPolicyRequired, Values: []string{"ceb", "jp", "ph"}},
 				),
@@ -313,13 +313,13 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 		{
 			name: "conflict — regex with {prefix} and same prefix sets",
 			route: newCustomHTTPRouteWithPathPrefixes("route-a",
-				[]string{"magnific.com"},
+				[]string{"example.com"},
 				[]customrouterv1alpha1.PathMatch{{Path: "^/_next/data/[^/]+/{prefix}([/.]|$)", Type: customrouterv1alpha1.MatchTypeRegex}},
 				&customrouterv1alpha1.PathPrefixes{Policy: customrouterv1alpha1.PathPrefixPolicyRequired, Values: []string{"es", "fr"}},
 			),
 			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
 				*newCustomHTTPRouteWithPathPrefixes("route-b",
-					[]string{"magnific.com"},
+					[]string{"example.com"},
 					[]customrouterv1alpha1.PathMatch{{Path: "^/_next/data/[^/]+/{prefix}([/.]|$)", Type: customrouterv1alpha1.MatchTypeRegex}},
 					&customrouterv1alpha1.PathPrefixes{Policy: customrouterv1alpha1.PathPrefixPolicyRequired, Values: []string{"es", "fr"}},
 				),

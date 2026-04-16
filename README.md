@@ -532,14 +532,14 @@ rules:
     # No backendRefs needed for redirects
 
   # ReplacePrefixMatch redirect (Gateway API-style):
-  # /pikaso/prueba-1 -> 302 Location: /app/prueba-1
+  # /old-api/users/1 -> 302 Location: /v2/users/1
   - matches:
-      - path: /pikaso
+      - path: /old-api
         type: PathPrefix
     actions:
       - type: redirect
         redirect:
-          path: /app
+          path: /v2
           replacePrefixMatch: true
           statusCode: 302
 ```

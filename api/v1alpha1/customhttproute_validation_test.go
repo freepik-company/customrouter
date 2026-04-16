@@ -496,7 +496,7 @@ func TestValidatePreservePrefixWithRegex(t *testing.T) {
 					Rules: []Rule{
 						{
 							Matches: []PathMatch{
-								{Path: "/pikaso", Type: MatchTypePathPrefix},
+								{Path: "/old-api", Type: MatchTypePathPrefix},
 							},
 							Actions: []Action{
 								{
