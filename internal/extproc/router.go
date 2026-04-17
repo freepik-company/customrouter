@@ -377,6 +377,15 @@ func (p *Processor) buildForwardResponse(route *routes.Route, vars *requestVars,
 
 	// Add path rewrite if path was changed
 	if finalPath != vars.path {
+		// Preserve the original path so Istio/Envoy access logs can show it.
+		// The default log format reads %REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%.
+		setHeaders = append(setHeaders, &corev3.HeaderValueOption{
+			Header: &corev3.HeaderValue{
+				Key:      "x-envoy-original-path",
+				RawValue: []byte(vars.path),
+			},
+			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+		})
 		setHeaders = append(setHeaders, &corev3.HeaderValueOption{
 			Header: &corev3.HeaderValue{
 				Key:      ":path",

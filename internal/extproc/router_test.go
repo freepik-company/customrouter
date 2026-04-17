@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/freepik-company/customrouter/pkg/routes"
+	"go.uber.org/zap"
 )
 
 func boolPtr(v bool) *bool { return &v }
@@ -206,6 +207,74 @@ func TestStripQueryString(t *testing.T) {
 			got := stripQueryString(tt.input)
 			if got != tt.want {
 				t.Errorf("stripQueryString(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildForwardResponse_OriginalPathHeader(t *testing.T) {
+	logger := zap.NewNop()
+	p := NewProcessor(nil, logger, false)
+
+	tests := []struct {
+		name             string
+		route            *routes.Route
+		varsPath         string
+		wantOriginalPath string // empty means header should NOT be present
+	}{
+		{
+			name: "rewrite sets x-envoy-original-path",
+			route: &routes.Route{
+				Path:    "/old",
+				Type:    routes.RouteTypePrefix,
+				Backend: "backend.ns.svc.cluster.local:80",
+				Actions: []routes.RouteAction{
+					{Type: routes.ActionTypeRewrite, RewritePath: "/new"},
+				},
+			},
+			varsPath:         "/old/sub?q=1",
+			wantOriginalPath: "/old/sub?q=1",
+		},
+		{
+			name: "no rewrite omits x-envoy-original-path",
+			route: &routes.Route{
+				Path:    "/keep",
+				Type:    routes.RouteTypePrefix,
+				Backend: "backend.ns.svc.cluster.local:80",
+			},
+			varsPath:         "/keep/foo",
+			wantOriginalPath: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vars := &requestVars{
+				path:         tt.varsPath,
+				host:         "example.com",
+				pathSegments: splitPath(tt.varsPath),
+			}
+			reqCtx := &requestContext{authority: "example.com"}
+
+			resp, _, err := p.buildForwardResponse(tt.route, vars, reqCtx)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			headers := resp.GetRequestHeaders().GetResponse().GetHeaderMutation().GetSetHeaders()
+			var got string
+			for _, h := range headers {
+				if h.GetHeader().GetKey() == "x-envoy-original-path" {
+					got = string(h.GetHeader().GetRawValue())
+					break
+				}
+			}
+
+			if tt.wantOriginalPath == "" && got != "" {
+				t.Errorf("expected no x-envoy-original-path header, got %q", got)
+			}
+			if tt.wantOriginalPath != "" && got != tt.wantOriginalPath {
+				t.Errorf("x-envoy-original-path = %q, want %q", got, tt.wantOriginalPath)
 			}
 		})
 	}

@@ -2,8 +2,8 @@ apiVersion: v2
 name: customrouter
 description: A Helm chart for CustomRouter - Kubernetes operator and external processor for dynamic HTTP routing
 type: application
-version: 0.5.8
-appVersion: "0.5.8"
+version: 0.5.9
+appVersion: "0.5.9"
 kubeVersion: ">= 1.26.0-0"
 keywords:
   - kubernetes

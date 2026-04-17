@@ -550,6 +550,8 @@ rules:
 
 For `PathPrefix` matches, the rewrite replaces only the matched prefix and **preserves the remaining path suffix and query parameters**. For `Exact` and `Regex` matches, the rewrite replaces the entire path.
 
+When a rewrite changes the path, the original request path is automatically preserved in the `x-envoy-original-path` header. This ensures that access logs and observability tools that rely on this standard header (e.g. `%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%`) correctly reflect the path originally requested by the client.
+
 ```yaml
 rules:
   # Prefix rewrite: /mockup-editor-api/unity?page=1 -> /api/v1/unity?page=1
