@@ -27,25 +27,27 @@ import (
 	ef "github.com/freepik-company/customrouter/internal/controller/envoyfilter"
 )
 
-func newRouteWithCatchAll(namespace, name string, hostnames []string) v1alpha1.CustomHTTPRoute {
+const testNS = "ns"
+
+func newRouteWithCatchAll(name string, hostnames []string) v1alpha1.CustomHTTPRoute {
 	return v1alpha1.CustomHTTPRoute{
-		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
+		ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: name},
 		Spec: v1alpha1.CustomHTTPRouteSpec{
 			Hostnames: hostnames,
 			CatchAllRoute: &v1alpha1.CatchAllBackendRef{
-				BackendRef: v1alpha1.BackendRef{Name: "backend", Namespace: namespace, Port: 80},
+				BackendRef: v1alpha1.BackendRef{Name: "backend", Namespace: testNS, Port: 80},
 			},
 		},
 	}
 }
 
-func newEPAWithCatchAll(namespace, name string, hostnames []string) v1alpha1.ExternalProcessorAttachment {
+func newEPAWithCatchAll(name string, hostnames []string) v1alpha1.ExternalProcessorAttachment {
 	return v1alpha1.ExternalProcessorAttachment{
-		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
+		ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: name},
 		Spec: v1alpha1.ExternalProcessorAttachmentSpec{
 			CatchAllRoute: &v1alpha1.CatchAllRouteConfig{
 				Hostnames:  hostnames,
-				BackendRef: v1alpha1.BackendRef{Name: "epa-backend", Namespace: namespace, Port: 80},
+				BackendRef: v1alpha1.BackendRef{Name: "epa-backend", Namespace: testNS, Port: 80},
 			},
 		},
 	}
@@ -60,7 +62,7 @@ func TestEvaluateCatchAllProgrammed_NotConfigured(t *testing.T) {
 }
 
 func TestEvaluateCatchAllProgrammed_NoEPA(t *testing.T) {
-	route := newRouteWithCatchAll("ns", "r", []string{"a.com"})
+	route := newRouteWithCatchAll("r", []string{"a.com"})
 	routeList := &v1alpha1.CustomHTTPRouteList{Items: []v1alpha1.CustomHTTPRoute{route}}
 	got := ef.EvaluateCatchAllProgrammed(&route, routeList, &v1alpha1.ExternalProcessorAttachmentList{})
 	if got.Programmed || got.Reason != controller.ConditionReasonCatchAllNoEPA {
@@ -69,7 +71,7 @@ func TestEvaluateCatchAllProgrammed_NoEPA(t *testing.T) {
 }
 
 func TestEvaluateCatchAllProgrammed_Programmed(t *testing.T) {
-	route := newRouteWithCatchAll("ns", "r", []string{"a.com", "b.com"})
+	route := newRouteWithCatchAll("r", []string{"a.com", "b.com"})
 	routeList := &v1alpha1.CustomHTTPRouteList{Items: []v1alpha1.CustomHTTPRoute{route}}
 	epa := v1alpha1.ExternalProcessorAttachment{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "epa"}}
 	epaList := &v1alpha1.ExternalProcessorAttachmentList{Items: []v1alpha1.ExternalProcessorAttachment{epa}}
@@ -84,9 +86,9 @@ func TestEvaluateCatchAllProgrammed_Programmed(t *testing.T) {
 }
 
 func TestEvaluateCatchAllProgrammed_OverriddenByEPA(t *testing.T) {
-	route := newRouteWithCatchAll("ns", "r", []string{"a.com"})
+	route := newRouteWithCatchAll("r", []string{"a.com"})
 	routeList := &v1alpha1.CustomHTTPRouteList{Items: []v1alpha1.CustomHTTPRoute{route}}
-	epa := newEPAWithCatchAll("ns", "epa", []string{"a.com"})
+	epa := newEPAWithCatchAll("epa", []string{"a.com"})
 	epaList := &v1alpha1.ExternalProcessorAttachmentList{Items: []v1alpha1.ExternalProcessorAttachment{epa}}
 
 	got := ef.EvaluateCatchAllProgrammed(&route, routeList, epaList)
@@ -96,8 +98,8 @@ func TestEvaluateCatchAllProgrammed_OverriddenByEPA(t *testing.T) {
 }
 
 func TestEvaluateCatchAllProgrammed_OverriddenByRoute(t *testing.T) {
-	winner := newRouteWithCatchAll("ns", "a-winner", []string{"a.com"})
-	loser := newRouteWithCatchAll("ns", "z-loser", []string{"a.com"})
+	winner := newRouteWithCatchAll("a-winner", []string{"a.com"})
+	loser := newRouteWithCatchAll("z-loser", []string{"a.com"})
 	routeList := &v1alpha1.CustomHTTPRouteList{Items: []v1alpha1.CustomHTTPRoute{winner, loser}}
 	epa := v1alpha1.ExternalProcessorAttachment{ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "epa"}}
 	epaList := &v1alpha1.ExternalProcessorAttachmentList{Items: []v1alpha1.ExternalProcessorAttachment{epa}}
@@ -115,10 +117,10 @@ func TestEvaluateCatchAllProgrammed_OverriddenByRoute(t *testing.T) {
 
 func TestEvaluateCatchAllProgrammed_MixedLossesFavorEPAReason(t *testing.T) {
 	// route loses "a.com" to another route and "b.com" to an EPA → OverriddenByEPA wins.
-	loser := newRouteWithCatchAll("ns", "z-loser", []string{"a.com", "b.com"})
-	winner := newRouteWithCatchAll("ns", "a-winner", []string{"a.com"})
+	loser := newRouteWithCatchAll("z-loser", []string{"a.com", "b.com"})
+	winner := newRouteWithCatchAll("a-winner", []string{"a.com"})
 	routeList := &v1alpha1.CustomHTTPRouteList{Items: []v1alpha1.CustomHTTPRoute{winner, loser}}
-	epa := newEPAWithCatchAll("ns", "epa", []string{"b.com"})
+	epa := newEPAWithCatchAll("epa", []string{"b.com"})
 	epaList := &v1alpha1.ExternalProcessorAttachmentList{Items: []v1alpha1.ExternalProcessorAttachment{epa}}
 
 	got := ef.EvaluateCatchAllProgrammed(&loser, routeList, epaList)

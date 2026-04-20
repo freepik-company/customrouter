@@ -320,12 +320,10 @@ func EvaluateCatchAllProgrammed(
 	}
 
 	selfKey := routeKey(route)
-	var wonHostnames, lostByRoute []string
+	var wonHostnames []string
 	for _, hostname := range route.Spec.Hostnames {
 		if winnerHostnameRoute(hostname, routeList) == selfKey {
 			wonHostnames = append(wonHostnames, hostname)
-		} else {
-			lostByRoute = append(lostByRoute, hostname)
 		}
 	}
 
