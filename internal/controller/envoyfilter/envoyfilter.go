@@ -329,7 +329,10 @@ func EvaluateCatchAllProgrammed(
 
 	var programmed, lostByEPA []string
 	for _, hostname := range wonHostnames {
-		if hostnameOverriddenByAnyEPA(hostname, epaList) {
+		// A hostname is lost only if every EPA overrides it, because each EPA produces
+		// its own catch-all EnvoyFilter: the route's catch-all still reaches the dataplane
+		// through any EPA that does not declare the hostname in its own catchAllRoute.
+		if hostnameOverriddenByEveryEPA(hostname, epaList) {
 			lostByEPA = append(lostByEPA, hostname)
 		} else {
 			programmed = append(programmed, hostname)
@@ -367,20 +370,30 @@ func winnerHostnameRoute(hostname string, routeList *v1alpha1.CustomHTTPRouteLis
 	return ""
 }
 
-// hostnameOverriddenByAnyEPA reports whether at least one EPA's own catchAllRoute.Hostnames contains hostname.
-func hostnameOverriddenByAnyEPA(hostname string, epaList *v1alpha1.ExternalProcessorAttachmentList) bool {
+// hostnameOverriddenByEveryEPA reports whether every EPA declares hostname in its own
+// catchAllRoute.Hostnames. Returns false if any EPA has no catchAllRoute or does not declare
+// the hostname, because that EPA will carry the route's catch-all through to the dataplane.
+func hostnameOverriddenByEveryEPA(hostname string, epaList *v1alpha1.ExternalProcessorAttachmentList) bool {
+	if epaList == nil || len(epaList.Items) == 0 {
+		return false
+	}
 	for i := range epaList.Items {
 		epa := &epaList.Items[i]
 		if epa.Spec.CatchAllRoute == nil {
-			continue
+			return false
 		}
+		found := false
 		for _, h := range epa.Spec.CatchAllRoute.Hostnames {
 			if h == hostname {
-				return true
+				found = true
+				break
 			}
 		}
+		if !found {
+			return false
+		}
 	}
-	return false
+	return true
 }
 
 // sortedEntries converts a hostname→BackendRef map to a sorted slice of CatchAllEntry.

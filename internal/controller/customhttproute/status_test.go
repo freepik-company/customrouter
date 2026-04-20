@@ -115,6 +115,33 @@ func TestEvaluateCatchAllProgrammed_OverriddenByRoute(t *testing.T) {
 	}
 }
 
+func TestEvaluateCatchAllProgrammed_OverrideOnSomeEPAsStillProgrammed(t *testing.T) {
+	// Route is overridden on EPA-1 but not on EPA-2 → still programmed because EPA-2 carries it.
+	route := newRouteWithCatchAll("r", []string{"a.com"})
+	routeList := &v1alpha1.CustomHTTPRouteList{Items: []v1alpha1.CustomHTTPRoute{route}}
+	epa1 := newEPAWithCatchAll("epa-1", []string{"a.com"})
+	epa2 := v1alpha1.ExternalProcessorAttachment{ObjectMeta: metav1.ObjectMeta{Namespace: testNS, Name: "epa-2"}}
+	epaList := &v1alpha1.ExternalProcessorAttachmentList{Items: []v1alpha1.ExternalProcessorAttachment{epa1, epa2}}
+
+	got := ef.EvaluateCatchAllProgrammed(&route, routeList, epaList)
+	if !got.Programmed || got.Reason != controller.ConditionReasonCatchAllProgrammed {
+		t.Errorf("expected Programmed because EPA-2 carries the route, got %+v", got)
+	}
+}
+
+func TestEvaluateCatchAllProgrammed_OverrideOnAllEPAsIsOverridden(t *testing.T) {
+	route := newRouteWithCatchAll("r", []string{"a.com"})
+	routeList := &v1alpha1.CustomHTTPRouteList{Items: []v1alpha1.CustomHTTPRoute{route}}
+	epa1 := newEPAWithCatchAll("epa-1", []string{"a.com"})
+	epa2 := newEPAWithCatchAll("epa-2", []string{"a.com"})
+	epaList := &v1alpha1.ExternalProcessorAttachmentList{Items: []v1alpha1.ExternalProcessorAttachment{epa1, epa2}}
+
+	got := ef.EvaluateCatchAllProgrammed(&route, routeList, epaList)
+	if got.Programmed || got.Reason != controller.ConditionReasonCatchAllOverriddenByEPA {
+		t.Errorf("expected OverriddenByEPA when every EPA overrides, got %+v", got)
+	}
+}
+
 func TestEvaluateCatchAllProgrammed_MixedLossesFavorEPAReason(t *testing.T) {
 	// route loses "a.com" to another route and "b.com" to an EPA → OverriddenByEPA wins.
 	loser := newRouteWithCatchAll("z-loser", []string{"a.com", "b.com"})
