@@ -27,6 +27,10 @@ spec:
       jsonPath: .status.conditions[?(@.type=='ConfigMapSynced')].status
       name: ConfigMapSynced
       type: string
+    - description: Whether the route's catchAllRoute is applied to the dataplane
+      jsonPath: .status.conditions[?(@.type=='CatchAllProgrammed')].reason
+      name: CatchAll
+      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date

@@ -139,6 +139,13 @@ func (r *CustomHTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	r.UpdateConditionReconciled(objectManifest)
 	r.UpdateConditionConfigMapSynced(objectManifest)
 
+	catchAllStatus, catchAllErr := r.ComputeCatchAllProgrammedStatus(ctx, objectManifest)
+	if catchAllErr != nil {
+		logger.Error(catchAllErr, "Failed to compute CatchAllProgrammed status", "name", req.Name)
+	} else {
+		r.UpdateConditionCatchAllProgrammed(objectManifest, catchAllStatus)
+	}
+
 	return result, err
 }
 

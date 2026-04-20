@@ -158,10 +158,11 @@ func TestCollectCatchAllEntries_SkipsDeleting(t *testing.T) {
 	}
 }
 
-func TestCollectCatchAllEntries_DuplicateHostnameLastWins(t *testing.T) {
+func TestCollectCatchAllEntries_DuplicateHostnameFirstNameWins(t *testing.T) {
 	routeList := &v1alpha1.CustomHTTPRouteList{
 		Items: []v1alpha1.CustomHTTPRoute{
 			{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "z-route"},
 				Spec: v1alpha1.CustomHTTPRouteSpec{
 					Hostnames: []string{"example.com"},
 					CatchAllRoute: &v1alpha1.CatchAllBackendRef{
@@ -173,6 +174,7 @@ func TestCollectCatchAllEntries_DuplicateHostnameLastWins(t *testing.T) {
 				},
 			},
 			{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "a-route"},
 				Spec: v1alpha1.CustomHTTPRouteSpec{
 					Hostnames: []string{"example.com"},
 					CatchAllRoute: &v1alpha1.CatchAllBackendRef{
@@ -190,7 +192,7 @@ func TestCollectCatchAllEntries_DuplicateHostnameLastWins(t *testing.T) {
 		t.Fatalf("expected 1 entry (deduplicated), got %d", len(entries))
 	}
 	if entries[0].BackendRef.Name != "svc-2" {
-		t.Errorf("expected last-wins for duplicate hostname, got %s", entries[0].BackendRef.Name)
+		t.Errorf("expected first-in-lex-order (a-route → svc-2) to win, got %s", entries[0].BackendRef.Name)
 	}
 }
 

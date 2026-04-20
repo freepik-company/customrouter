@@ -33,4 +33,24 @@ const (
 	// ConditionReasonConfigMapError indicates an error syncing the ConfigMap
 	ConditionReasonConfigMapError        = "ConfigMapSyncError"
 	ConditionReasonConfigMapErrorMessage = "Failed to generate or sync ConfigMap"
+
+	// ConditionReasonCatchAllProgrammed indicates the catchAllRoute is applied on at least one EPA
+	ConditionReasonCatchAllProgrammed        = "Programmed"
+	ConditionReasonCatchAllProgrammedMessage = "catchAllRoute is applied to the dataplane"
+
+	// ConditionReasonCatchAllNotConfigured indicates the route has no catchAllRoute in its spec
+	ConditionReasonCatchAllNotConfigured        = "NotConfigured"
+	ConditionReasonCatchAllNotConfiguredMessage = "Route has no catchAllRoute configured"
+
+	// ConditionReasonCatchAllNoEPA indicates catchAllRoute is configured but no EPA exists to apply it
+	ConditionReasonCatchAllNoEPA        = "NoExternalProcessor"
+	ConditionReasonCatchAllNoEPAMessage = "catchAllRoute is configured but no ExternalProcessorAttachment exists"
+
+	// ConditionReasonCatchAllOverriddenByEPA indicates an EPA's own catchAllRoute overrides this route's
+	ConditionReasonCatchAllOverriddenByEPA        = "OverriddenByEPA"
+	ConditionReasonCatchAllOverriddenByEPAMessage = "catchAllRoute is overridden by an ExternalProcessorAttachment catchAllRoute for the same hostname"
+
+	// ConditionReasonCatchAllOverriddenByRoute indicates another CustomHTTPRoute wins the dedup for all hostnames
+	ConditionReasonCatchAllOverriddenByRoute        = "OverriddenByRoute"
+	ConditionReasonCatchAllOverriddenByRouteMessage = "catchAllRoute is overridden by another CustomHTTPRoute for the same hostname"
 )

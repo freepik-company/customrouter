@@ -83,6 +83,9 @@ const (
 
 	// ConditionTypeConfigMapSynced indicates whether the ConfigMap was successfully generated
 	ConditionTypeConfigMapSynced = "ConfigMapSynced"
+
+	// ConditionTypeCatchAllProgrammed indicates whether the route's catchAllRoute is applied to the dataplane
+	ConditionTypeCatchAllProgrammed = "CatchAllProgrammed"
 )
 
 // PathPrefixes defines path prefixes configuration (e.g., for languages)

@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/freepik-company/customrouter/api/v1alpha1"
+	"github.com/freepik-company/customrouter/internal/controller"
 )
 
 const (
@@ -148,9 +149,28 @@ func DeleteEnvoyFilter(ctx context.Context, cl client.Client, key types.Namespac
 }
 
 // CollectCatchAllEntries extracts catch-all entries from all CustomHTTPRoutes that declare catchAllRoute.
+// When multiple routes declare the same hostname, the first one in lexicographic order of
+// namespace/name wins, ensuring a deterministic result across reconciliations.
 func CollectCatchAllEntries(routeList *v1alpha1.CustomHTTPRouteList) []CatchAllEntry {
 	hostnameMap := make(map[string]v1alpha1.BackendRef)
 
+	ordered := orderedRoutesWithCatchAll(routeList)
+	for _, route := range ordered {
+		for _, hostname := range route.Spec.Hostnames {
+			if _, exists := hostnameMap[hostname]; exists {
+				continue
+			}
+			hostnameMap[hostname] = route.Spec.CatchAllRoute.BackendRef
+		}
+	}
+
+	return sortedEntries(hostnameMap)
+}
+
+// orderedRoutesWithCatchAll returns non-deleting routes with a non-nil catchAllRoute,
+// sorted by "namespace/name" to provide a stable iteration order for dedup decisions.
+func orderedRoutesWithCatchAll(routeList *v1alpha1.CustomHTTPRouteList) []*v1alpha1.CustomHTTPRoute {
+	out := make([]*v1alpha1.CustomHTTPRoute, 0, len(routeList.Items))
 	for i := range routeList.Items {
 		route := &routeList.Items[i]
 		if route.DeletionTimestamp != nil && !route.DeletionTimestamp.IsZero() {
@@ -159,12 +179,16 @@ func CollectCatchAllEntries(routeList *v1alpha1.CustomHTTPRouteList) []CatchAllE
 		if route.Spec.CatchAllRoute == nil {
 			continue
 		}
-		for _, hostname := range route.Spec.Hostnames {
-			hostnameMap[hostname] = route.Spec.CatchAllRoute.BackendRef
-		}
+		out = append(out, route)
 	}
+	sort.Slice(out, func(i, j int) bool {
+		return routeKey(out[i]) < routeKey(out[j])
+	})
+	return out
+}
 
-	return sortedEntries(hostnameMap)
+func routeKey(route *v1alpha1.CustomHTTPRoute) string {
+	return route.Namespace + "/" + route.Name
 }
 
 // MergeCatchAllEntries merges entries from CustomHTTPRoutes with the EPA's own catchAllRoute config.
@@ -270,6 +294,95 @@ func buildCatchAllPatch(entry CatchAllEntry) map[string]interface{} {
 			},
 		},
 	}
+}
+
+// CatchAllProgrammedStatus describes whether a CustomHTTPRoute's catchAllRoute ends up
+// applied on at least one EPA's catch-all EnvoyFilter, and if not, which reason prevails.
+type CatchAllProgrammedStatus struct {
+	Programmed bool
+	Reason     string
+	Hostnames  []string // hostnames of the route that won both dedup and EPA override (when Programmed=true)
+}
+
+// EvaluateCatchAllProgrammed determines the programming state of a route's catchAllRoute.
+// The result's Reason is one of the ConditionReasonCatchAll* constants from the controller package.
+func EvaluateCatchAllProgrammed(
+	route *v1alpha1.CustomHTTPRoute,
+	routeList *v1alpha1.CustomHTTPRouteList,
+	epaList *v1alpha1.ExternalProcessorAttachmentList,
+) CatchAllProgrammedStatus {
+	if route == nil || route.Spec.CatchAllRoute == nil {
+		return CatchAllProgrammedStatus{Reason: controller.ConditionReasonCatchAllNotConfigured}
+	}
+
+	if epaList == nil || len(epaList.Items) == 0 {
+		return CatchAllProgrammedStatus{Reason: controller.ConditionReasonCatchAllNoEPA}
+	}
+
+	selfKey := routeKey(route)
+	var wonHostnames, lostByRoute []string
+	for _, hostname := range route.Spec.Hostnames {
+		if winnerHostnameRoute(hostname, routeList) == selfKey {
+			wonHostnames = append(wonHostnames, hostname)
+		} else {
+			lostByRoute = append(lostByRoute, hostname)
+		}
+	}
+
+	var programmed, lostByEPA []string
+	for _, hostname := range wonHostnames {
+		if hostnameOverriddenByAnyEPA(hostname, epaList) {
+			lostByEPA = append(lostByEPA, hostname)
+		} else {
+			programmed = append(programmed, hostname)
+		}
+	}
+
+	if len(programmed) > 0 {
+		return CatchAllProgrammedStatus{
+			Programmed: true,
+			Reason:     controller.ConditionReasonCatchAllProgrammed,
+			Hostnames:  programmed,
+		}
+	}
+
+	if len(lostByEPA) > 0 {
+		return CatchAllProgrammedStatus{Reason: controller.ConditionReasonCatchAllOverriddenByEPA}
+	}
+	return CatchAllProgrammedStatus{Reason: controller.ConditionReasonCatchAllOverriddenByRoute}
+}
+
+// winnerHostnameRoute returns the namespace/name of the route that wins the dedup for hostname,
+// or "" if no route declares it. The winner is the first in lexicographic order of namespace/name.
+func winnerHostnameRoute(hostname string, routeList *v1alpha1.CustomHTTPRouteList) string {
+	if routeList == nil {
+		return ""
+	}
+	ordered := orderedRoutesWithCatchAll(routeList)
+	for _, r := range ordered {
+		for _, h := range r.Spec.Hostnames {
+			if h == hostname {
+				return routeKey(r)
+			}
+		}
+	}
+	return ""
+}
+
+// hostnameOverriddenByAnyEPA reports whether at least one EPA's own catchAllRoute.Hostnames contains hostname.
+func hostnameOverriddenByAnyEPA(hostname string, epaList *v1alpha1.ExternalProcessorAttachmentList) bool {
+	for i := range epaList.Items {
+		epa := &epaList.Items[i]
+		if epa.Spec.CatchAllRoute == nil {
+			continue
+		}
+		for _, h := range epa.Spec.CatchAllRoute.Hostnames {
+			if h == hostname {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // sortedEntries converts a hostname→BackendRef map to a sorted slice of CatchAllEntry.
