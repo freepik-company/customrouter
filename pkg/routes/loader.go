@@ -117,8 +117,8 @@ func (l *Loader) GetConfig() *RoutesConfig {
 	return l.config
 }
 
-// FindRoute finds the best matching route for a given host and path
-func (l *Loader) FindRoute(host, path string) *Route {
+// FindRoute finds the best matching route for a given host and request.
+func (l *Loader) FindRoute(host string, req RequestMatch) *Route {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
@@ -134,7 +134,7 @@ func (l *Loader) FindRoute(host, path string) *Route {
 
 	// Routes are already sorted by priority, so first match wins
 	for i := range routes {
-		if routes[i].Match(path) {
+		if routes[i].Match(req) {
 			return &routes[i]
 		}
 	}

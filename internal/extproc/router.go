@@ -18,6 +18,7 @@ package extproc
 
 import (
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -41,11 +42,15 @@ type requestVars struct {
 }
 
 // processRequestHeaders handles incoming request headers and determines routing
-func (p *Processor) processRequestHeaders(headers *extprocv3.HttpHeaders) (*extprocv3.ProcessingResponse, *requestContext, error) {
+func (p *Processor) processRequestHeaders(headers *extprocv3.HttpHeaders, streamCtx *streamContext) (*extprocv3.ProcessingResponse, *requestContext, error) {
 	reqCtx := &requestContext{
 		startTime: time.Now(),
 	}
 	vars := &requestVars{}
+	// Headers lowercased for case-insensitive matching by RouteHeaderMatch.
+	requestHeaders := map[string]string{}
+	// Query params are case-sensitive (RFC 3986).
+	requestQueryParams := map[string]string{}
 
 	// Debug: log complete headers structure
 	p.logger.Debug("processRequestHeaders called",
@@ -81,6 +86,11 @@ func (p *Processor) processRequestHeaders(headers *extprocv3.HttpHeaders) (*extp
 				value = string(h.RawValue)
 			}
 
+			// Store non-pseudo-headers for match evaluation (case-insensitive).
+			if len(h.Key) > 0 && h.Key[0] != ':' {
+				requestHeaders[strings.ToLower(h.Key)] = value
+			}
+
 			switch h.Key {
 			case ":authority":
 				reqCtx.authority = value
@@ -89,6 +99,7 @@ func (p *Processor) processRequestHeaders(headers *extprocv3.HttpHeaders) (*extp
 				reqCtx.path = stripQueryString(value)
 				vars.path = value
 				vars.pathSegments = splitPath(value)
+				requestQueryParams = extractQueryParams(value)
 			case ":method":
 				reqCtx.method = value
 				vars.method = value
@@ -121,7 +132,12 @@ func (p *Processor) processRequestHeaders(headers *extprocv3.HttpHeaders) (*extp
 	)
 
 	// Find matching route
-	route := p.routeFinder.FindRoute(reqCtx.authority, reqCtx.path)
+	route := p.routeFinder.FindRoute(reqCtx.authority, routes.RequestMatch{
+		Path:        reqCtx.path,
+		Method:      reqCtx.method,
+		Headers:     requestHeaders,
+		QueryParams: requestQueryParams,
+	})
 	if route == nil {
 		p.logger.Debug("no matching route found",
 			zap.String("host", reqCtx.authority),
@@ -147,6 +163,12 @@ func (p *Processor) processRequestHeaders(headers *extprocv3.HttpHeaders) (*extp
 	reqCtx.matchedPattern = route.Path
 	reqCtx.matchedType = route.Type
 	reqCtx.matchedPriority = route.Priority
+
+	// Stash the matched route and the request-time variable context so
+	// processResponseHeaders can apply response-side header mutations and
+	// expand ${...} placeholders when Envoy reports back.
+	streamCtx.matchedRoute = route
+	streamCtx.vars = vars
 
 	p.logger.Debug("route matched",
 		zap.String("originalHost", reqCtx.authority),
@@ -420,6 +442,80 @@ func (p *Processor) buildForwardResponse(route *routes.Route, vars *requestVars,
 	return resp, reqCtx, nil
 }
 
+// processResponseHeaders applies the matched route's response-side header
+// mutations, if any. When no route matched in the request phase (streamCtx is
+// empty or the route has no response-header actions), returns a no-op response
+// so Envoy can continue forwarding the upstream response unchanged.
+func (p *Processor) processResponseHeaders(streamCtx *streamContext) *extprocv3.ProcessingResponse {
+	if streamCtx == nil || streamCtx.matchedRoute == nil {
+		return &extprocv3.ProcessingResponse{
+			Response: &extprocv3.ProcessingResponse_ResponseHeaders{
+				ResponseHeaders: &extprocv3.HeadersResponse{},
+			},
+		}
+	}
+
+	var setHeaders []*corev3.HeaderValueOption
+	var removeHeaders []string
+	for _, action := range streamCtx.matchedRoute.Actions {
+		switch action.Type {
+		case routes.ActionTypeResponseHeaderSet:
+			if action.HeaderName == "" {
+				continue
+			}
+			setHeaders = append(setHeaders, &corev3.HeaderValueOption{
+				Header: &corev3.HeaderValue{
+					Key:      action.HeaderName,
+					RawValue: []byte(substituteVariables(action.Value, streamCtx.vars)),
+				},
+				AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+			})
+		case routes.ActionTypeResponseHeaderAdd:
+			if action.HeaderName == "" {
+				continue
+			}
+			setHeaders = append(setHeaders, &corev3.HeaderValueOption{
+				Header: &corev3.HeaderValue{
+					Key:      action.HeaderName,
+					RawValue: []byte(substituteVariables(action.Value, streamCtx.vars)),
+				},
+				AppendAction: corev3.HeaderValueOption_APPEND_IF_EXISTS_OR_ADD,
+			})
+		case routes.ActionTypeResponseHeaderRemove:
+			if action.HeaderName == "" {
+				continue
+			}
+			removeHeaders = append(removeHeaders, action.HeaderName)
+		}
+	}
+
+	if len(setHeaders) == 0 && len(removeHeaders) == 0 {
+		return &extprocv3.ProcessingResponse{
+			Response: &extprocv3.ProcessingResponse_ResponseHeaders{
+				ResponseHeaders: &extprocv3.HeadersResponse{},
+			},
+		}
+	}
+
+	p.logger.Debug("applying response header mutations",
+		zap.Int("set", len(setHeaders)),
+		zap.Int("remove", len(removeHeaders)),
+	)
+
+	return &extprocv3.ProcessingResponse{
+		Response: &extprocv3.ProcessingResponse_ResponseHeaders{
+			ResponseHeaders: &extprocv3.HeadersResponse{
+				Response: &extprocv3.CommonResponse{
+					HeaderMutation: &extprocv3.HeaderMutation{
+						SetHeaders:    setHeaders,
+						RemoveHeaders: removeHeaders,
+					},
+				},
+			},
+		},
+	}
+}
+
 // extractFirstIP extracts the first IP from a comma-separated list (X-Forwarded-For)
 func extractFirstIP(xff string) string {
 	if xff == "" {
@@ -455,6 +551,32 @@ func stripQueryString(path string) string {
 		return path[:idx]
 	}
 	return path
+}
+
+// extractQueryParams returns a flat map of the first value observed for each
+// query parameter name in the given ":path". Names are case-sensitive per
+// RFC 3986. Returns an empty map when no query string is present.
+// Invalid query strings are parsed on a best-effort basis.
+func extractQueryParams(rawPath string) map[string]string {
+	out := map[string]string{}
+	idx := strings.Index(rawPath, "?")
+	if idx == -1 || idx == len(rawPath)-1 {
+		return out
+	}
+	query := rawPath[idx+1:]
+	if hash := strings.Index(query, "#"); hash != -1 {
+		query = query[:hash]
+	}
+	values, err := url.ParseQuery(query)
+	if err != nil {
+		return out
+	}
+	for k, v := range values {
+		if len(v) > 0 {
+			out[k] = v[0]
+		}
+	}
+	return out
 }
 
 // splitPath splits a path into segments

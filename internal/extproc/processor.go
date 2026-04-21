@@ -32,7 +32,7 @@ import (
 
 // RouteFinder is an interface for finding routes
 type RouteFinder interface {
-	FindRoute(host, path string) *routes.Route
+	FindRoute(host string, req routes.RequestMatch) *routes.Route
 }
 
 // Processor implements the Envoy external processor service
@@ -66,8 +66,25 @@ type requestContext struct {
 	processingTimeNs int64
 }
 
+// streamContext is the per-stream state shared across ext_proc phases
+// (RequestHeaders → ResponseHeaders). Envoy opens one stream per request,
+// so the matched route selected in the request phase is the one whose
+// response-side actions must be applied when the response headers arrive.
+type streamContext struct {
+	// matchedRoute is the route selected during processRequestHeaders, or nil
+	// if no route matched. Read-only after the request phase completes.
+	matchedRoute *routes.Route
+
+	// vars carries the request-time variable context (path, host, method, …)
+	// so response-side header actions can expand ${...} placeholders using
+	// the same source of truth as request-side actions. Read-only after the
+	// request phase completes.
+	vars *requestVars
+}
+
 // Process handles the bidirectional stream from Envoy
 func (p *Processor) Process(stream extprocv3.ExternalProcessor_ProcessServer) error {
+	streamCtx := &streamContext{}
 	for {
 		req, err := stream.Recv()
 		if err == io.EOF {
@@ -77,7 +94,7 @@ func (p *Processor) Process(stream extprocv3.ExternalProcessor_ProcessServer) er
 			return status.Errorf(codes.Internal, "failed to receive request: %v", err)
 		}
 
-		resp, reqCtx, err := p.processRequest(req)
+		resp, reqCtx, err := p.processRequest(req, streamCtx)
 		if err != nil {
 			processingErrorsTotal.Inc()
 			p.logger.Error("failed to process request", zap.Error(err))
@@ -134,7 +151,7 @@ func (p *Processor) logAccess(ctx *requestContext) {
 	}
 }
 
-func (p *Processor) processRequest(req *extprocv3.ProcessingRequest) (*extprocv3.ProcessingResponse, *requestContext, error) {
+func (p *Processor) processRequest(req *extprocv3.ProcessingRequest, streamCtx *streamContext) (*extprocv3.ProcessingResponse, *requestContext, error) {
 	// Debug: log request type
 	p.logger.Debug("processRequest called",
 		zap.String("request_type", fmt.Sprintf("%T", req.Request)),
@@ -143,16 +160,11 @@ func (p *Processor) processRequest(req *extprocv3.ProcessingRequest) (*extprocv3
 	switch r := req.Request.(type) {
 	case *extprocv3.ProcessingRequest_RequestHeaders:
 		p.logger.Debug("handling RequestHeaders")
-		return p.processRequestHeaders(r.RequestHeaders)
+		return p.processRequestHeaders(r.RequestHeaders, streamCtx)
 
 	case *extprocv3.ProcessingRequest_ResponseHeaders:
 		p.logger.Debug("handling ResponseHeaders")
-		// We don't modify response headers
-		return &extprocv3.ProcessingResponse{
-			Response: &extprocv3.ProcessingResponse_ResponseHeaders{
-				ResponseHeaders: &extprocv3.HeadersResponse{},
-			},
-		}, nil, nil
+		return p.processResponseHeaders(streamCtx), nil, nil
 
 	case *extprocv3.ProcessingRequest_RequestBody:
 		p.logger.Debug("handling RequestBody")

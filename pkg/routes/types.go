@@ -22,6 +22,8 @@ import (
 	"encoding/json"
 	"regexp"
 	"strings"
+
+	"github.com/freepik-company/customrouter/api/v1alpha1"
 )
 
 // RouteAction represents an action to perform on a matched request
@@ -51,6 +53,38 @@ type RouteAction struct {
 	preservePrefix bool
 }
 
+// HeaderMatchExact and HeaderMatchRegex are the comparison modes for RouteHeaderMatch.
+const (
+	HeaderMatchExact = "exact"
+	HeaderMatchRegex = "regex"
+)
+
+// RouteHeaderMatch represents a single header matching criterion on a Route.
+// It mirrors the API's HeaderMatch but lives in the runtime package so the
+// extproc binary has no direct dependency on the API v1alpha1 types.
+type RouteHeaderMatch struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+	// Type is one of HeaderMatchExact (default, case-sensitive) or HeaderMatchRegex.
+	Type string `json:"type,omitempty"`
+
+	// compiledRegex is populated during CompileRegexes() for Type=regex. Not serialized.
+	compiledRegex *regexp.Regexp
+}
+
+// RouteQueryParamMatch represents a single query parameter matching criterion.
+// Parameter names are compared case-sensitively per RFC 3986.
+type RouteQueryParamMatch struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+	// Type is one of HeaderMatchExact (default) or HeaderMatchRegex. Shared with
+	// header matches since the comparison semantics are identical.
+	Type string `json:"type,omitempty"`
+
+	// compiledRegex is populated during CompileRegexes() for Type=regex. Not serialized.
+	compiledRegex *regexp.Regexp
+}
+
 // Route represents a single expanded route for the proxy
 type Route struct {
 	Path     string        `json:"path"`
@@ -59,8 +93,63 @@ type Route struct {
 	Priority int32         `json:"priority"`
 	Actions  []RouteAction `json:"actions,omitempty"`
 
+	// Method restricts the route to a specific HTTP method (e.g. "GET").
+	// Empty means any method matches. Case-insensitive comparison at match time.
+	Method string `json:"method,omitempty"`
+
+	// Headers are the header matching criteria. All listed headers must be
+	// satisfied by the request (AND). Empty means no header constraint.
+	Headers []RouteHeaderMatch `json:"headers,omitempty"`
+
+	// QueryParams are the query parameter matching criteria. All listed params
+	// must be satisfied by the request (AND). Empty means no query constraint.
+	QueryParams []RouteQueryParamMatch `json:"queryParams,omitempty"`
+
+	// Mirrors lists request-mirror targets for this route. These are consumed
+	// by the controller when generating Envoy request_mirror_policies and are
+	// NEVER serialized to the ConfigMap — the ExtProc data plane does not
+	// dispatch mirrors (that happens natively in Envoy), so keeping them out
+	// of the runtime config preserves the ExtProc hot path.
+	Mirrors []RouteMirror `json:"-"`
+
+	// CORS carries a cross-origin resource sharing policy. Like Mirrors, this
+	// is consumed only by the controller (to render an Envoy CORS filter
+	// typed_per_filter_config entry) and never reaches the ExtProc data plane.
+	CORS *RouteCORS `json:"-"`
+
 	// compiledRegex is the compiled regex for regex type routes (not serialized)
 	compiledRegex *regexp.Regexp
+}
+
+// RouteCORS is the runtime representation of a cors action, carrying the
+// fields consumed by Envoy's CORS filter. Field semantics mirror
+// v1alpha1.CORSConfig verbatim.
+type RouteCORS struct {
+	AllowOrigins     []string
+	AllowMethods     []string
+	AllowHeaders     []string
+	ExposeHeaders    []string
+	AllowCredentials bool
+	MaxAge           int32
+}
+
+// RouteMirror is the runtime representation of a request-mirror action.
+// BackendRef is preserved as-is (rather than flattened to a host:port string)
+// so the controller can translate it into Envoy's cluster-naming convention
+// via envoyfilter.BuildClusterName at EnvoyFilter generation time. Percent is
+// nil for 100% (all matched requests) and set for partial mirroring.
+type RouteMirror struct {
+	BackendRef v1alpha1.BackendRef
+	Percent    *int32
+}
+
+// RequestMatch carries the per-request inputs used to match a Route.
+// All fields are optional; empty fields act as "match any" for that dimension.
+type RequestMatch struct {
+	Path        string
+	Method      string
+	Headers     map[string]string // keys MUST be lowercased by caller
+	QueryParams map[string]string // case-sensitive keys (RFC 3986)
 }
 
 // RoutesConfig is the top-level structure for the ConfigMap data
@@ -78,11 +167,16 @@ const (
 
 // ActionType constants
 const (
-	ActionTypeRedirect     = "redirect"
-	ActionTypeRewrite      = "rewrite"
-	ActionTypeHeaderSet    = "header-set"
-	ActionTypeHeaderAdd    = "header-add"
-	ActionTypeHeaderRemove = "header-remove"
+	ActionTypeRedirect             = "redirect"
+	ActionTypeRewrite              = "rewrite"
+	ActionTypeHeaderSet            = "header-set"
+	ActionTypeHeaderAdd            = "header-add"
+	ActionTypeHeaderRemove         = "header-remove"
+	ActionTypeResponseHeaderSet    = "response-header-set"
+	ActionTypeResponseHeaderAdd    = "response-header-add"
+	ActionTypeResponseHeaderRemove = "response-header-remove"
+	ActionTypeRequestMirror        = "request-mirror"
+	ActionTypeCORS                 = "cors"
 )
 
 // ParseJSON parses a JSON byte slice into a RoutesConfig
@@ -100,8 +194,9 @@ func (rc *RoutesConfig) ToJSON() ([]byte, error) {
 	return json.Marshal(rc)
 }
 
-// CompileRegexes compiles all regex patterns in the routes config.
-// Should be called after loading the config.
+// CompileRegexes compiles all regex patterns in the routes config (both path
+// regex routes and header matches with Type=regex). Should be called after
+// loading the config.
 func (rc *RoutesConfig) CompileRegexes() error {
 	for host := range rc.Hosts {
 		for i := range rc.Hosts[host] {
@@ -113,13 +208,49 @@ func (rc *RoutesConfig) CompileRegexes() error {
 				}
 				route.compiledRegex = re
 			}
+			for j := range route.Headers {
+				h := &route.Headers[j]
+				if h.Type == HeaderMatchRegex {
+					re, err := regexp.Compile(h.Value)
+					if err != nil {
+						return err
+					}
+					h.compiledRegex = re
+				}
+			}
+			for j := range route.QueryParams {
+				q := &route.QueryParams[j]
+				if q.Type == HeaderMatchRegex {
+					re, err := regexp.Compile(q.Value)
+					if err != nil {
+						return err
+					}
+					q.compiledRegex = re
+				}
+			}
 		}
 	}
 	return nil
 }
 
-// Match checks if the given path matches this route
-func (r *Route) Match(path string) bool {
+// Match checks if the given request matches this route. All match criteria
+// (path, method, headers, ...) are AND-combined; an empty criterion on the
+// Route means "match any value for this dimension".
+func (r *Route) Match(req RequestMatch) bool {
+	if !r.matchMethod(req.Method) {
+		return false
+	}
+	if !r.matchHeaders(req.Headers) {
+		return false
+	}
+	if !r.matchQueryParams(req.QueryParams) {
+		return false
+	}
+	return r.matchPath(req.Path)
+}
+
+// matchPath evaluates only the path portion of the match.
+func (r *Route) matchPath(path string) bool {
 	switch r.Type {
 	case RouteTypeExact:
 		return path == r.Path
@@ -151,6 +282,91 @@ func (r *Route) Match(path string) bool {
 	default:
 		return false
 	}
+}
+
+// matchMethod returns true when the route has no method restriction or the
+// request method matches it (case-insensitive).
+func (r *Route) matchMethod(method string) bool {
+	if r.Method == "" {
+		return true
+	}
+	return strings.EqualFold(r.Method, method)
+}
+
+// matchHeaders returns true when every required RouteHeaderMatch on the route
+// is satisfied by the request headers. Header names are matched case-insensitively.
+// An Exact match compares values case-sensitively per RFC 7230 semantics; a
+// regex match uses the compiled pattern (falling back to on-the-fly compilation
+// if CompileRegexes was not called).
+func (r *Route) matchHeaders(requestHeaders map[string]string) bool {
+	if len(r.Headers) == 0 {
+		return true
+	}
+	for i := range r.Headers {
+		h := &r.Headers[i]
+		reqValue, ok := requestHeaders[strings.ToLower(h.Name)]
+		if !ok {
+			return false
+		}
+		switch h.Type {
+		case HeaderMatchRegex:
+			if h.compiledRegex != nil {
+				if !h.compiledRegex.MatchString(reqValue) {
+					return false
+				}
+				continue
+			}
+			re, err := regexp.Compile(h.Value)
+			if err != nil {
+				return false
+			}
+			if !re.MatchString(reqValue) {
+				return false
+			}
+		default:
+			if reqValue != h.Value {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// matchQueryParams returns true when every required RouteQueryParamMatch on
+// the route is satisfied by the request query parameters. Parameter names are
+// matched case-sensitively (RFC 3986).
+func (r *Route) matchQueryParams(requestParams map[string]string) bool {
+	if len(r.QueryParams) == 0 {
+		return true
+	}
+	for i := range r.QueryParams {
+		q := &r.QueryParams[i]
+		reqValue, ok := requestParams[q.Name]
+		if !ok {
+			return false
+		}
+		switch q.Type {
+		case HeaderMatchRegex:
+			if q.compiledRegex != nil {
+				if !q.compiledRegex.MatchString(reqValue) {
+					return false
+				}
+				continue
+			}
+			re, err := regexp.Compile(q.Value)
+			if err != nil {
+				return false
+			}
+			if !re.MatchString(reqValue) {
+				return false
+			}
+		default:
+			if reqValue != q.Value {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // ParseBackend parses the backend string into host and port

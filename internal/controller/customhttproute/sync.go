@@ -65,6 +65,12 @@ const (
 	// hadCatchAllAnnotation tracks whether the route previously had catchAllRoute configured
 	hadCatchAllAnnotation = "customrouter.freepik.com/had-catch-all"
 
+	// hadMirrorAnnotation tracks whether the route previously had a request-mirror action
+	hadMirrorAnnotation = "customrouter.freepik.com/had-mirror"
+
+	// hadCORSAnnotation tracks whether the route previously had a cors action
+	hadCORSAnnotation = "customrouter.freepik.com/had-cors"
+
 	// annotationValueTrue is the canonical string value for boolean true annotations
 	annotationValueTrue = "true"
 )
@@ -136,7 +142,130 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 		}
 	}
 
+	hadMirror := resourceManifest.Annotations[hadMirrorAnnotation] == annotationValueTrue
+	hasMirror := routeHasMirrorAction(resourceManifest)
+	if hasMirror || eventType == watch.Deleted || hadMirror {
+		if err := r.reconcileMirrorFromAllRoutes(ctx); err != nil {
+			return fmt.Errorf("failed to reconcile mirror routes: %w", err)
+		}
+	}
+
+	if eventType != watch.Deleted {
+		if err := r.ensureHadMirrorAnnotation(ctx, resourceManifest, hasMirror); err != nil {
+			return fmt.Errorf("failed to update had-mirror annotation: %w", err)
+		}
+	}
+
+	hadCORS := resourceManifest.Annotations[hadCORSAnnotation] == annotationValueTrue
+	hasCORS := routeHasCORSAction(resourceManifest)
+	if hasCORS || eventType == watch.Deleted || hadCORS {
+		if err := r.reconcileCORSFromAllRoutes(ctx); err != nil {
+			return fmt.Errorf("failed to reconcile cors routes: %w", err)
+		}
+	}
+
+	if eventType != watch.Deleted {
+		if err := r.ensureHadCORSAnnotation(ctx, resourceManifest, hasCORS); err != nil {
+			return fmt.Errorf("failed to update had-cors annotation: %w", err)
+		}
+	}
+
 	return nil
+}
+
+// routeHasCORSAction returns true if any rule in the route declares a cors action.
+func routeHasCORSAction(cr *v1alpha1.CustomHTTPRoute) bool {
+	for _, rule := range cr.Spec.Rules {
+		for _, a := range rule.Actions {
+			if a.Type == v1alpha1.ActionTypeCORS {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ensureHadCORSAnnotation mirrors ensureHadMirrorAnnotation for the cors axis.
+func (r *CustomHTTPRouteReconciler) ensureHadCORSAnnotation(
+	ctx context.Context,
+	resource *v1alpha1.CustomHTTPRoute,
+	hasCORS bool,
+) error {
+	currentValue := resource.Annotations[hadCORSAnnotation]
+	desiredValue := ""
+	if hasCORS {
+		desiredValue = annotationValueTrue
+	}
+	if currentValue == desiredValue {
+		return nil
+	}
+	if resource.Annotations == nil {
+		resource.Annotations = make(map[string]string)
+	}
+	if hasCORS {
+		resource.Annotations[hadCORSAnnotation] = annotationValueTrue
+	} else {
+		delete(resource.Annotations, hadCORSAnnotation)
+	}
+	return r.Update(ctx, resource)
+}
+
+// reconcileCORSFromAllRoutes lists all routes and drives the per-EPA CORS
+// EnvoyFilter reconciliation.
+func (r *CustomHTTPRouteReconciler) reconcileCORSFromAllRoutes(ctx context.Context) error {
+	routeList := &v1alpha1.CustomHTTPRouteList{}
+	if err := r.List(ctx, routeList); err != nil {
+		return fmt.Errorf("failed to list CustomHTTPRoutes for cors reconciliation: %w", err)
+	}
+	return r.reconcileCORSFromRoutes(ctx, routeList)
+}
+
+// routeHasMirrorAction returns true if any rule in the route declares a
+// request-mirror action. Kept package-local for use in the reconcile trigger.
+func routeHasMirrorAction(cr *v1alpha1.CustomHTTPRoute) bool {
+	for _, rule := range cr.Spec.Rules {
+		for _, a := range rule.Actions {
+			if a.Type == v1alpha1.ActionTypeRequestMirror {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ensureHadMirrorAnnotation mirrors ensureHadCatchAllAnnotation for the mirror axis.
+func (r *CustomHTTPRouteReconciler) ensureHadMirrorAnnotation(
+	ctx context.Context,
+	resource *v1alpha1.CustomHTTPRoute,
+	hasMirror bool,
+) error {
+	currentValue := resource.Annotations[hadMirrorAnnotation]
+	desiredValue := ""
+	if hasMirror {
+		desiredValue = annotationValueTrue
+	}
+	if currentValue == desiredValue {
+		return nil
+	}
+	if resource.Annotations == nil {
+		resource.Annotations = make(map[string]string)
+	}
+	if hasMirror {
+		resource.Annotations[hadMirrorAnnotation] = annotationValueTrue
+	} else {
+		delete(resource.Annotations, hadMirrorAnnotation)
+	}
+	return r.Update(ctx, resource)
+}
+
+// reconcileMirrorFromAllRoutes lists all routes and drives the per-EPA mirror
+// EnvoyFilter reconciliation.
+func (r *CustomHTTPRouteReconciler) reconcileMirrorFromAllRoutes(ctx context.Context) error {
+	routeList := &v1alpha1.CustomHTTPRouteList{}
+	if err := r.List(ctx, routeList); err != nil {
+		return fmt.Errorf("failed to list CustomHTTPRoutes for mirror reconciliation: %w", err)
+	}
+	return r.reconcileMirrorFromRoutes(ctx, routeList)
 }
 
 // ensureLastTargetAnnotation sets the last-target annotation on the resource if not already correct.

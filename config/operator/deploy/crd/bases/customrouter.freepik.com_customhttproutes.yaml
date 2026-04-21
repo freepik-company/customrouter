@@ -156,6 +156,63 @@ spec:
                         description: Action defines an action to perform on a matched
                           request
                         properties:
+                          cors:
+                            description: cors specifies the CORS policy (required
+                              when type is "cors")
+                            properties:
+                              allowCredentials:
+                                description: |-
+                                  allowCredentials indicates whether the response to the request can be
+                                  exposed when credentials (cookies, TLS client certs, auth headers) are
+                                  present. When true, allowOrigins must not contain "*".
+                                type: boolean
+                              allowHeaders:
+                                description: |-
+                                  allowHeaders is the list of request headers allowed in cross-origin
+                                  requests. A single "*" entry allows any header.
+                                items:
+                                  type: string
+                                maxItems: 64
+                                type: array
+                              allowMethods:
+                                description: |-
+                                  allowMethods is the list of HTTP methods allowed in cross-origin requests.
+                                  A single "*" entry allows any method. Mirrors Gateway API's
+                                  HTTPCORSFilter.allowMethods.
+                                items:
+                                  type: string
+                                maxItems: 16
+                                type: array
+                              allowOrigins:
+                                description: |-
+                                  allowOrigins is the list of origins allowed to make cross-origin requests.
+                                  Each entry must be either "*" or an absolute URI with scheme and host
+                                  (e.g. "https://example.com"). A single "*" entry enables the permissive
+                                  wildcard; it is mutually exclusive with allowCredentials=true (the
+                                  browser rejects that combination). Matching is exact, case-sensitive.
+                                items:
+                                  type: string
+                                maxItems: 64
+                                minItems: 1
+                                type: array
+                              exposeHeaders:
+                                description: exposeHeaders is the list of response
+                                  headers exposed to the browser.
+                                items:
+                                  type: string
+                                maxItems: 64
+                                type: array
+                              maxAge:
+                                description: |-
+                                  maxAge is the number of seconds browsers may cache the preflight
+                                  response. When unset (0), the Envoy default applies.
+                                format: int32
+                                maximum: 86400
+                                minimum: 0
+                                type: integer
+                            required:
+                            - allowOrigins
+                            type: object
                           header:
                             description: header specifies header configuration (required
                               when type is "header-set" or "header-add")
@@ -184,6 +241,54 @@ spec:
                               (required when type is "header-remove")
                             maxLength: 256
                             type: string
+                          mirror:
+                            description: mirror specifies request mirroring configuration
+                              (required when type is "request-mirror")
+                            properties:
+                              backendRef:
+                                description: |-
+                                  backendRef is the Service to mirror requests to. The Service must
+                                  be reachable from the same Istio mesh as the primary route (it is
+                                  resolved to an Istio outbound cluster at EnvoyFilter generation time).
+                                properties:
+                                  name:
+                                    description: name is the name of the Service or
+                                      an external hostname/IP (RFC 1123 DNS name)
+                                    maxLength: 253
+                                    minLength: 1
+                                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                                    type: string
+                                  namespace:
+                                    description: namespace is the namespace of the
+                                      Service
+                                    maxLength: 63
+                                    minLength: 1
+                                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                    type: string
+                                  port:
+                                    description: port is the port of the Service
+                                    format: int32
+                                    maximum: 65535
+                                    minimum: 1
+                                    type: integer
+                                required:
+                                - name
+                                - namespace
+                                - port
+                                type: object
+                              percent:
+                                description: |-
+                                  percent is the percentage of requests to mirror, in the range [0, 100].
+                                  When unset or 100, all matched requests are mirrored. When 0, no
+                                  requests are mirrored (the action becomes a no-op). Mirrors Gateway
+                                  API's HTTPRequestMirrorFilter.percent field.
+                                format: int32
+                                maximum: 100
+                                minimum: 0
+                                type: integer
+                            required:
+                            - backendRef
+                            type: object
                           redirect:
                             description: |-
                               redirect specifies redirect configuration (required when type is "redirect")
@@ -297,6 +402,11 @@ spec:
                             - header-set
                             - header-add
                             - header-remove
+                            - response-header-set
+                            - response-header-add
+                            - response-header-remove
+                            - request-mirror
+                            - cors
                             type: string
                         required:
                         - type
@@ -346,8 +456,67 @@ spec:
                       description: matches defines the conditions for matching this
                         rule
                       items:
-                        description: PathMatch defines a path matching rule
+                        description: |-
+                          PathMatch defines a path matching rule. Despite the name, it can also restrict
+                          the match to a specific HTTP method (see Method). Additional request-matching
+                          criteria (headers, query parameters) are applied via sibling fields on the
+                          containing Rule and are AND-combined with this match at request-routing time.
                         properties:
+                          headers:
+                            description: |-
+                              headers is the list of HTTP header matching criteria. All listed headers
+                              must match for this rule to apply (AND-combined). When empty, any headers
+                              are accepted. Mirrors Gateway API HTTPRouteMatch.headers.
+                            items:
+                              description: |-
+                                HeaderMatch defines a single HTTP header matching criterion.
+                                Mirrors Gateway API HTTPHeaderMatch. Header names are compared
+                                case-insensitively; values are compared according to Type.
+                              properties:
+                                name:
+                                  description: name is the header name to match (case-insensitive).
+                                  maxLength: 256
+                                  minLength: 1
+                                  type: string
+                                type:
+                                  default: Exact
+                                  description: 'type is the comparison mode: Exact
+                                    (default) or RegularExpression.'
+                                  enum:
+                                  - Exact
+                                  - RegularExpression
+                                  type: string
+                                value:
+                                  description: value is the value (or pattern) to
+                                    compare against the request header.
+                                  maxLength: 4096
+                                  minLength: 1
+                                  type: string
+                              required:
+                              - name
+                              - value
+                              type: object
+                            maxItems: 64
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - name
+                            x-kubernetes-list-type: map
+                          method:
+                            description: |-
+                              method restricts this match to requests using the given HTTP method.
+                              When empty (default), requests with any method are matched.
+                              Mirrors Gateway API HTTPRouteMatch.method.
+                            enum:
+                            - GET
+                            - HEAD
+                            - POST
+                            - PUT
+                            - DELETE
+                            - CONNECT
+                            - OPTIONS
+                            - TRACE
+                            - PATCH
+                            type: string
                           path:
                             description: path is the value to match against the request
                               path
@@ -362,6 +531,46 @@ spec:
                             maximum: 10000
                             minimum: 1
                             type: integer
+                          queryParams:
+                            description: |-
+                              queryParams is the list of query parameter matching criteria. All listed
+                              parameters must match for this rule to apply (AND-combined). When empty,
+                              any query parameters are accepted. Mirrors Gateway API HTTPRouteMatch.queryParams.
+                            items:
+                              description: |-
+                                QueryParamMatch defines a single HTTP query parameter matching criterion.
+                                Mirrors Gateway API HTTPQueryParamMatch. Parameter names are compared
+                                case-sensitively per RFC 3986; values are compared according to Type.
+                              properties:
+                                name:
+                                  description: name is the query parameter name to
+                                    match (case-sensitive).
+                                  maxLength: 256
+                                  minLength: 1
+                                  type: string
+                                type:
+                                  default: Exact
+                                  description: 'type is the comparison mode: Exact
+                                    (default) or RegularExpression.'
+                                  enum:
+                                  - Exact
+                                  - RegularExpression
+                                  type: string
+                                value:
+                                  description: value is the value (or pattern) to
+                                    compare against the request query parameter.
+                                  maxLength: 4096
+                                  minLength: 1
+                                  type: string
+                              required:
+                              - name
+                              - value
+                              type: object
+                            maxItems: 64
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - name
+                            x-kubernetes-list-type: map
                           type:
                             default: PathPrefix
                             description: |-

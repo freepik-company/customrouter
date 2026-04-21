@@ -3,6 +3,7 @@ package extproc
 import (
 	"testing"
 
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	"github.com/freepik-company/customrouter/pkg/routes"
 	"go.uber.org/zap"
 )
@@ -212,6 +213,36 @@ func TestStripQueryString(t *testing.T) {
 	}
 }
 
+func TestExtractQueryParams(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  map[string]string
+	}{
+		{"no query", "/api", map[string]string{}},
+		{"empty query", "/api?", map[string]string{}},
+		{"single param", "/api?version=2", map[string]string{"version": "2"}},
+		{"multiple params", "/api?a=1&b=two", map[string]string{"a": "1", "b": "two"}},
+		{"url-encoded value", "/api?q=hello%20world", map[string]string{"q": "hello world"}},
+		{"repeated param keeps first", "/api?x=1&x=2", map[string]string{"x": "1"}},
+		{"fragment stripped before parsing", "/api?q=1#frag", map[string]string{"q": "1"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractQueryParams(tt.input)
+			if len(got) != len(tt.want) {
+				t.Fatalf("extractQueryParams(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+			for k, v := range tt.want {
+				if got[k] != v {
+					t.Errorf("extractQueryParams(%q)[%q] = %q, want %q", tt.input, k, got[k], v)
+				}
+			}
+		})
+	}
+}
+
 func TestBuildForwardResponse_OriginalPathHeader(t *testing.T) {
 	logger := zap.NewNop()
 	p := NewProcessor(nil, logger, false)
@@ -278,6 +309,123 @@ func TestBuildForwardResponse_OriginalPathHeader(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestProcessResponseHeaders(t *testing.T) {
+	logger := zap.NewNop()
+	p := NewProcessor(nil, logger, false)
+
+	t.Run("no matched route → empty mutation", func(t *testing.T) {
+		resp := p.processResponseHeaders(&streamContext{})
+		if resp.GetResponseHeaders().GetResponse() != nil {
+			t.Errorf("expected no CommonResponse when no route matched")
+		}
+	})
+
+	t.Run("route without response actions → empty mutation", func(t *testing.T) {
+		resp := p.processResponseHeaders(&streamContext{
+			matchedRoute: &routes.Route{
+				Actions: []routes.RouteAction{
+					{Type: routes.ActionTypeHeaderSet, HeaderName: "X-Request-Only", Value: "yes"},
+				},
+			},
+		})
+		if resp.GetResponseHeaders().GetResponse() != nil {
+			t.Errorf("request-side actions should not produce response mutations")
+		}
+	})
+
+	t.Run("response-header-set produces OVERWRITE mutation", func(t *testing.T) {
+		resp := p.processResponseHeaders(&streamContext{
+			matchedRoute: &routes.Route{
+				Actions: []routes.RouteAction{
+					{Type: routes.ActionTypeResponseHeaderSet, HeaderName: "X-Served-By", Value: "customrouter"},
+				},
+			},
+		})
+		mutation := resp.GetResponseHeaders().GetResponse().GetHeaderMutation()
+		if mutation == nil || len(mutation.SetHeaders) != 1 {
+			t.Fatalf("expected one set header, got %+v", mutation)
+		}
+		h := mutation.SetHeaders[0]
+		if h.GetHeader().GetKey() != "X-Served-By" {
+			t.Errorf("unexpected header key %q", h.GetHeader().GetKey())
+		}
+		if string(h.GetHeader().GetRawValue()) != "customrouter" {
+			t.Errorf("unexpected header value %q", string(h.GetHeader().GetRawValue()))
+		}
+		if h.GetAppendAction() != corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD {
+			t.Errorf("expected OVERWRITE_IF_EXISTS_OR_ADD, got %v", h.GetAppendAction())
+		}
+	})
+
+	t.Run("response-header-add produces APPEND mutation", func(t *testing.T) {
+		resp := p.processResponseHeaders(&streamContext{
+			matchedRoute: &routes.Route{
+				Actions: []routes.RouteAction{
+					{Type: routes.ActionTypeResponseHeaderAdd, HeaderName: "Set-Cookie", Value: "a=1"},
+				},
+			},
+		})
+		h := resp.GetResponseHeaders().GetResponse().GetHeaderMutation().SetHeaders[0]
+		if h.GetAppendAction() != corev3.HeaderValueOption_APPEND_IF_EXISTS_OR_ADD {
+			t.Errorf("expected APPEND_IF_EXISTS_OR_ADD, got %v", h.GetAppendAction())
+		}
+	})
+
+	t.Run("response-header-remove produces RemoveHeaders", func(t *testing.T) {
+		resp := p.processResponseHeaders(&streamContext{
+			matchedRoute: &routes.Route{
+				Actions: []routes.RouteAction{
+					{Type: routes.ActionTypeResponseHeaderRemove, HeaderName: "X-Internal"},
+				},
+			},
+		})
+		remove := resp.GetResponseHeaders().GetResponse().GetHeaderMutation().RemoveHeaders
+		if len(remove) != 1 || remove[0] != "X-Internal" {
+			t.Errorf("expected RemoveHeaders=[X-Internal], got %v", remove)
+		}
+	})
+
+	t.Run("request-side header-set does not leak into response mutations", func(t *testing.T) {
+		resp := p.processResponseHeaders(&streamContext{
+			matchedRoute: &routes.Route{
+				Actions: []routes.RouteAction{
+					{Type: routes.ActionTypeHeaderSet, HeaderName: "X-Request-Side", Value: "req"},
+					{Type: routes.ActionTypeResponseHeaderSet, HeaderName: "X-Response-Side", Value: "resp"},
+				},
+			},
+		})
+		set := resp.GetResponseHeaders().GetResponse().GetHeaderMutation().SetHeaders
+		if len(set) != 1 || set[0].GetHeader().GetKey() != "X-Response-Side" {
+			t.Fatalf("expected only X-Response-Side in response mutation, got %+v", set)
+		}
+	})
+
+	t.Run("response-header values expand ${...} variables", func(t *testing.T) {
+		resp := p.processResponseHeaders(&streamContext{
+			matchedRoute: &routes.Route{
+				Actions: []routes.RouteAction{
+					{Type: routes.ActionTypeResponseHeaderSet, HeaderName: "X-Request-ID", Value: "${request_id}"},
+					{Type: routes.ActionTypeResponseHeaderAdd, HeaderName: "X-Original-Path", Value: "${path}"},
+				},
+			},
+			vars: &requestVars{
+				requestID: "req-42",
+				path:      "/orig",
+			},
+		})
+		set := resp.GetResponseHeaders().GetResponse().GetHeaderMutation().SetHeaders
+		if len(set) != 2 {
+			t.Fatalf("expected 2 set headers, got %d", len(set))
+		}
+		if got := string(set[0].GetHeader().GetRawValue()); got != "req-42" {
+			t.Errorf("expected substituted request_id, got %q", got)
+		}
+		if got := string(set[1].GetHeader().GetRawValue()); got != "/orig" {
+			t.Errorf("expected substituted path, got %q", got)
+		}
+	})
 }
 
 func TestSubstituteVariables(t *testing.T) {

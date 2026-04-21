@@ -186,6 +186,81 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "no conflict — same path, different method",
+			route: newCustomHTTPRouteWithPaths("route-a", "default", "default", []string{"example.com"},
+				[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix, Method: "GET"}},
+			),
+			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
+				*newCustomHTTPRouteWithPaths("route-b", "default", "default", []string{"example.com"},
+					[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix, Method: "POST"}},
+				),
+			},
+			wantErr: false,
+		},
+		{
+			name: "conflict — same path, same method",
+			route: newCustomHTTPRouteWithPaths("route-a", "default", "default", []string{"example.com"},
+				[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix, Method: "GET"}},
+			),
+			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
+				*newCustomHTTPRouteWithPaths("route-b", "default", "default", []string{"example.com"},
+					[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix, Method: "GET"}},
+				),
+			},
+			wantErr:     true,
+			errContains: "route conflict",
+		},
+		{
+			name: "conflict — route without method overlaps with method-restricted existing",
+			route: newCustomHTTPRouteWithPaths("route-a", "default", "default", []string{"example.com"},
+				[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}},
+			),
+			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
+				*newCustomHTTPRouteWithPaths("route-b", "default", "default", []string{"example.com"},
+					[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix, Method: "GET"}},
+				),
+			},
+			wantErr:     true,
+			errContains: "route conflict",
+		},
+		{
+			name: "no conflict — same path+method, different required header",
+			route: newCustomHTTPRouteWithPaths("route-a", "default", "default", []string{"example.com"},
+				[]customrouterv1alpha1.PathMatch{{
+					Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix,
+					Headers: []customrouterv1alpha1.HeaderMatch{{Name: "X-Tenant", Value: "acme"}},
+				}},
+			),
+			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
+				*newCustomHTTPRouteWithPaths("route-b", "default", "default", []string{"example.com"},
+					[]customrouterv1alpha1.PathMatch{{
+						Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix,
+						Headers: []customrouterv1alpha1.HeaderMatch{{Name: "X-Tenant", Value: "widgets"}},
+					}},
+				),
+			},
+			wantErr: false,
+		},
+		{
+			name: "conflict — same path+method, same required header",
+			route: newCustomHTTPRouteWithPaths("route-a", "default", "default", []string{"example.com"},
+				[]customrouterv1alpha1.PathMatch{{
+					Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix,
+					Headers: []customrouterv1alpha1.HeaderMatch{{Name: "X-Tenant", Value: "acme"}},
+				}},
+			),
+			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
+				*newCustomHTTPRouteWithPaths("route-b", "default", "default", []string{"example.com"},
+					[]customrouterv1alpha1.PathMatch{{
+						Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix,
+						Headers: []customrouterv1alpha1.HeaderMatch{{Name: "X-Tenant", Value: "acme"}},
+					}},
+				),
+			},
+			wantErr:     true,
+			errContains: "route conflict",
+		},
+		{
 			name:  "self-update allowed",
 			route: newCustomHTTPRoute("route-a", "default", "default", []string{"example.com"}),
 			existingCR: []customrouterv1alpha1.CustomHTTPRoute{

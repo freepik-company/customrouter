@@ -243,6 +243,97 @@ spec:
         policy: Disabled
 
     # ====================
+    # REQUEST MIRROR (native Envoy, zero ExtProc overhead)
+    # ====================
+    # The primary request is served by backendRefs as usual. Envoy's native
+    # request_mirror_policies duplicates the request to the mirror backend;
+    # the mirrored response is discarded. Because mirroring runs inside Envoy,
+    # the ExtProc hot path (P50 around 80µs) is not affected.
+
+    # Mirror 100% of /experimental traffic to a shadow backend
+    - matches:
+        - path: /experimental
+          type: PathPrefix
+      actions:
+        - type: request-mirror
+          mirror:
+            backendRef:
+              name: shadow-api
+              namespace: backend
+              port: 8080
+      backendRefs:
+        - name: api
+          namespace: backend
+          port: 8080
+      pathPrefixes:
+        policy: Disabled
+
+    # Mirror 10% of /api/v2 traffic (canary-style sampling)
+    - matches:
+        - path: /api/v2
+          type: PathPrefix
+      actions:
+        - type: request-mirror
+          mirror:
+            backendRef:
+              name: api-v3-canary
+              namespace: backend
+              port: 8080
+            percent: 10
+      backendRefs:
+        - name: api-v2
+          namespace: backend
+          port: 8080
+      pathPrefixes:
+        policy: Disabled
+
+    # ====================
+    # CORS (native Envoy CORS filter, zero ExtProc overhead)
+    # ====================
+    # Preflight (OPTIONS) and response-header injection are handled by Envoy's
+    # envoy.filters.http.cors filter via typed_per_filter_config. The ExtProc
+    # does not see preflight requests and does not inject CORS response headers.
+
+    # Restrictive CORS for an authenticated API (allowCredentials forbids "*")
+    - matches:
+        - path: /api/private
+          type: PathPrefix
+      actions:
+        - type: cors
+          cors:
+            allowOrigins:
+              - https://app.example.com
+              - https://admin.example.com
+            allowMethods: [GET, POST, PUT, DELETE, OPTIONS]
+            allowHeaders: [authorization, content-type, x-request-id]
+            exposeHeaders: [x-request-id]
+            allowCredentials: true
+            maxAge: 3600
+      backendRefs:
+        - name: api
+          namespace: backend
+          port: 8080
+      pathPrefixes:
+        policy: Disabled
+
+    # Permissive CORS for a public read-only endpoint
+    - matches:
+        - path: /api/public
+          type: PathPrefix
+      actions:
+        - type: cors
+          cors:
+            allowOrigins: ["*"]
+            allowMethods: [GET, HEAD, OPTIONS]
+            maxAge: 600
+      backendRefs:
+        - name: api
+          namespace: backend
+          port: 8080
+      pathPrefixes:
+        policy: Disabled
+
+    # ====================
     # COMBINED ACTIONS
     # ====================
 

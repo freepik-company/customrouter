@@ -83,6 +83,8 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule, extern
 
 	backend := buildBackendString(rule.BackendRefs, externalNames)
 	actions := convertActions(rule.Actions)
+	mirrors := extractMirrors(rule.Actions)
+	cors := extractCORS(rule.Actions)
 
 	for _, match := range rule.Matches {
 		matchType := getMatchType(match.Type)
@@ -90,13 +92,20 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule, extern
 
 		shouldExpand := ShouldExpandMatchType(match.Type, expandTypes)
 
+		method := string(match.Method)
+		headers := convertHeaderMatches(match.Headers)
+		queryParams := convertQueryParamMatches(match.QueryParams)
+
 		if !shouldExpand {
 			routes = append(routes, Route{
-				Path:     match.Path,
-				Type:     matchType,
-				Backend:  backend,
-				Priority: priority,
-				Actions:  actions,
+				Path:        match.Path,
+				Type:        matchType,
+				Backend:     backend,
+				Priority:    priority,
+				Actions:     actions,
+				Method:      method,
+				Headers:     headers,
+				QueryParams: queryParams,
 			})
 			continue
 		}
@@ -104,11 +113,14 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule, extern
 		if match.Type == v1alpha1.MatchTypeRegex {
 			expandedPath := ExpandRegexWithPrefixes(match.Path, prefixes, policy)
 			routes = append(routes, Route{
-				Path:     expandedPath,
-				Type:     matchType,
-				Backend:  backend,
-				Priority: priority,
-				Actions:  actions,
+				Path:        expandedPath,
+				Type:        matchType,
+				Backend:     backend,
+				Priority:    priority,
+				Actions:     actions,
+				Method:      method,
+				Headers:     headers,
+				QueryParams: queryParams,
 			})
 			continue
 		}
@@ -117,11 +129,14 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule, extern
 		switch policy {
 		case v1alpha1.PathPrefixPolicyDisabled:
 			routes = append(routes, Route{
-				Path:     match.Path,
-				Type:     matchType,
-				Backend:  backend,
-				Priority: priority,
-				Actions:  actions,
+				Path:        match.Path,
+				Type:        matchType,
+				Backend:     backend,
+				Priority:    priority,
+				Actions:     actions,
+				Method:      method,
+				Headers:     headers,
+				QueryParams: queryParams,
 			})
 
 		case v1alpha1.PathPrefixPolicyRequired:
@@ -132,11 +147,14 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule, extern
 					prefixedActions = applyPreservePrefix(actions, prefix)
 				}
 				routes = append(routes, Route{
-					Path:     prefixPath(prefix, match.Path),
-					Type:     matchType,
-					Backend:  backend,
-					Priority: priority,
-					Actions:  prefixedActions,
+					Path:        prefixPath(prefix, match.Path),
+					Type:        matchType,
+					Backend:     backend,
+					Priority:    priority,
+					Actions:     prefixedActions,
+					Method:      method,
+					Headers:     headers,
+					QueryParams: queryParams,
 				})
 			}
 
@@ -148,20 +166,37 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule, extern
 					prefixedActions = applyPreservePrefix(actions, prefix)
 				}
 				routes = append(routes, Route{
-					Path:     prefixPath(prefix, match.Path),
-					Type:     matchType,
-					Backend:  backend,
-					Priority: priority,
-					Actions:  prefixedActions,
+					Path:        prefixPath(prefix, match.Path),
+					Type:        matchType,
+					Backend:     backend,
+					Priority:    priority,
+					Actions:     prefixedActions,
+					Method:      method,
+					Headers:     headers,
+					QueryParams: queryParams,
 				})
 			}
 			routes = append(routes, Route{
-				Path:     match.Path,
-				Type:     matchType,
-				Backend:  backend,
-				Priority: priority,
-				Actions:  actions,
+				Path:        match.Path,
+				Type:        matchType,
+				Backend:     backend,
+				Priority:    priority,
+				Actions:     actions,
+				Method:      method,
+				Headers:     headers,
+				QueryParams: queryParams,
 			})
+		}
+	}
+
+	if len(mirrors) > 0 {
+		for i := range routes {
+			routes[i].Mirrors = mirrors
+		}
+	}
+	if cors != nil {
+		for i := range routes {
+			routes[i].CORS = cors
 		}
 	}
 
@@ -177,7 +212,50 @@ func prefixPath(prefix, path string) string {
 	return "/" + prefix + path
 }
 
-// convertActions converts API actions to route actions
+// convertHeaderMatches converts API HeaderMatch entries to runtime RouteHeaderMatch.
+// The Type field is normalized to the runtime constants (Exact → "", Regex → "regex").
+func convertHeaderMatches(apiHeaders []v1alpha1.HeaderMatch) []RouteHeaderMatch {
+	if len(apiHeaders) == 0 {
+		return nil
+	}
+	out := make([]RouteHeaderMatch, len(apiHeaders))
+	for i, h := range apiHeaders {
+		out[i] = RouteHeaderMatch{
+			Name:  h.Name,
+			Value: h.Value,
+		}
+		if h.Type == v1alpha1.HeaderMatchTypeRegularExpression {
+			out[i].Type = HeaderMatchRegex
+		}
+	}
+	return out
+}
+
+// convertQueryParamMatches converts API QueryParamMatch entries to runtime
+// RouteQueryParamMatch. Type is normalized to the runtime constants
+// (Exact → "", RegularExpression → "regex").
+func convertQueryParamMatches(apiParams []v1alpha1.QueryParamMatch) []RouteQueryParamMatch {
+	if len(apiParams) == 0 {
+		return nil
+	}
+	out := make([]RouteQueryParamMatch, len(apiParams))
+	for i, q := range apiParams {
+		out[i] = RouteQueryParamMatch{
+			Name:  q.Name,
+			Value: q.Value,
+		}
+		if q.Type == v1alpha1.QueryParamMatchTypeRegularExpression {
+			out[i].Type = HeaderMatchRegex
+		}
+	}
+	return out
+}
+
+// convertActions converts API actions to route actions. Mirror and CORS
+// actions are intentionally excluded — they are dispatched natively by Envoy,
+// and carrying them through the ConfigMap would bloat the ExtProc hot path
+// without purpose. See extractMirrors and extractCORS for the controller-side
+// counterparts.
 func convertActions(apiActions []v1alpha1.Action) []RouteAction {
 	if len(apiActions) == 0 {
 		return nil
@@ -185,6 +263,9 @@ func convertActions(apiActions []v1alpha1.Action) []RouteAction {
 
 	actions := make([]RouteAction, 0, len(apiActions))
 	for _, a := range apiActions {
+		if a.Type == v1alpha1.ActionTypeRequestMirror || a.Type == v1alpha1.ActionTypeCORS {
+			continue
+		}
 		action := RouteAction{
 			Type: string(a.Type),
 		}
@@ -216,12 +297,13 @@ func convertActions(apiActions []v1alpha1.Action) []RouteAction {
 					action.preservePrefix = true
 				}
 			}
-		case v1alpha1.ActionTypeHeaderSet, v1alpha1.ActionTypeHeaderAdd:
+		case v1alpha1.ActionTypeHeaderSet, v1alpha1.ActionTypeHeaderAdd,
+			v1alpha1.ActionTypeResponseHeaderSet, v1alpha1.ActionTypeResponseHeaderAdd:
 			if a.Header != nil {
 				action.HeaderName = a.Header.Name
 				action.Value = a.Header.Value
 			}
-		case v1alpha1.ActionTypeHeaderRemove:
+		case v1alpha1.ActionTypeHeaderRemove, v1alpha1.ActionTypeResponseHeaderRemove:
 			action.HeaderName = a.HeaderName
 		}
 
@@ -229,6 +311,49 @@ func convertActions(apiActions []v1alpha1.Action) []RouteAction {
 	}
 
 	return actions
+}
+
+// extractMirrors pulls request-mirror actions out of the rule's action list
+// and returns their runtime representation. The BackendRef is preserved so
+// the controller can render the correct Istio cluster name when emitting
+// the mirror EnvoyFilter.
+func extractMirrors(apiActions []v1alpha1.Action) []RouteMirror {
+	mirrors := make([]RouteMirror, 0, len(apiActions))
+	for _, a := range apiActions {
+		if a.Type != v1alpha1.ActionTypeRequestMirror || a.Mirror == nil {
+			continue
+		}
+		mirrors = append(mirrors, RouteMirror{
+			BackendRef: a.Mirror.BackendRef,
+			Percent:    a.Mirror.Percent,
+		})
+	}
+	return mirrors
+}
+
+// extractCORS pulls the first cors action from the rule's action list and
+// converts it into the runtime form. Only the last cors action wins if
+// multiple are declared (Envoy's typed_per_filter_config is a single policy
+// per filter per route).
+func extractCORS(apiActions []v1alpha1.Action) *RouteCORS {
+	var last *v1alpha1.CORSConfig
+	for i := range apiActions {
+		if apiActions[i].Type != v1alpha1.ActionTypeCORS || apiActions[i].CORS == nil {
+			continue
+		}
+		last = apiActions[i].CORS
+	}
+	if last == nil {
+		return nil
+	}
+	return &RouteCORS{
+		AllowOrigins:     append([]string(nil), last.AllowOrigins...),
+		AllowMethods:     append([]string(nil), last.AllowMethods...),
+		AllowHeaders:     append([]string(nil), last.AllowHeaders...),
+		ExposeHeaders:    append([]string(nil), last.ExposeHeaders...),
+		AllowCredentials: last.AllowCredentials,
+		MaxAge:           last.MaxAge,
+	}
 }
 
 // actionsNeedPreservePrefix returns true if any action has preservePrefix set
