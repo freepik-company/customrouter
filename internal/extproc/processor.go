@@ -32,7 +32,7 @@ import (
 
 // RouteFinder is an interface for finding routes
 type RouteFinder interface {
-	FindRoute(host, path string) *routes.Route
+	FindRoute(host string, req routes.RequestMatch) *routes.Route
 }
 
 // Processor implements the Envoy external processor service

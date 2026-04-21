@@ -50,6 +50,78 @@ const (
 	MatchTypeRegex MatchType = "Regex"
 )
 
+// HTTPMethod defines an HTTP method to match against the request method.
+// +kubebuilder:validation:Enum=GET;HEAD;POST;PUT;DELETE;CONNECT;OPTIONS;TRACE;PATCH
+type HTTPMethod string
+
+// HeaderMatchType defines how a header value is compared.
+// +kubebuilder:validation:Enum=Exact;RegularExpression
+type HeaderMatchType string
+
+const (
+	// HeaderMatchTypeExact matches when the header value is exactly equal (case-sensitive).
+	HeaderMatchTypeExact HeaderMatchType = "Exact"
+
+	// HeaderMatchTypeRegularExpression matches when the header value matches the Go regexp.
+	HeaderMatchTypeRegularExpression HeaderMatchType = "RegularExpression"
+)
+
+// HeaderMatch defines a single HTTP header matching criterion.
+// Mirrors Gateway API HTTPHeaderMatch. Header names are compared
+// case-insensitively; values are compared according to Type.
+type HeaderMatch struct {
+	// name is the header name to match (case-insensitive).
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
+	Name string `json:"name"`
+
+	// value is the value (or pattern) to compare against the request header.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=4096
+	Value string `json:"value"`
+
+	// type is the comparison mode: Exact (default) or RegularExpression.
+	// +optional
+	// +kubebuilder:default=Exact
+	Type HeaderMatchType `json:"type,omitempty"`
+}
+
+// QueryParamMatchType defines how a query parameter value is compared.
+// +kubebuilder:validation:Enum=Exact;RegularExpression
+type QueryParamMatchType string
+
+const (
+	// QueryParamMatchTypeExact matches when the query value is exactly equal.
+	QueryParamMatchTypeExact QueryParamMatchType = "Exact"
+
+	// QueryParamMatchTypeRegularExpression matches when the query value matches the Go regexp.
+	QueryParamMatchTypeRegularExpression QueryParamMatchType = "RegularExpression"
+)
+
+// QueryParamMatch defines a single HTTP query parameter matching criterion.
+// Mirrors Gateway API HTTPQueryParamMatch. Parameter names are compared
+// case-sensitively per RFC 3986; values are compared according to Type.
+type QueryParamMatch struct {
+	// name is the query parameter name to match (case-sensitive).
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
+	Name string `json:"name"`
+
+	// value is the value (or pattern) to compare against the request query parameter.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=4096
+	Value string `json:"value"`
+
+	// type is the comparison mode: Exact (default) or RegularExpression.
+	// +optional
+	// +kubebuilder:default=Exact
+	Type QueryParamMatchType `json:"type,omitempty"`
+}
+
 // ActionType defines the type of action to perform
 // +kubebuilder:validation:Enum=redirect;rewrite;header-set;header-add;header-remove
 type ActionType string
@@ -111,7 +183,10 @@ type PathPrefixes struct {
 	ExpandMatchTypes []MatchType `json:"expandMatchTypes,omitempty"`
 }
 
-// PathMatch defines a path matching rule
+// PathMatch defines a path matching rule. Despite the name, it can also restrict
+// the match to a specific HTTP method (see Method). Additional request-matching
+// criteria (headers, query parameters) are applied via sibling fields on the
+// containing Rule and are AND-combined with this match at request-routing time.
 type PathMatch struct {
 	// path is the value to match against the request path
 	// +required
@@ -125,6 +200,30 @@ type PathMatch struct {
 	// +optional
 	// +kubebuilder:default=PathPrefix
 	Type MatchType `json:"type,omitempty"`
+
+	// method restricts this match to requests using the given HTTP method.
+	// When empty (default), requests with any method are matched.
+	// Mirrors Gateway API HTTPRouteMatch.method.
+	// +optional
+	Method HTTPMethod `json:"method,omitempty"`
+
+	// headers is the list of HTTP header matching criteria. All listed headers
+	// must match for this rule to apply (AND-combined). When empty, any headers
+	// are accepted. Mirrors Gateway API HTTPRouteMatch.headers.
+	// +optional
+	// +kubebuilder:validation:MaxItems=64
+	// +listType=map
+	// +listMapKey=name
+	Headers []HeaderMatch `json:"headers,omitempty"`
+
+	// queryParams is the list of query parameter matching criteria. All listed
+	// parameters must match for this rule to apply (AND-combined). When empty,
+	// any query parameters are accepted. Mirrors Gateway API HTTPRouteMatch.queryParams.
+	// +optional
+	// +kubebuilder:validation:MaxItems=64
+	// +listType=map
+	// +listMapKey=name
+	QueryParams []QueryParamMatch `json:"queryParams,omitempty"`
 
 	// priority defines the order in which routes are evaluated
 	// Higher values are evaluated first. Default is 1000.

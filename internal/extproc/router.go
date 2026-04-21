@@ -18,6 +18,7 @@ package extproc
 
 import (
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -46,6 +47,10 @@ func (p *Processor) processRequestHeaders(headers *extprocv3.HttpHeaders) (*extp
 		startTime: time.Now(),
 	}
 	vars := &requestVars{}
+	// Headers lowercased for case-insensitive matching by RouteHeaderMatch.
+	requestHeaders := map[string]string{}
+	// Query params are case-sensitive (RFC 3986).
+	requestQueryParams := map[string]string{}
 
 	// Debug: log complete headers structure
 	p.logger.Debug("processRequestHeaders called",
@@ -81,6 +86,11 @@ func (p *Processor) processRequestHeaders(headers *extprocv3.HttpHeaders) (*extp
 				value = string(h.RawValue)
 			}
 
+			// Store non-pseudo-headers for match evaluation (case-insensitive).
+			if len(h.Key) > 0 && h.Key[0] != ':' {
+				requestHeaders[strings.ToLower(h.Key)] = value
+			}
+
 			switch h.Key {
 			case ":authority":
 				reqCtx.authority = value
@@ -89,6 +99,7 @@ func (p *Processor) processRequestHeaders(headers *extprocv3.HttpHeaders) (*extp
 				reqCtx.path = stripQueryString(value)
 				vars.path = value
 				vars.pathSegments = splitPath(value)
+				requestQueryParams = extractQueryParams(value)
 			case ":method":
 				reqCtx.method = value
 				vars.method = value
@@ -121,7 +132,12 @@ func (p *Processor) processRequestHeaders(headers *extprocv3.HttpHeaders) (*extp
 	)
 
 	// Find matching route
-	route := p.routeFinder.FindRoute(reqCtx.authority, reqCtx.path)
+	route := p.routeFinder.FindRoute(reqCtx.authority, routes.RequestMatch{
+		Path:        reqCtx.path,
+		Method:      reqCtx.method,
+		Headers:     requestHeaders,
+		QueryParams: requestQueryParams,
+	})
 	if route == nil {
 		p.logger.Debug("no matching route found",
 			zap.String("host", reqCtx.authority),
@@ -455,6 +471,32 @@ func stripQueryString(path string) string {
 		return path[:idx]
 	}
 	return path
+}
+
+// extractQueryParams returns a flat map of the first value observed for each
+// query parameter name in the given ":path". Names are case-sensitive per
+// RFC 3986. Returns an empty map when no query string is present.
+// Invalid query strings are parsed on a best-effort basis.
+func extractQueryParams(rawPath string) map[string]string {
+	out := map[string]string{}
+	idx := strings.Index(rawPath, "?")
+	if idx == -1 || idx == len(rawPath)-1 {
+		return out
+	}
+	query := rawPath[idx+1:]
+	if hash := strings.Index(query, "#"); hash != -1 {
+		query = query[:hash]
+	}
+	values, err := url.ParseQuery(query)
+	if err != nil {
+		return out
+	}
+	for k, v := range values {
+		if len(v) > 0 {
+			out[k] = v[0]
+		}
+	}
+	return out
 }
 
 // splitPath splits a path into segments

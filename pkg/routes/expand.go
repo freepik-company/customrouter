@@ -90,13 +90,20 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule, extern
 
 		shouldExpand := ShouldExpandMatchType(match.Type, expandTypes)
 
+		method := string(match.Method)
+		headers := convertHeaderMatches(match.Headers)
+		queryParams := convertQueryParamMatches(match.QueryParams)
+
 		if !shouldExpand {
 			routes = append(routes, Route{
-				Path:     match.Path,
-				Type:     matchType,
-				Backend:  backend,
-				Priority: priority,
-				Actions:  actions,
+				Path:        match.Path,
+				Type:        matchType,
+				Backend:     backend,
+				Priority:    priority,
+				Actions:     actions,
+				Method:      method,
+				Headers:     headers,
+				QueryParams: queryParams,
 			})
 			continue
 		}
@@ -104,11 +111,14 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule, extern
 		if match.Type == v1alpha1.MatchTypeRegex {
 			expandedPath := ExpandRegexWithPrefixes(match.Path, prefixes, policy)
 			routes = append(routes, Route{
-				Path:     expandedPath,
-				Type:     matchType,
-				Backend:  backend,
-				Priority: priority,
-				Actions:  actions,
+				Path:        expandedPath,
+				Type:        matchType,
+				Backend:     backend,
+				Priority:    priority,
+				Actions:     actions,
+				Method:      method,
+				Headers:     headers,
+				QueryParams: queryParams,
 			})
 			continue
 		}
@@ -117,11 +127,14 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule, extern
 		switch policy {
 		case v1alpha1.PathPrefixPolicyDisabled:
 			routes = append(routes, Route{
-				Path:     match.Path,
-				Type:     matchType,
-				Backend:  backend,
-				Priority: priority,
-				Actions:  actions,
+				Path:        match.Path,
+				Type:        matchType,
+				Backend:     backend,
+				Priority:    priority,
+				Actions:     actions,
+				Method:      method,
+				Headers:     headers,
+				QueryParams: queryParams,
 			})
 
 		case v1alpha1.PathPrefixPolicyRequired:
@@ -132,11 +145,14 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule, extern
 					prefixedActions = applyPreservePrefix(actions, prefix)
 				}
 				routes = append(routes, Route{
-					Path:     prefixPath(prefix, match.Path),
-					Type:     matchType,
-					Backend:  backend,
-					Priority: priority,
-					Actions:  prefixedActions,
+					Path:        prefixPath(prefix, match.Path),
+					Type:        matchType,
+					Backend:     backend,
+					Priority:    priority,
+					Actions:     prefixedActions,
+					Method:      method,
+					Headers:     headers,
+					QueryParams: queryParams,
 				})
 			}
 
@@ -148,19 +164,25 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule, extern
 					prefixedActions = applyPreservePrefix(actions, prefix)
 				}
 				routes = append(routes, Route{
-					Path:     prefixPath(prefix, match.Path),
-					Type:     matchType,
-					Backend:  backend,
-					Priority: priority,
-					Actions:  prefixedActions,
+					Path:        prefixPath(prefix, match.Path),
+					Type:        matchType,
+					Backend:     backend,
+					Priority:    priority,
+					Actions:     prefixedActions,
+					Method:      method,
+					Headers:     headers,
+					QueryParams: queryParams,
 				})
 			}
 			routes = append(routes, Route{
-				Path:     match.Path,
-				Type:     matchType,
-				Backend:  backend,
-				Priority: priority,
-				Actions:  actions,
+				Path:        match.Path,
+				Type:        matchType,
+				Backend:     backend,
+				Priority:    priority,
+				Actions:     actions,
+				Method:      method,
+				Headers:     headers,
+				QueryParams: queryParams,
 			})
 		}
 	}
@@ -175,6 +197,45 @@ func prefixPath(prefix, path string) string {
 		return "/" + prefix
 	}
 	return "/" + prefix + path
+}
+
+// convertHeaderMatches converts API HeaderMatch entries to runtime RouteHeaderMatch.
+// The Type field is normalized to the runtime constants (Exact → "", Regex → "regex").
+func convertHeaderMatches(apiHeaders []v1alpha1.HeaderMatch) []RouteHeaderMatch {
+	if len(apiHeaders) == 0 {
+		return nil
+	}
+	out := make([]RouteHeaderMatch, len(apiHeaders))
+	for i, h := range apiHeaders {
+		out[i] = RouteHeaderMatch{
+			Name:  h.Name,
+			Value: h.Value,
+		}
+		if h.Type == v1alpha1.HeaderMatchTypeRegularExpression {
+			out[i].Type = HeaderMatchRegex
+		}
+	}
+	return out
+}
+
+// convertQueryParamMatches converts API QueryParamMatch entries to runtime
+// RouteQueryParamMatch. Type is normalized to the runtime constants
+// (Exact → "", RegularExpression → "regex").
+func convertQueryParamMatches(apiParams []v1alpha1.QueryParamMatch) []RouteQueryParamMatch {
+	if len(apiParams) == 0 {
+		return nil
+	}
+	out := make([]RouteQueryParamMatch, len(apiParams))
+	for i, q := range apiParams {
+		out[i] = RouteQueryParamMatch{
+			Name:  q.Name,
+			Value: q.Value,
+		}
+		if q.Type == v1alpha1.QueryParamMatchTypeRegularExpression {
+			out[i].Type = HeaderMatchRegex
+		}
+	}
+	return out
 }
 
 // convertActions converts API actions to route actions

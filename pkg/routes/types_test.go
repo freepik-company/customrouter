@@ -168,13 +168,197 @@ func TestRouteMatch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tt.route.Match(tt.path)
+			got := tt.route.Match(RequestMatch{Path: tt.path})
 			if got != tt.wantMatch {
 				t.Errorf(
 					"Route{Path: %q, Type: %q}.Match(%q) = %v, want %v",
 					tt.route.Path, tt.route.Type, tt.path,
 					got, tt.wantMatch,
 				)
+			}
+		})
+	}
+}
+
+func TestRouteMatchQueryParams(t *testing.T) {
+	tests := []struct {
+		name      string
+		route     Route
+		req       RequestMatch
+		wantMatch bool
+	}{
+		{
+			name:      "no query constraint matches any request",
+			route:     Route{Path: "/api", Type: RouteTypePrefix},
+			req:       RequestMatch{Path: "/api", QueryParams: map[string]string{"debug": "1"}},
+			wantMatch: true,
+		},
+		{
+			name: "exact query match succeeds",
+			route: Route{Path: "/api", Type: RouteTypePrefix, QueryParams: []RouteQueryParamMatch{
+				{Name: "version", Value: "2"},
+			}},
+			req:       RequestMatch{Path: "/api", QueryParams: map[string]string{"version": "2"}},
+			wantMatch: true,
+		},
+		{
+			name: "exact query value mismatch",
+			route: Route{Path: "/api", Type: RouteTypePrefix, QueryParams: []RouteQueryParamMatch{
+				{Name: "version", Value: "2"},
+			}},
+			req:       RequestMatch{Path: "/api", QueryParams: map[string]string{"version": "1"}},
+			wantMatch: false,
+		},
+		{
+			name: "query name is case-sensitive (miss)",
+			route: Route{Path: "/api", Type: RouteTypePrefix, QueryParams: []RouteQueryParamMatch{
+				{Name: "Version", Value: "2"},
+			}},
+			req:       RequestMatch{Path: "/api", QueryParams: map[string]string{"version": "2"}},
+			wantMatch: false,
+		},
+		{
+			name: "regex query match",
+			route: Route{Path: "/api", Type: RouteTypePrefix, QueryParams: []RouteQueryParamMatch{
+				{Name: "token", Value: "^[a-f0-9]+$", Type: HeaderMatchRegex},
+			}},
+			req:       RequestMatch{Path: "/api", QueryParams: map[string]string{"token": "deadbeef"}},
+			wantMatch: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.route.Match(tt.req)
+			if got != tt.wantMatch {
+				t.Errorf("Match(%+v) on Route{QueryParams:%+v} = %v, want %v",
+					tt.req, tt.route.QueryParams, got, tt.wantMatch)
+			}
+		})
+	}
+}
+
+func TestRouteMatchHeaders(t *testing.T) {
+	tests := []struct {
+		name      string
+		route     Route
+		req       RequestMatch
+		wantMatch bool
+	}{
+		{
+			name:      "no header constraint matches any request",
+			route:     Route{Path: "/api", Type: RouteTypePrefix},
+			req:       RequestMatch{Path: "/api", Headers: map[string]string{"x-tenant": "acme"}},
+			wantMatch: true,
+		},
+		{
+			name: "exact header match succeeds",
+			route: Route{Path: "/api", Type: RouteTypePrefix, Headers: []RouteHeaderMatch{
+				{Name: "X-Tenant", Value: "acme"},
+			}},
+			req:       RequestMatch{Path: "/api", Headers: map[string]string{"x-tenant": "acme"}},
+			wantMatch: true,
+		},
+		{
+			name: "exact header value mismatch",
+			route: Route{Path: "/api", Type: RouteTypePrefix, Headers: []RouteHeaderMatch{
+				{Name: "X-Tenant", Value: "acme"},
+			}},
+			req:       RequestMatch{Path: "/api", Headers: map[string]string{"x-tenant": "widgets"}},
+			wantMatch: false,
+		},
+		{
+			name: "missing required header does not match",
+			route: Route{Path: "/api", Type: RouteTypePrefix, Headers: []RouteHeaderMatch{
+				{Name: "X-Tenant", Value: "acme"},
+			}},
+			req:       RequestMatch{Path: "/api", Headers: map[string]string{}},
+			wantMatch: false,
+		},
+		{
+			name: "multiple headers AND'd — all match",
+			route: Route{Path: "/api", Type: RouteTypePrefix, Headers: []RouteHeaderMatch{
+				{Name: "X-Tenant", Value: "acme"},
+				{Name: "X-Env", Value: "prod"},
+			}},
+			req:       RequestMatch{Path: "/api", Headers: map[string]string{"x-tenant": "acme", "x-env": "prod"}},
+			wantMatch: true,
+		},
+		{
+			name: "multiple headers AND'd — one missing",
+			route: Route{Path: "/api", Type: RouteTypePrefix, Headers: []RouteHeaderMatch{
+				{Name: "X-Tenant", Value: "acme"},
+				{Name: "X-Env", Value: "prod"},
+			}},
+			req:       RequestMatch{Path: "/api", Headers: map[string]string{"x-tenant": "acme"}},
+			wantMatch: false,
+		},
+		{
+			name: "regex header match",
+			route: Route{Path: "/api", Type: RouteTypePrefix, Headers: []RouteHeaderMatch{
+				{Name: "User-Agent", Value: "^Mozilla/5\\.", Type: HeaderMatchRegex},
+			}},
+			req:       RequestMatch{Path: "/api", Headers: map[string]string{"user-agent": "Mozilla/5.0 (X11; Linux)"}},
+			wantMatch: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.route.Match(tt.req)
+			if got != tt.wantMatch {
+				t.Errorf("Match(%+v) on Route{Headers:%+v} = %v, want %v",
+					tt.req, tt.route.Headers, got, tt.wantMatch)
+			}
+		})
+	}
+}
+
+func TestRouteMatchMethod(t *testing.T) {
+	tests := []struct {
+		name      string
+		route     Route
+		req       RequestMatch
+		wantMatch bool
+	}{
+		{
+			name:      "empty route method matches any request method",
+			route:     Route{Path: "/api", Type: RouteTypePrefix},
+			req:       RequestMatch{Path: "/api", Method: "POST"},
+			wantMatch: true,
+		},
+		{
+			name:      "method matches case-insensitively",
+			route:     Route{Path: "/api", Type: RouteTypePrefix, Method: "GET"},
+			req:       RequestMatch{Path: "/api", Method: "get"},
+			wantMatch: true,
+		},
+		{
+			name:      "different method does not match",
+			route:     Route{Path: "/api", Type: RouteTypePrefix, Method: "GET"},
+			req:       RequestMatch{Path: "/api", Method: "POST"},
+			wantMatch: false,
+		},
+		{
+			name:      "method match but path does not",
+			route:     Route{Path: "/api", Type: RouteTypeExact, Method: "GET"},
+			req:       RequestMatch{Path: "/other", Method: "GET"},
+			wantMatch: false,
+		},
+		{
+			name:      "method restriction with empty request method fails",
+			route:     Route{Path: "/api", Type: RouteTypePrefix, Method: "GET"},
+			req:       RequestMatch{Path: "/api"},
+			wantMatch: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.route.Match(tt.req)
+			if got != tt.wantMatch {
+				t.Errorf("Match(%+v) on Route{Method:%q} = %v, want %v",
+					tt.req, tt.route.Method, got, tt.wantMatch)
 			}
 		})
 	}

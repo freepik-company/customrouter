@@ -211,10 +211,10 @@ type seenEntry struct {
 // extractCustomRouteMatches returns all unique route matches from a CustomHTTPRoute.
 // It expands paths according to pathPrefixes policy (Required/Optional/Disabled)
 // so that conflict detection compares the actual expanded paths, not raw templates.
-// CustomHTTPRoute does not support Method, header, or query parameter matching,
-// so those fields are always empty (which means "matches all" during comparison).
-// When two rules in the same CRD produce the same expanded path but differ in
-// AllowOverlap, the conservative value (false) wins.
+// CustomHTTPRoute does not yet support header or query parameter matching, so
+// those fields are always empty (which means "matches all" during comparison).
+// When two rules in the same CRD produce the same expanded path+method but
+// differ in AllowOverlap, the conservative value (false) wins.
 func extractCustomRouteMatches(route *customrouterv1alpha1.CustomHTTPRoute) []routeMatch {
 	seen := make(map[string]seenEntry)
 	var matches []routeMatch
@@ -230,10 +230,15 @@ func extractCustomRouteMatches(route *customrouterv1alpha1.CustomHTTPRoute) []ro
 		expandTypes := routes.GetEffectiveExpandMatchTypes(route.Spec.PathPrefixes, rule)
 
 		for _, m := range rule.Matches {
+			method := string(m.Method)
+			headerMatches := convertCustomHeaderMatches(m.Headers)
+			queryMatches := convertCustomQueryParamMatches(m.QueryParams)
+			headerKey := headerMatchesKey(headerMatches)
+			queryKey := queryParamMatchesKey(queryMatches)
 			expandedPaths := expandMatchPath(m, prefixes, policy, expandTypes)
 			for _, ep := range expandedPaths {
 				path := normalizePath(ep.path)
-				key := ep.pathType + ":" + path
+				key := ep.pathType + ":" + path + "|" + method + "|" + headerKey + "|" + queryKey
 				if entry, ok := seen[key]; ok {
 					// Conservative: if new rule disables allowOverlap, override
 					if entry.allowOverlap && !rule.AllowOverlap {
@@ -246,12 +251,81 @@ func extractCustomRouteMatches(route *customrouterv1alpha1.CustomHTTPRoute) []ro
 				matches = append(matches, routeMatch{
 					PathType:     ep.pathType,
 					Path:         path,
+					Method:       method,
+					Headers:      headerMatches,
+					QueryParams:  queryMatches,
 					AllowOverlap: rule.AllowOverlap,
 				})
 			}
 		}
 	}
 	return matches
+}
+
+// convertCustomHeaderMatches converts CustomHTTPRoute HeaderMatches to the
+// internal headerMatch form used by overlap detection. Only Exact matches are
+// considered narrowing for conflict purposes; regex matches are treated as
+// "matches all" to keep the detector conservative (i.e. they will always be
+// reported as overlapping with any concrete Exact match on the same header).
+func convertCustomHeaderMatches(in []customrouterv1alpha1.HeaderMatch) []headerMatch {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]headerMatch, 0, len(in))
+	for _, h := range in {
+		if h.Type == customrouterv1alpha1.HeaderMatchTypeRegularExpression {
+			// Conservative: regex value cannot be compared for overlap, skip
+			// so the dimension degrades to "match any" in the comparator.
+			continue
+		}
+		out = append(out, headerMatch{Name: h.Name, Value: h.Value})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
+	return out
+}
+
+// headerMatchesKey produces a stable dedup key for a set of header matches.
+func headerMatchesKey(hs []headerMatch) string {
+	if len(hs) == 0 {
+		return ""
+	}
+	parts := make([]string, len(hs))
+	for i, h := range hs {
+		parts[i] = strings.ToLower(h.Name) + "=" + h.Value
+	}
+	return strings.Join(parts, ",")
+}
+
+// convertCustomQueryParamMatches is the query-param analogue of
+// convertCustomHeaderMatches. Regex-typed params are skipped for the same
+// conservatism reason.
+func convertCustomQueryParamMatches(in []customrouterv1alpha1.QueryParamMatch) []queryParamMatch {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]queryParamMatch, 0, len(in))
+	for _, q := range in {
+		if q.Type == customrouterv1alpha1.QueryParamMatchTypeRegularExpression {
+			continue
+		}
+		out = append(out, queryParamMatch{Name: q.Name, Value: q.Value})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// queryParamMatchesKey produces a stable dedup key for a set of query param matches.
+func queryParamMatchesKey(qs []queryParamMatch) string {
+	if len(qs) == 0 {
+		return ""
+	}
+	parts := make([]string, len(qs))
+	for i, q := range qs {
+		parts[i] = q.Name + "=" + q.Value
+	}
+	return strings.Join(parts, ",")
 }
 
 type expandedPath struct {

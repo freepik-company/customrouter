@@ -212,6 +212,36 @@ func TestStripQueryString(t *testing.T) {
 	}
 }
 
+func TestExtractQueryParams(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  map[string]string
+	}{
+		{"no query", "/api", map[string]string{}},
+		{"empty query", "/api?", map[string]string{}},
+		{"single param", "/api?version=2", map[string]string{"version": "2"}},
+		{"multiple params", "/api?a=1&b=two", map[string]string{"a": "1", "b": "two"}},
+		{"url-encoded value", "/api?q=hello%20world", map[string]string{"q": "hello world"}},
+		{"repeated param keeps first", "/api?x=1&x=2", map[string]string{"x": "1"}},
+		{"fragment stripped before parsing", "/api?q=1#frag", map[string]string{"q": "1"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractQueryParams(tt.input)
+			if len(got) != len(tt.want) {
+				t.Fatalf("extractQueryParams(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+			for k, v := range tt.want {
+				if got[k] != v {
+					t.Errorf("extractQueryParams(%q)[%q] = %q, want %q", tt.input, k, got[k], v)
+				}
+			}
+		})
+	}
+}
+
 func TestBuildForwardResponse_OriginalPathHeader(t *testing.T) {
 	logger := zap.NewNop()
 	p := NewProcessor(nil, logger, false)
