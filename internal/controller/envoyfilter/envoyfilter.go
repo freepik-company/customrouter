@@ -32,10 +32,17 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/freepik-company/customrouter/api/v1alpha1"
 	"github.com/freepik-company/customrouter/internal/controller"
 )
+
+// DefaultCatchAllPorts are the listener ports against which HTTP_ROUTE INSERT_FIRST
+// patches are emitted when a hostname is already covered by an HTTPRoute. Patches
+// targeting a non-existing (hostname, port) virtual host are silently ignored by
+// Istio, so emitting both is safe.
+var DefaultCatchAllPorts = []int{80, 443}
 
 const (
 	// EnvoyFilter name suffixes
@@ -209,10 +216,39 @@ func MergeCatchAllEntries(routeEntries []CatchAllEntry, epa *v1alpha1.ExternalPr
 	return sortedEntries(merged)
 }
 
+// CollectHostnamesWithHTTPRoute returns the subset of the given hostnames that are
+// also declared in any existing HTTPRoute. This drives per-hostname selection between
+// "ADD a virtual host" (no HTTPRoute exists) and "inject into the existing virtual host"
+// (HTTPRoute exists and already owns the domain).
+func CollectHostnamesWithHTTPRoute(httpRouteList *gatewayv1.HTTPRouteList, hostnames []string) map[string]bool {
+	out := map[string]bool{}
+	if httpRouteList == nil || len(hostnames) == 0 {
+		return out
+	}
+	target := make(map[string]struct{}, len(hostnames))
+	for _, h := range hostnames {
+		target[h] = struct{}{}
+	}
+	for i := range httpRouteList.Items {
+		hr := &httpRouteList.Items[i]
+		for _, h := range hr.Spec.Hostnames {
+			if _, ok := target[string(h)]; ok {
+				out[string(h)] = true
+			}
+		}
+	}
+	return out
+}
+
 // BuildCatchAllEnvoyFilter builds the catch-all EnvoyFilter unstructured object.
+// For each hostname the emitted patch depends on whether an HTTPRoute already owns
+// the domain (see hostnamesWithHTTPRoute): if yes, HTTP_ROUTE INSERT_FIRST patches
+// inject the fallback into the existing virtual host (avoids Envoy's "Duplicate entry
+// of domain" error); otherwise the legacy VIRTUAL_HOST ADD creates a new virtual host.
 func BuildCatchAllEnvoyFilter(
 	epa *v1alpha1.ExternalProcessorAttachment,
 	entries []CatchAllEntry,
+	hostnamesWithHTTPRoute map[string]bool,
 ) (*unstructured.Unstructured, error) {
 	filterName := epa.Name + CatchAllFilterSuffix
 
@@ -227,7 +263,9 @@ func BuildCatchAllEnvoyFilter(
 
 	configPatches := make([]interface{}, 0, len(entries))
 	for _, entry := range entries {
-		configPatches = append(configPatches, buildCatchAllPatch(entry))
+		for _, patch := range buildCatchAllPatches(entry, hostnamesWithHTTPRoute[entry.Hostname]) {
+			configPatches = append(configPatches, patch)
+		}
 	}
 
 	spec := map[string]interface{}{
@@ -244,8 +282,25 @@ func BuildCatchAllEnvoyFilter(
 	return ef, nil
 }
 
-// buildCatchAllPatch builds a single VIRTUAL_HOST config patch for a catch-all entry.
-func buildCatchAllPatch(entry CatchAllEntry) map[string]interface{} {
+// buildCatchAllPatches returns the config patches for one hostname. When no HTTPRoute
+// owns the domain, one VIRTUAL_HOST ADD is returned. When an HTTPRoute already owns
+// the domain, one HTTP_ROUTE INSERT_FIRST per port in DefaultCatchAllPorts is returned
+// — Envoy would reject a second virtual host with the same domain, so the fallback is
+// injected into the existing one instead.
+func buildCatchAllPatches(entry CatchAllEntry, hostnameHasHTTPRoute bool) []map[string]interface{} {
+	if !hostnameHasHTTPRoute {
+		return []map[string]interface{}{buildCatchAllVirtualHostPatch(entry)}
+	}
+	patches := make([]map[string]interface{}, 0, len(DefaultCatchAllPorts))
+	for _, port := range DefaultCatchAllPorts {
+		patches = append(patches, buildCatchAllHTTPRoutePatch(entry, port))
+	}
+	return patches
+}
+
+// buildCatchAllVirtualHostPatch builds the legacy VIRTUAL_HOST ADD patch, creating a
+// new virtual host with both the header-gated dynamic route and the default fallback.
+func buildCatchAllVirtualHostPatch(entry CatchAllEntry) map[string]interface{} {
 	clusterName := BuildClusterName(entry.BackendRef)
 
 	return map[string]interface{}{
@@ -290,6 +345,39 @@ func buildCatchAllPatch(entry CatchAllEntry) map[string]interface{} {
 							"timeout": "30s",
 						},
 					},
+				},
+			},
+		},
+	}
+}
+
+// buildCatchAllHTTPRoutePatch injects only the default fallback route at the top of
+// the virtual host "<hostname>:<port>" (owned by the HTTPRoute). The header-gated
+// dynamic route is already injected into every virtual host by the <epa>-routes
+// EnvoyFilter, so duplicating it here would be redundant.
+func buildCatchAllHTTPRoutePatch(entry CatchAllEntry, port int) map[string]interface{} {
+	clusterName := BuildClusterName(entry.BackendRef)
+
+	return map[string]interface{}{
+		"applyTo": "HTTP_ROUTE",
+		"match": map[string]interface{}{
+			"context": "GATEWAY",
+			"routeConfiguration": map[string]interface{}{
+				"vhost": map[string]interface{}{
+					"name": fmt.Sprintf("%s:%d", entry.Hostname, port),
+				},
+			},
+		},
+		"patch": map[string]interface{}{
+			"operation": "INSERT_FIRST",
+			"value": map[string]interface{}{
+				"name": fmt.Sprintf("customrouter-catchall-%s", entry.Hostname),
+				"match": map[string]interface{}{
+					"prefix": "/",
+				},
+				"route": map[string]interface{}{
+					"cluster": clusterName,
+					"timeout": "30s",
 				},
 			},
 		},

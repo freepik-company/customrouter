@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/freepik-company/customrouter/api/v1alpha1"
 	ef "github.com/freepik-company/customrouter/internal/controller/envoyfilter"
@@ -50,7 +51,17 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileEnvoyFilters(
 	mergedEntries := r.collectMergedCatchAllEntries(ctx, attachment)
 
 	if len(mergedEntries) > 0 {
-		envoyFilter, err := ef.BuildCatchAllEnvoyFilter(attachment, mergedEntries)
+		hostnames := make([]string, 0, len(mergedEntries))
+		for _, e := range mergedEntries {
+			hostnames = append(hostnames, e.Hostname)
+		}
+		httpRouteList := &gatewayv1.HTTPRouteList{}
+		if err := r.List(ctx, httpRouteList); err != nil {
+			return fmt.Errorf("failed to list HTTPRoutes: %w", err)
+		}
+		hostnamesWithHTTPRoute := ef.CollectHostnamesWithHTTPRoute(httpRouteList, hostnames)
+
+		envoyFilter, err := ef.BuildCatchAllEnvoyFilter(attachment, mergedEntries, hostnamesWithHTTPRoute)
 		if err != nil {
 			return fmt.Errorf("failed to build catch-all EnvoyFilter: %w", err)
 		}

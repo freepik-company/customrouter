@@ -20,10 +20,14 @@ import (
 	"context"
 
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	crv1alpha1 "github.com/freepik-company/customrouter/api/v1alpha1"
 	"github.com/freepik-company/customrouter/internal/controller"
@@ -40,6 +44,7 @@ type ExternalProcessorAttachmentReconciler struct {
 // +kubebuilder:rbac:groups=customrouter.freepik.com,resources=externalprocessorattachments/finalizers,verbs=update
 // +kubebuilder:rbac:groups=customrouter.freepik.com,resources=customhttproutes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -118,6 +123,29 @@ func (r *ExternalProcessorAttachmentReconciler) Reconcile(ctx context.Context, r
 func (r *ExternalProcessorAttachmentReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&crv1alpha1.ExternalProcessorAttachment{}).
+		Watches(&gatewayv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(r.findEPAsForHTTPRoute)).
 		Named("externalprocessorattachment").
 		Complete(r)
+}
+
+// findEPAsForHTTPRoute enqueues every EPA when an HTTPRoute changes. HTTPRoute
+// create/update/delete can flip whether the EPA's catchall EnvoyFilter must ADD a
+// new virtual host or inject into an existing one. The blast radius is contained by
+// the fact that there are typically only a handful of EPAs per cluster.
+func (r *ExternalProcessorAttachmentReconciler) findEPAsForHTTPRoute(ctx context.Context, _ client.Object) []reconcile.Request {
+	epaList := &crv1alpha1.ExternalProcessorAttachmentList{}
+	if err := r.List(ctx, epaList); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(epaList.Items))
+	for i := range epaList.Items {
+		epa := &epaList.Items[i]
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Name:      epa.Name,
+				Namespace: epa.Namespace,
+			},
+		})
+	}
+	return requests
 }
