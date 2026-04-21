@@ -156,6 +156,63 @@ spec:
                         description: Action defines an action to perform on a matched
                           request
                         properties:
+                          cors:
+                            description: cors specifies the CORS policy (required
+                              when type is "cors")
+                            properties:
+                              allowCredentials:
+                                description: |-
+                                  allowCredentials indicates whether the response to the request can be
+                                  exposed when credentials (cookies, TLS client certs, auth headers) are
+                                  present. When true, allowOrigins must not contain "*".
+                                type: boolean
+                              allowHeaders:
+                                description: |-
+                                  allowHeaders is the list of request headers allowed in cross-origin
+                                  requests. A single "*" entry allows any header.
+                                items:
+                                  type: string
+                                maxItems: 64
+                                type: array
+                              allowMethods:
+                                description: |-
+                                  allowMethods is the list of HTTP methods allowed in cross-origin requests.
+                                  A single "*" entry allows any method. Mirrors Gateway API's
+                                  HTTPCORSFilter.allowMethods.
+                                items:
+                                  type: string
+                                maxItems: 16
+                                type: array
+                              allowOrigins:
+                                description: |-
+                                  allowOrigins is the list of origins allowed to make cross-origin requests.
+                                  Each entry must be either "*" or an absolute URI with scheme and host
+                                  (e.g. "https://example.com"). A single "*" entry enables the permissive
+                                  wildcard; it is mutually exclusive with allowCredentials=true (the
+                                  browser rejects that combination). Matching is exact, case-sensitive.
+                                items:
+                                  type: string
+                                maxItems: 64
+                                minItems: 1
+                                type: array
+                              exposeHeaders:
+                                description: exposeHeaders is the list of response
+                                  headers exposed to the browser.
+                                items:
+                                  type: string
+                                maxItems: 64
+                                type: array
+                              maxAge:
+                                description: |-
+                                  maxAge is the number of seconds browsers may cache the preflight
+                                  response. When unset (0), the Envoy default applies.
+                                format: int32
+                                maximum: 86400
+                                minimum: 0
+                                type: integer
+                            required:
+                            - allowOrigins
+                            type: object
                           header:
                             description: header specifies header configuration (required
                               when type is "header-set" or "header-add")
@@ -184,6 +241,54 @@ spec:
                               (required when type is "header-remove")
                             maxLength: 256
                             type: string
+                          mirror:
+                            description: mirror specifies request mirroring configuration
+                              (required when type is "request-mirror")
+                            properties:
+                              backendRef:
+                                description: |-
+                                  backendRef is the Service to mirror requests to. The Service must
+                                  be reachable from the same Istio mesh as the primary route (it is
+                                  resolved to an Istio outbound cluster at EnvoyFilter generation time).
+                                properties:
+                                  name:
+                                    description: name is the name of the Service or
+                                      an external hostname/IP (RFC 1123 DNS name)
+                                    maxLength: 253
+                                    minLength: 1
+                                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                                    type: string
+                                  namespace:
+                                    description: namespace is the namespace of the
+                                      Service
+                                    maxLength: 63
+                                    minLength: 1
+                                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                                    type: string
+                                  port:
+                                    description: port is the port of the Service
+                                    format: int32
+                                    maximum: 65535
+                                    minimum: 1
+                                    type: integer
+                                required:
+                                - name
+                                - namespace
+                                - port
+                                type: object
+                              percent:
+                                description: |-
+                                  percent is the percentage of requests to mirror, in the range [0, 100].
+                                  When unset or 100, all matched requests are mirrored. When 0, no
+                                  requests are mirrored (the action becomes a no-op). Mirrors Gateway
+                                  API's HTTPRequestMirrorFilter.percent field.
+                                format: int32
+                                maximum: 100
+                                minimum: 0
+                                type: integer
+                            required:
+                            - backendRef
+                            type: object
                           redirect:
                             description: |-
                               redirect specifies redirect configuration (required when type is "redirect")
@@ -300,6 +405,8 @@ spec:
                             - response-header-set
                             - response-header-add
                             - response-header-remove
+                            - request-mirror
+                            - cors
                             type: string
                         required:
                         - type
