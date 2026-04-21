@@ -122,8 +122,12 @@ type QueryParamMatch struct {
 	Type QueryParamMatchType `json:"type,omitempty"`
 }
 
-// ActionType defines the type of action to perform
-// +kubebuilder:validation:Enum=redirect;rewrite;header-set;header-add;header-remove
+// ActionType defines the type of action to perform.
+// The header-* actions modify the request headers sent to the backend,
+// equivalent to Gateway API's RequestHeaderModifier filter.
+// The response-header-* actions modify the response headers returned to the
+// client, equivalent to Gateway API's ResponseHeaderModifier filter.
+// +kubebuilder:validation:Enum=redirect;rewrite;header-set;header-add;header-remove;response-header-set;response-header-add;response-header-remove
 type ActionType string
 
 const (
@@ -133,14 +137,23 @@ const (
 	// ActionTypeRewrite rewrites the request path and/or hostname before forwarding
 	ActionTypeRewrite ActionType = "rewrite"
 
-	// ActionTypeHeaderSet sets a header, overwriting if it exists
+	// ActionTypeHeaderSet sets a request header, overwriting if it exists
 	ActionTypeHeaderSet ActionType = "header-set"
 
-	// ActionTypeHeaderAdd adds a header value, appending if it exists
+	// ActionTypeHeaderAdd adds a request header value, appending if it exists
 	ActionTypeHeaderAdd ActionType = "header-add"
 
-	// ActionTypeHeaderRemove removes a header
+	// ActionTypeHeaderRemove removes a request header
 	ActionTypeHeaderRemove ActionType = "header-remove"
+
+	// ActionTypeResponseHeaderSet sets a response header, overwriting if it exists.
+	ActionTypeResponseHeaderSet ActionType = "response-header-set"
+
+	// ActionTypeResponseHeaderAdd adds a response header value, appending if it exists.
+	ActionTypeResponseHeaderAdd ActionType = "response-header-add"
+
+	// ActionTypeResponseHeaderRemove removes a response header.
+	ActionTypeResponseHeaderRemove ActionType = "response-header-remove"
 )
 
 const (

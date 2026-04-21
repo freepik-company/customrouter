@@ -297,6 +297,9 @@ spec:
                             - header-set
                             - header-add
                             - header-remove
+                            - response-header-set
+                            - response-header-add
+                            - response-header-remove
                             type: string
                         required:
                         - type

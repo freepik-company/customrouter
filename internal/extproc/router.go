@@ -42,7 +42,7 @@ type requestVars struct {
 }
 
 // processRequestHeaders handles incoming request headers and determines routing
-func (p *Processor) processRequestHeaders(headers *extprocv3.HttpHeaders) (*extprocv3.ProcessingResponse, *requestContext, error) {
+func (p *Processor) processRequestHeaders(headers *extprocv3.HttpHeaders, streamCtx *streamContext) (*extprocv3.ProcessingResponse, *requestContext, error) {
 	reqCtx := &requestContext{
 		startTime: time.Now(),
 	}
@@ -163,6 +163,10 @@ func (p *Processor) processRequestHeaders(headers *extprocv3.HttpHeaders) (*extp
 	reqCtx.matchedPattern = route.Path
 	reqCtx.matchedType = route.Type
 	reqCtx.matchedPriority = route.Priority
+
+	// Stash the matched route so processResponseHeaders can apply response-side
+	// header mutations when Envoy reports back.
+	streamCtx.matchedRoute = route
 
 	p.logger.Debug("route matched",
 		zap.String("originalHost", reqCtx.authority),
@@ -434,6 +438,80 @@ func (p *Processor) buildForwardResponse(route *routes.Route, vars *requestVars,
 	)
 
 	return resp, reqCtx, nil
+}
+
+// processResponseHeaders applies the matched route's response-side header
+// mutations, if any. When no route matched in the request phase (streamCtx is
+// empty or the route has no response-header actions), returns a no-op response
+// so Envoy can continue forwarding the upstream response unchanged.
+func (p *Processor) processResponseHeaders(streamCtx *streamContext) *extprocv3.ProcessingResponse {
+	if streamCtx == nil || streamCtx.matchedRoute == nil {
+		return &extprocv3.ProcessingResponse{
+			Response: &extprocv3.ProcessingResponse_ResponseHeaders{
+				ResponseHeaders: &extprocv3.HeadersResponse{},
+			},
+		}
+	}
+
+	var setHeaders []*corev3.HeaderValueOption
+	var removeHeaders []string
+	for _, action := range streamCtx.matchedRoute.Actions {
+		switch action.Type {
+		case routes.ActionTypeResponseHeaderSet:
+			if action.HeaderName == "" {
+				continue
+			}
+			setHeaders = append(setHeaders, &corev3.HeaderValueOption{
+				Header: &corev3.HeaderValue{
+					Key:      action.HeaderName,
+					RawValue: []byte(action.Value),
+				},
+				AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+			})
+		case routes.ActionTypeResponseHeaderAdd:
+			if action.HeaderName == "" {
+				continue
+			}
+			setHeaders = append(setHeaders, &corev3.HeaderValueOption{
+				Header: &corev3.HeaderValue{
+					Key:      action.HeaderName,
+					RawValue: []byte(action.Value),
+				},
+				AppendAction: corev3.HeaderValueOption_APPEND_IF_EXISTS_OR_ADD,
+			})
+		case routes.ActionTypeResponseHeaderRemove:
+			if action.HeaderName == "" {
+				continue
+			}
+			removeHeaders = append(removeHeaders, action.HeaderName)
+		}
+	}
+
+	if len(setHeaders) == 0 && len(removeHeaders) == 0 {
+		return &extprocv3.ProcessingResponse{
+			Response: &extprocv3.ProcessingResponse_ResponseHeaders{
+				ResponseHeaders: &extprocv3.HeadersResponse{},
+			},
+		}
+	}
+
+	p.logger.Debug("applying response header mutations",
+		zap.Int("set", len(setHeaders)),
+		zap.Int("remove", len(removeHeaders)),
+	)
+
+	return &extprocv3.ProcessingResponse{
+		Response: &extprocv3.ProcessingResponse_ResponseHeaders{
+			ResponseHeaders: &extprocv3.HeadersResponse{
+				Response: &extprocv3.CommonResponse{
+					HeaderMutation: &extprocv3.HeaderMutation{
+						SetHeaders:    setHeaders,
+						RemoveHeaders: removeHeaders,
+					},
+				},
+			},
+		},
+	}
 }
 
 // extractFirstIP extracts the first IP from a comma-separated list (X-Forwarded-For)

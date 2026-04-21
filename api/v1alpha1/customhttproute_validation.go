@@ -135,7 +135,8 @@ func validateAction(ruleIndex, actionIndex int, action *Action) error {
 			return fmt.Errorf("%s: at least one rewrite field (path or hostname) must be specified", prefix)
 		}
 
-	case ActionTypeHeaderSet, ActionTypeHeaderAdd:
+	case ActionTypeHeaderSet, ActionTypeHeaderAdd,
+		ActionTypeResponseHeaderSet, ActionTypeResponseHeaderAdd:
 		if action.Header == nil {
 			return fmt.Errorf("%s: header config is required when type is '%s'", prefix, action.Type)
 		}
@@ -143,9 +144,9 @@ func validateAction(ruleIndex, actionIndex int, action *Action) error {
 			return fmt.Errorf("%s: header.name is required", prefix)
 		}
 
-	case ActionTypeHeaderRemove:
+	case ActionTypeHeaderRemove, ActionTypeResponseHeaderRemove:
 		if action.HeaderName == "" {
-			return fmt.Errorf("%s: headerName is required when type is 'header-remove'", prefix)
+			return fmt.Errorf("%s: headerName is required when type is '%s'", prefix, action.Type)
 		}
 
 	default:

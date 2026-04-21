@@ -277,12 +277,13 @@ func convertActions(apiActions []v1alpha1.Action) []RouteAction {
 					action.preservePrefix = true
 				}
 			}
-		case v1alpha1.ActionTypeHeaderSet, v1alpha1.ActionTypeHeaderAdd:
+		case v1alpha1.ActionTypeHeaderSet, v1alpha1.ActionTypeHeaderAdd,
+			v1alpha1.ActionTypeResponseHeaderSet, v1alpha1.ActionTypeResponseHeaderAdd:
 			if a.Header != nil {
 				action.HeaderName = a.Header.Name
 				action.Value = a.Header.Value
 			}
-		case v1alpha1.ActionTypeHeaderRemove:
+		case v1alpha1.ActionTypeHeaderRemove, v1alpha1.ActionTypeResponseHeaderRemove:
 			action.HeaderName = a.HeaderName
 		}
 

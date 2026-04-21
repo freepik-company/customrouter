@@ -131,11 +131,14 @@ const (
 
 // ActionType constants
 const (
-	ActionTypeRedirect     = "redirect"
-	ActionTypeRewrite      = "rewrite"
-	ActionTypeHeaderSet    = "header-set"
-	ActionTypeHeaderAdd    = "header-add"
-	ActionTypeHeaderRemove = "header-remove"
+	ActionTypeRedirect             = "redirect"
+	ActionTypeRewrite              = "rewrite"
+	ActionTypeHeaderSet            = "header-set"
+	ActionTypeHeaderAdd            = "header-add"
+	ActionTypeHeaderRemove         = "header-remove"
+	ActionTypeResponseHeaderSet    = "response-header-set"
+	ActionTypeResponseHeaderAdd    = "response-header-add"
+	ActionTypeResponseHeaderRemove = "response-header-remove"
 )
 
 // ParseJSON parses a JSON byte slice into a RoutesConfig
