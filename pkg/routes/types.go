@@ -22,6 +22,8 @@ import (
 	"encoding/json"
 	"regexp"
 	"strings"
+
+	"github.com/freepik-company/customrouter/api/v1alpha1"
 )
 
 // RouteAction represents an action to perform on a matched request
@@ -103,8 +105,42 @@ type Route struct {
 	// must be satisfied by the request (AND). Empty means no query constraint.
 	QueryParams []RouteQueryParamMatch `json:"queryParams,omitempty"`
 
+	// Mirrors lists request-mirror targets for this route. These are consumed
+	// by the controller when generating Envoy request_mirror_policies and are
+	// NEVER serialized to the ConfigMap — the ExtProc data plane does not
+	// dispatch mirrors (that happens natively in Envoy), so keeping them out
+	// of the runtime config preserves the ExtProc hot path.
+	Mirrors []RouteMirror `json:"-"`
+
+	// CORS carries a cross-origin resource sharing policy. Like Mirrors, this
+	// is consumed only by the controller (to render an Envoy CORS filter
+	// typed_per_filter_config entry) and never reaches the ExtProc data plane.
+	CORS *RouteCORS `json:"-"`
+
 	// compiledRegex is the compiled regex for regex type routes (not serialized)
 	compiledRegex *regexp.Regexp
+}
+
+// RouteCORS is the runtime representation of a cors action, carrying the
+// fields consumed by Envoy's CORS filter. Field semantics mirror
+// v1alpha1.CORSConfig verbatim.
+type RouteCORS struct {
+	AllowOrigins     []string
+	AllowMethods     []string
+	AllowHeaders     []string
+	ExposeHeaders    []string
+	AllowCredentials bool
+	MaxAge           int32
+}
+
+// RouteMirror is the runtime representation of a request-mirror action.
+// BackendRef is preserved as-is (rather than flattened to a host:port string)
+// so the controller can translate it into Envoy's cluster-naming convention
+// via envoyfilter.BuildClusterName at EnvoyFilter generation time. Percent is
+// nil for 100% (all matched requests) and set for partial mirroring.
+type RouteMirror struct {
+	BackendRef v1alpha1.BackendRef
+	Percent    *int32
 }
 
 // RequestMatch carries the per-request inputs used to match a Route.
@@ -139,6 +175,8 @@ const (
 	ActionTypeResponseHeaderSet    = "response-header-set"
 	ActionTypeResponseHeaderAdd    = "response-header-add"
 	ActionTypeResponseHeaderRemove = "response-header-remove"
+	ActionTypeRequestMirror        = "request-mirror"
+	ActionTypeCORS                 = "cors"
 )
 
 // ParseJSON parses a JSON byte slice into a RoutesConfig

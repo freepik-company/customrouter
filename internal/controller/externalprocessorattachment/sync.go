@@ -57,13 +57,7 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileEnvoyFilters(
 		if err := ef.UpsertUnstructured(ctx, r.Client, envoyFilter); err != nil {
 			return fmt.Errorf("failed to reconcile catch-all EnvoyFilter: %w", err)
 		}
-		logger.Info("EnvoyFilters reconciled successfully",
-			"extproc", attachment.Name+ef.ExtProcFilterSuffix,
-			"routes", attachment.Name+ef.RoutesFilterSuffix,
-			"catchall", attachment.Name+ef.CatchAllFilterSuffix,
-			"catchallHostnames", len(mergedEntries))
 	} else {
-		// Delete catch-all EnvoyFilter if it exists but is no longer needed
 		key := types.NamespacedName{
 			Name:      attachment.Name + ef.CatchAllFilterSuffix,
 			Namespace: attachment.Namespace,
@@ -71,12 +65,87 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileEnvoyFilters(
 		if err := ef.DeleteEnvoyFilter(ctx, r.Client, key); err != nil {
 			return fmt.Errorf("failed to delete catch-all EnvoyFilter: %w", err)
 		}
-		logger.Info("EnvoyFilters reconciled successfully",
-			"extproc", attachment.Name+ef.ExtProcFilterSuffix,
-			"routes", attachment.Name+ef.RoutesFilterSuffix)
 	}
 
+	mirrorEntries := r.collectMirrorEntries(ctx)
+	if len(mirrorEntries) > 0 {
+		envoyFilter, err := ef.BuildMirrorEnvoyFilter(attachment, mirrorEntries)
+		if err != nil {
+			return fmt.Errorf("failed to build mirror EnvoyFilter: %w", err)
+		}
+		if err := ef.UpsertUnstructured(ctx, r.Client, envoyFilter); err != nil {
+			return fmt.Errorf("failed to reconcile mirror EnvoyFilter: %w", err)
+		}
+	} else {
+		key := types.NamespacedName{
+			Name:      attachment.Name + ef.MirrorFilterSuffix,
+			Namespace: attachment.Namespace,
+		}
+		if err := ef.DeleteEnvoyFilter(ctx, r.Client, key); err != nil {
+			return fmt.Errorf("failed to delete mirror EnvoyFilter: %w", err)
+		}
+	}
+
+	corsEntries := r.collectCORSEntries(ctx)
+	if len(corsEntries) > 0 {
+		envoyFilter, err := ef.BuildCORSEnvoyFilter(attachment, corsEntries)
+		if err != nil {
+			return fmt.Errorf("failed to build CORS EnvoyFilter: %w", err)
+		}
+		if err := ef.UpsertUnstructured(ctx, r.Client, envoyFilter); err != nil {
+			return fmt.Errorf("failed to reconcile CORS EnvoyFilter: %w", err)
+		}
+	} else {
+		key := types.NamespacedName{
+			Name:      attachment.Name + ef.CORSFilterSuffix,
+			Namespace: attachment.Namespace,
+		}
+		if err := ef.DeleteEnvoyFilter(ctx, r.Client, key); err != nil {
+			return fmt.Errorf("failed to delete CORS EnvoyFilter: %w", err)
+		}
+	}
+
+	logger.Info("EnvoyFilters reconciled successfully",
+		"extproc", attachment.Name+ef.ExtProcFilterSuffix,
+		"routes", attachment.Name+ef.RoutesFilterSuffix,
+		"catchallHostnames", len(mergedEntries),
+		"mirrorEntries", len(mirrorEntries),
+		"corsEntries", len(corsEntries))
+
 	return nil
+}
+
+// collectMirrorEntries lists every CustomHTTPRoute and extracts the request-mirror
+// targets across all of them. Follows the same "list then aggregate" pattern as
+// collectMergedCatchAllEntries so behaviour between the two EnvoyFilters is
+// consistent.
+func (r *ExternalProcessorAttachmentReconciler) collectMirrorEntries(
+	ctx context.Context,
+) []ef.MirrorEntry {
+	logger := log.FromContext(ctx)
+
+	routeList := &v1alpha1.CustomHTTPRouteList{}
+	if err := r.List(ctx, routeList); err != nil {
+		logger.Error(err, "Failed to list CustomHTTPRoutes for mirror aggregation")
+		return nil
+	}
+
+	return ef.CollectMirrorEntries(routeList)
+}
+
+// collectCORSEntries mirrors collectMirrorEntries for CORS actions.
+func (r *ExternalProcessorAttachmentReconciler) collectCORSEntries(
+	ctx context.Context,
+) []ef.CORSEntry {
+	logger := log.FromContext(ctx)
+
+	routeList := &v1alpha1.CustomHTTPRouteList{}
+	if err := r.List(ctx, routeList); err != nil {
+		logger.Error(err, "Failed to list CustomHTTPRoutes for CORS aggregation")
+		return nil
+	}
+
+	return ef.CollectCORSEntries(routeList)
 }
 
 // collectMergedCatchAllEntries lists CustomHTTPRoutes, collects their catchAllRoute entries,
@@ -244,7 +313,13 @@ func (r *ExternalProcessorAttachmentReconciler) deleteEnvoyFilters(
 	ctx context.Context,
 	attachment *v1alpha1.ExternalProcessorAttachment,
 ) error {
-	suffixes := []string{ef.ExtProcFilterSuffix, ef.RoutesFilterSuffix, ef.CatchAllFilterSuffix}
+	suffixes := []string{
+		ef.ExtProcFilterSuffix,
+		ef.RoutesFilterSuffix,
+		ef.CatchAllFilterSuffix,
+		ef.MirrorFilterSuffix,
+		ef.CORSFilterSuffix,
+	}
 
 	for _, suffix := range suffixes {
 		key := types.NamespacedName{

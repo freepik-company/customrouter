@@ -127,7 +127,15 @@ type QueryParamMatch struct {
 // equivalent to Gateway API's RequestHeaderModifier filter.
 // The response-header-* actions modify the response headers returned to the
 // client, equivalent to Gateway API's ResponseHeaderModifier filter.
-// +kubebuilder:validation:Enum=redirect;rewrite;header-set;header-add;header-remove;response-header-set;response-header-add;response-header-remove
+// The request-mirror action duplicates the request to an additional backend
+// without affecting the response returned to the client, equivalent to
+// Gateway API's RequestMirror filter. The mirrored request is dispatched
+// by Envoy's native mirror_policies; the ExtProc data plane is not involved.
+// The cors action installs a Cross-Origin Resource Sharing policy, equivalent
+// to Gateway API's HTTPCORSFilter. Preflight handling and response-header
+// injection happen in Envoy's native CORS filter, so the ExtProc hot path
+// is likewise untouched.
+// +kubebuilder:validation:Enum=redirect;rewrite;header-set;header-add;header-remove;response-header-set;response-header-add;response-header-remove;request-mirror;cors
 type ActionType string
 
 const (
@@ -154,6 +162,16 @@ const (
 
 	// ActionTypeResponseHeaderRemove removes a response header.
 	ActionTypeResponseHeaderRemove ActionType = "response-header-remove"
+
+	// ActionTypeRequestMirror duplicates the request to a secondary backend
+	// while still routing the primary request normally. Mirrored responses
+	// are discarded. Equivalent to Gateway API HTTPRequestMirrorFilter.
+	ActionTypeRequestMirror ActionType = "request-mirror"
+
+	// ActionTypeCORS installs a CORS policy on the matched route, handling
+	// both preflight (OPTIONS) and actual cross-origin responses.
+	// Equivalent to Gateway API HTTPCORSFilter.
+	ActionTypeCORS ActionType = "cors"
 )
 
 const (
@@ -362,6 +380,74 @@ type RedirectConfig struct {
 	PreservePrefix *bool `json:"preservePrefix,omitempty"`
 }
 
+// MirrorConfig defines request mirroring configuration. Mirrors Gateway API's
+// HTTPRequestMirrorFilter. The mirrored request is dispatched by Envoy's
+// native request_mirror_policies on the route; the ExtProc data plane
+// is not involved, keeping the primary request hot path unaffected.
+type MirrorConfig struct {
+	// backendRef is the Service to mirror requests to. The Service must
+	// be reachable from the same Istio mesh as the primary route (it is
+	// resolved to an Istio outbound cluster at EnvoyFilter generation time).
+	// +required
+	BackendRef BackendRef `json:"backendRef"`
+
+	// percent is the percentage of requests to mirror, in the range [0, 100].
+	// When unset or 100, all matched requests are mirrored. When 0, no
+	// requests are mirrored (the action becomes a no-op). Mirrors Gateway
+	// API's HTTPRequestMirrorFilter.percent field.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	Percent *int32 `json:"percent,omitempty"`
+}
+
+// CORSConfig defines a CORS policy. Mirrors Gateway API's HTTPCORSFilter.
+// Enforcement happens in Envoy's native envoy.filters.http.cors filter via
+// typed_per_filter_config on the generated route, so the ExtProc hot path
+// is not involved.
+type CORSConfig struct {
+	// allowOrigins is the list of origins allowed to make cross-origin requests.
+	// Each entry must be either "*" or an absolute URI with scheme and host
+	// (e.g. "https://example.com"). A single "*" entry enables the permissive
+	// wildcard; it is mutually exclusive with allowCredentials=true (the
+	// browser rejects that combination). Matching is exact, case-sensitive.
+	// +required
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=64
+	AllowOrigins []string `json:"allowOrigins"`
+
+	// allowMethods is the list of HTTP methods allowed in cross-origin requests.
+	// A single "*" entry allows any method. Mirrors Gateway API's
+	// HTTPCORSFilter.allowMethods.
+	// +optional
+	// +kubebuilder:validation:MaxItems=16
+	AllowMethods []string `json:"allowMethods,omitempty"`
+
+	// allowHeaders is the list of request headers allowed in cross-origin
+	// requests. A single "*" entry allows any header.
+	// +optional
+	// +kubebuilder:validation:MaxItems=64
+	AllowHeaders []string `json:"allowHeaders,omitempty"`
+
+	// exposeHeaders is the list of response headers exposed to the browser.
+	// +optional
+	// +kubebuilder:validation:MaxItems=64
+	ExposeHeaders []string `json:"exposeHeaders,omitempty"`
+
+	// allowCredentials indicates whether the response to the request can be
+	// exposed when credentials (cookies, TLS client certs, auth headers) are
+	// present. When true, allowOrigins must not contain "*".
+	// +optional
+	AllowCredentials bool `json:"allowCredentials,omitempty"`
+
+	// maxAge is the number of seconds browsers may cache the preflight
+	// response. When unset (0), the Envoy default applies.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=86400
+	MaxAge int32 `json:"maxAge,omitempty"`
+}
+
 // HeaderConfig defines a header name-value pair
 type HeaderConfig struct {
 	// name is the header name
@@ -404,6 +490,14 @@ type Action struct {
 	// +optional
 	// +kubebuilder:validation:MaxLength=256
 	HeaderName string `json:"headerName,omitempty"`
+
+	// mirror specifies request mirroring configuration (required when type is "request-mirror")
+	// +optional
+	Mirror *MirrorConfig `json:"mirror,omitempty"`
+
+	// cors specifies the CORS policy (required when type is "cors")
+	// +optional
+	CORS *CORSConfig `json:"cors,omitempty"`
 }
 
 // RulePathPrefixes defines path prefix overrides for a specific rule

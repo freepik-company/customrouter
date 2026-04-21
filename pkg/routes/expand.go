@@ -83,6 +83,8 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule, extern
 
 	backend := buildBackendString(rule.BackendRefs, externalNames)
 	actions := convertActions(rule.Actions)
+	mirrors := extractMirrors(rule.Actions)
+	cors := extractCORS(rule.Actions)
 
 	for _, match := range rule.Matches {
 		matchType := getMatchType(match.Type)
@@ -187,6 +189,17 @@ func expandRule(specPrefixes *v1alpha1.PathPrefixes, rule *v1alpha1.Rule, extern
 		}
 	}
 
+	if len(mirrors) > 0 {
+		for i := range routes {
+			routes[i].Mirrors = mirrors
+		}
+	}
+	if cors != nil {
+		for i := range routes {
+			routes[i].CORS = cors
+		}
+	}
+
 	return routes
 }
 
@@ -238,7 +251,11 @@ func convertQueryParamMatches(apiParams []v1alpha1.QueryParamMatch) []RouteQuery
 	return out
 }
 
-// convertActions converts API actions to route actions
+// convertActions converts API actions to route actions. Mirror and CORS
+// actions are intentionally excluded — they are dispatched natively by Envoy,
+// and carrying them through the ConfigMap would bloat the ExtProc hot path
+// without purpose. See extractMirrors and extractCORS for the controller-side
+// counterparts.
 func convertActions(apiActions []v1alpha1.Action) []RouteAction {
 	if len(apiActions) == 0 {
 		return nil
@@ -246,6 +263,9 @@ func convertActions(apiActions []v1alpha1.Action) []RouteAction {
 
 	actions := make([]RouteAction, 0, len(apiActions))
 	for _, a := range apiActions {
+		if a.Type == v1alpha1.ActionTypeRequestMirror || a.Type == v1alpha1.ActionTypeCORS {
+			continue
+		}
 		action := RouteAction{
 			Type: string(a.Type),
 		}
@@ -291,6 +311,49 @@ func convertActions(apiActions []v1alpha1.Action) []RouteAction {
 	}
 
 	return actions
+}
+
+// extractMirrors pulls request-mirror actions out of the rule's action list
+// and returns their runtime representation. The BackendRef is preserved so
+// the controller can render the correct Istio cluster name when emitting
+// the mirror EnvoyFilter.
+func extractMirrors(apiActions []v1alpha1.Action) []RouteMirror {
+	var mirrors []RouteMirror
+	for _, a := range apiActions {
+		if a.Type != v1alpha1.ActionTypeRequestMirror || a.Mirror == nil {
+			continue
+		}
+		mirrors = append(mirrors, RouteMirror{
+			BackendRef: a.Mirror.BackendRef,
+			Percent:    a.Mirror.Percent,
+		})
+	}
+	return mirrors
+}
+
+// extractCORS pulls the first cors action from the rule's action list and
+// converts it into the runtime form. Only the last cors action wins if
+// multiple are declared (Envoy's typed_per_filter_config is a single policy
+// per filter per route).
+func extractCORS(apiActions []v1alpha1.Action) *RouteCORS {
+	var last *v1alpha1.CORSConfig
+	for i := range apiActions {
+		if apiActions[i].Type != v1alpha1.ActionTypeCORS || apiActions[i].CORS == nil {
+			continue
+		}
+		last = apiActions[i].CORS
+	}
+	if last == nil {
+		return nil
+	}
+	return &RouteCORS{
+		AllowOrigins:     append([]string(nil), last.AllowOrigins...),
+		AllowMethods:     append([]string(nil), last.AllowMethods...),
+		AllowHeaders:     append([]string(nil), last.AllowHeaders...),
+		ExposeHeaders:    append([]string(nil), last.ExposeHeaders...),
+		AllowCredentials: last.AllowCredentials,
+		MaxAge:           last.MaxAge,
+	}
 }
 
 // actionsNeedPreservePrefix returns true if any action has preservePrefix set

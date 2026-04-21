@@ -513,9 +513,14 @@ Actions allow you to transform requests before forwarding or return immediate re
 |-------------|-------------|
 | `redirect` | Return HTTP redirect (301, 302, 307, 308). No backend needed. |
 | `rewrite` | Rewrite path and/or hostname before forwarding |
-| `header-set` | Set a header (overwrite if exists) |
-| `header-add` | Add a header (append if exists) |
-| `header-remove` | Remove a header |
+| `header-set` | Set a request header (overwrite if exists) |
+| `header-add` | Add a request header (append if exists) |
+| `header-remove` | Remove a request header |
+| `response-header-set` | Set a response header (overwrite if exists) |
+| `response-header-add` | Add a response header (append if exists) |
+| `response-header-remove` | Remove a response header |
+| `request-mirror` | Duplicate the request to a secondary backend (native Envoy mirroring; zero ExtProc overhead) |
+| `cors` | Install a CORS policy (native Envoy CORS filter; zero ExtProc overhead) |
 
 #### Redirect Example
 
@@ -734,6 +739,11 @@ spec:
 
 #### Header Manipulation Example
 
+Request headers (`header-*`) are injected by the ExtProc as it forwards the
+request. Response headers (`response-header-*`) are injected on the way back;
+they do not affect the primary request path and run without an ExtProc
+round-trip on the response side.
+
 ```yaml
 rules:
   - matches:
@@ -749,11 +759,84 @@ rules:
           value: ${request_id}
       - type: header-remove
         headerName: X-Internal-Debug
+      - type: response-header-set
+        header:
+          name: X-Cache-Status
+          value: MISS
+      - type: response-header-remove
+        headerName: Server
     backendRefs:
       - name: api-service
         namespace: backend
         port: 8080
 ```
+
+#### Request Mirror Example
+
+Duplicates matched requests to a secondary backend. The primary request is
+served normally; the mirrored response is discarded. Mirroring is dispatched
+by Envoy's native `request_mirror_policies` — the ExtProc hot path is
+untouched, so the latency budget of the primary request is preserved.
+
+```yaml
+rules:
+  - matches:
+      - path: /api
+        type: PathPrefix
+    actions:
+      - type: request-mirror
+        mirror:
+          backendRef:
+            name: shadow-api
+            namespace: backend
+            port: 8080
+          # Optional: only mirror 25% of matched traffic.
+          # Omit for 100%.
+          percent: 25
+    backendRefs:
+      - name: api-service
+        namespace: backend
+        port: 8080
+```
+
+Notes:
+- The mirror backend must be a Kubernetes Service in the same Istio mesh.
+- Partial mirroring is implemented via Envoy's `runtime_fraction` (denominator `HUNDRED`).
+- Multiple `request-mirror` actions in the same rule produce one mirror policy each.
+
+#### CORS Example
+
+Installs a Cross-Origin Resource Sharing policy for the matched routes. Both
+preflight (`OPTIONS`) handling and response-header injection are performed
+by Envoy's native CORS filter via `typed_per_filter_config`, so the ExtProc
+never sees the preflight request and the hot path is not affected.
+
+```yaml
+rules:
+  - matches:
+      - path: /api
+        type: PathPrefix
+    actions:
+      - type: cors
+        cors:
+          allowOrigins:
+            - https://app.example.com
+            - https://admin.example.com
+          allowMethods: [GET, POST, PUT, DELETE, OPTIONS]
+          allowHeaders: [authorization, content-type, x-request-id]
+          exposeHeaders: [x-request-id]
+          allowCredentials: true
+          maxAge: 3600   # seconds; browsers cache preflight for this long
+    backendRefs:
+      - name: api-service
+        namespace: backend
+        port: 8080
+```
+
+Notes:
+- `allowOrigins` must be `"*"` or an absolute URI with scheme and host (no path/query/fragment).
+- `"*"` origin is incompatible with `allowCredentials: true`; the webhook rejects that combination because browsers reject it at runtime.
+- If a rule declares multiple `cors` actions, the last one wins (a single CORS policy per route is supported, matching Envoy's model).
 
 ### Supported Variables
 
@@ -790,6 +873,12 @@ The CRD enforces the following limits to prevent resource exhaustion:
 | `header.name` | MaxLength 256 |
 | `header.value` | MaxLength 4096 |
 | `action.headerName` | MaxLength 256 |
+| `mirror.percent` | Range 0–100 (unset = 100) |
+| `cors.allowOrigins[]` | Max 64 items; each must be `"*"` or absolute URI |
+| `cors.allowMethods[]` | Max 16 items |
+| `cors.allowHeaders[]` | Max 64 items |
+| `cors.exposeHeaders[]` | Max 64 items |
+| `cors.maxAge` | Range 0–86400 seconds |
 | `externalProcessorRef.timeout` | Valid duration pattern: `^[0-9]+(s\|ms\|m\|h)$` |
 | `externalProcessorRef.messageTimeout` | Valid duration pattern: `^[0-9]+(s\|ms\|m\|h)$` |
 

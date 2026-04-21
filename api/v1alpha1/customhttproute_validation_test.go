@@ -247,6 +247,238 @@ func TestValidateCustomHTTPRoute(t *testing.T) {
 			errContains: "headerName is required",
 		},
 		{
+			name: "valid: request-mirror with backend and percent",
+			route: &CustomHTTPRoute{
+				Spec: CustomHTTPRouteSpec{
+					TargetRef: TargetRef{Name: "default"},
+					Hostnames: []string{"example.com"},
+					Rules: []Rule{
+						{
+							Matches: []PathMatch{{Path: "/api"}},
+							Actions: []Action{
+								{
+									Type: ActionTypeRequestMirror,
+									Mirror: &MirrorConfig{
+										BackendRef: BackendRef{Name: "shadow", Namespace: "default", Port: 8080},
+										Percent:    int32Ptr(50),
+									},
+								},
+							},
+							BackendRefs: []BackendRef{
+								{Name: "api", Namespace: "default", Port: 8080},
+							},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid: request-mirror without config",
+			route: &CustomHTTPRoute{
+				Spec: CustomHTTPRouteSpec{
+					TargetRef: TargetRef{Name: "default"},
+					Hostnames: []string{"example.com"},
+					Rules: []Rule{
+						{
+							Matches: []PathMatch{{Path: "/api"}},
+							Actions: []Action{
+								{Type: ActionTypeRequestMirror},
+							},
+							BackendRefs: []BackendRef{
+								{Name: "api", Namespace: "default", Port: 8080},
+							},
+						},
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: "mirror config is required",
+		},
+		{
+			name: "invalid: request-mirror with out-of-range percent",
+			route: &CustomHTTPRoute{
+				Spec: CustomHTTPRouteSpec{
+					TargetRef: TargetRef{Name: "default"},
+					Hostnames: []string{"example.com"},
+					Rules: []Rule{
+						{
+							Matches: []PathMatch{{Path: "/api"}},
+							Actions: []Action{
+								{
+									Type: ActionTypeRequestMirror,
+									Mirror: &MirrorConfig{
+										BackendRef: BackendRef{Name: "shadow", Namespace: "default", Port: 8080},
+										Percent:    int32Ptr(150),
+									},
+								},
+							},
+							BackendRefs: []BackendRef{
+								{Name: "api", Namespace: "default", Port: 8080},
+							},
+						},
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: "mirror.percent must be in [0, 100]",
+		},
+		{
+			name: "invalid: request-mirror without backend name",
+			route: &CustomHTTPRoute{
+				Spec: CustomHTTPRouteSpec{
+					TargetRef: TargetRef{Name: "default"},
+					Hostnames: []string{"example.com"},
+					Rules: []Rule{
+						{
+							Matches: []PathMatch{{Path: "/api"}},
+							Actions: []Action{
+								{
+									Type: ActionTypeRequestMirror,
+									Mirror: &MirrorConfig{
+										BackendRef: BackendRef{Namespace: "default", Port: 8080},
+									},
+								},
+							},
+							BackendRefs: []BackendRef{
+								{Name: "api", Namespace: "default", Port: 8080},
+							},
+						},
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: "mirror.backendRef.name is required",
+		},
+		{
+			name: "valid: cors with exact origin",
+			route: &CustomHTTPRoute{
+				Spec: CustomHTTPRouteSpec{
+					TargetRef: TargetRef{Name: "default"},
+					Hostnames: []string{"example.com"},
+					Rules: []Rule{
+						{
+							Matches: []PathMatch{{Path: "/api"}},
+							Actions: []Action{{
+								Type: ActionTypeCORS,
+								CORS: &CORSConfig{
+									AllowOrigins: []string{"https://app.example.com"},
+									AllowMethods: []string{"GET", "POST"},
+									MaxAge:       3600,
+								},
+							}},
+							BackendRefs: []BackendRef{{Name: "api", Namespace: "default", Port: 8080}},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid: cors wildcard origin without credentials",
+			route: &CustomHTTPRoute{
+				Spec: CustomHTTPRouteSpec{
+					TargetRef: TargetRef{Name: "default"},
+					Hostnames: []string{"example.com"},
+					Rules: []Rule{
+						{
+							Matches: []PathMatch{{Path: "/api"}},
+							Actions: []Action{{
+								Type: ActionTypeCORS,
+								CORS: &CORSConfig{AllowOrigins: []string{"*"}},
+							}},
+							BackendRefs: []BackendRef{{Name: "api", Namespace: "default", Port: 8080}},
+						},
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid: cors without config",
+			route: &CustomHTTPRoute{
+				Spec: CustomHTTPRouteSpec{
+					TargetRef: TargetRef{Name: "default"},
+					Hostnames: []string{"example.com"},
+					Rules: []Rule{
+						{
+							Matches:     []PathMatch{{Path: "/api"}},
+							Actions:     []Action{{Type: ActionTypeCORS}},
+							BackendRefs: []BackendRef{{Name: "api", Namespace: "default", Port: 8080}},
+						},
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: "cors config is required",
+		},
+		{
+			name: "invalid: cors wildcard origin with credentials",
+			route: &CustomHTTPRoute{
+				Spec: CustomHTTPRouteSpec{
+					TargetRef: TargetRef{Name: "default"},
+					Hostnames: []string{"example.com"},
+					Rules: []Rule{
+						{
+							Matches: []PathMatch{{Path: "/api"}},
+							Actions: []Action{{
+								Type: ActionTypeCORS,
+								CORS: &CORSConfig{
+									AllowOrigins:     []string{"*"},
+									AllowCredentials: true,
+								},
+							}},
+							BackendRefs: []BackendRef{{Name: "api", Namespace: "default", Port: 8080}},
+						},
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: "cannot contain \"*\" when allowCredentials is true",
+		},
+		{
+			name: "invalid: cors with malformed origin",
+			route: &CustomHTTPRoute{
+				Spec: CustomHTTPRouteSpec{
+					TargetRef: TargetRef{Name: "default"},
+					Hostnames: []string{"example.com"},
+					Rules: []Rule{
+						{
+							Matches: []PathMatch{{Path: "/api"}},
+							Actions: []Action{{
+								Type: ActionTypeCORS,
+								CORS: &CORSConfig{AllowOrigins: []string{"example.com"}},
+							}},
+							BackendRefs: []BackendRef{{Name: "api", Namespace: "default", Port: 8080}},
+						},
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: "not a valid origin",
+		},
+		{
+			name: "invalid: cors origin with path is rejected",
+			route: &CustomHTTPRoute{
+				Spec: CustomHTTPRouteSpec{
+					TargetRef: TargetRef{Name: "default"},
+					Hostnames: []string{"example.com"},
+					Rules: []Rule{
+						{
+							Matches: []PathMatch{{Path: "/api"}},
+							Actions: []Action{{
+								Type: ActionTypeCORS,
+								CORS: &CORSConfig{AllowOrigins: []string{"https://app.example.com/foo"}},
+							}},
+							BackendRefs: []BackendRef{{Name: "api", Namespace: "default", Port: 8080}},
+						},
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: "not a valid origin",
+		},
+		{
 			name: "valid: multiple actions with redirect",
 			route: &CustomHTTPRoute{
 				Spec: CustomHTTPRouteSpec{
@@ -586,3 +818,5 @@ func TestHasRedirectAction(t *testing.T) {
 		})
 	}
 }
+
+func int32Ptr(v int32) *int32 { return &v }
