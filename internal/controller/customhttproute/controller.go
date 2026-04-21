@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	crv1alpha1 "github.com/freepik-company/customrouter/api/v1alpha1"
 	"github.com/freepik-company/customrouter/internal/controller"
@@ -53,6 +54,7 @@ type CustomHTTPRouteReconciler struct {
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 // +kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -171,6 +173,7 @@ func (r *CustomHTTPRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&crv1alpha1.CustomHTTPRoute{}).
 		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(r.findRoutesForService)).
+		Watches(&gatewayv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(r.findRoutesForHTTPRoute)).
 		WithOptions(ctrlcontroller.Options{MaxConcurrentReconciles: maxConcurrent}).
 		Named("customhttproute").
 		Complete(r)
@@ -212,4 +215,44 @@ func routeReferencesService(route *crv1alpha1.CustomHTTPRoute, svcName, svcNames
 		}
 	}
 	return false
+}
+
+// findRoutesForHTTPRoute enqueues CustomHTTPRoutes whose catchAllRoute covers a hostname
+// that the given HTTPRoute declares. A HTTPRoute create/update/delete can flip whether
+// the catchall EnvoyFilter must ADD a new virtual host or inject into an existing one,
+// so those CustomHTTPRoutes need re-reconciliation.
+func (r *CustomHTTPRouteReconciler) findRoutesForHTTPRoute(ctx context.Context, obj client.Object) []reconcile.Request {
+	hr, ok := obj.(*gatewayv1.HTTPRoute)
+	if !ok || len(hr.Spec.Hostnames) == 0 {
+		return nil
+	}
+	hostSet := make(map[string]struct{}, len(hr.Spec.Hostnames))
+	for _, h := range hr.Spec.Hostnames {
+		hostSet[string(h)] = struct{}{}
+	}
+
+	routeList := &crv1alpha1.CustomHTTPRouteList{}
+	if err := r.List(ctx, routeList); err != nil {
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for i := range routeList.Items {
+		route := &routeList.Items[i]
+		if route.Spec.CatchAllRoute == nil {
+			continue
+		}
+		for _, h := range route.Spec.Hostnames {
+			if _, match := hostSet[h]; match {
+				requests = append(requests, reconcile.Request{
+					NamespacedName: types.NamespacedName{
+						Name:      route.Name,
+						Namespace: route.Namespace,
+					},
+				})
+				break
+			}
+		}
+	}
+	return requests
 }

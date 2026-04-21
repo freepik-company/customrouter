@@ -22,6 +22,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/freepik-company/customrouter/api/v1alpha1"
 	ef "github.com/freepik-company/customrouter/internal/controller/envoyfilter"
@@ -51,6 +52,11 @@ func (r *CustomHTTPRouteReconciler) reconcileCatchAllFromRoutes(
 		return nil
 	}
 
+	httpRouteList := &gatewayv1.HTTPRouteList{}
+	if err := r.List(ctx, httpRouteList); err != nil {
+		return fmt.Errorf("failed to list HTTPRoutes: %w", err)
+	}
+
 	for i := range epaList.Items {
 		epa := &epaList.Items[i]
 
@@ -67,7 +73,13 @@ func (r *CustomHTTPRouteReconciler) reconcileCatchAllFromRoutes(
 			continue
 		}
 
-		envoyFilter, err := ef.BuildCatchAllEnvoyFilter(epa, merged)
+		hostnames := make([]string, 0, len(merged))
+		for _, e := range merged {
+			hostnames = append(hostnames, e.Hostname)
+		}
+		hostnamesWithHTTPRoute := ef.CollectHostnamesWithHTTPRoute(httpRouteList, hostnames)
+
+		envoyFilter, err := ef.BuildCatchAllEnvoyFilter(epa, merged, hostnamesWithHTTPRoute)
 		if err != nil {
 			return fmt.Errorf("failed to build catch-all EnvoyFilter for EPA %s/%s: %w",
 				epa.Namespace, epa.Name, err)
