@@ -60,7 +60,7 @@ type MirrorEntry struct {
 // The resulting slice is sorted deterministically so the generated EnvoyFilter
 // is stable across reconciles (no spurious updates).
 func CollectMirrorEntries(routeList *v1alpha1.CustomHTTPRouteList) []MirrorEntry {
-	var entries []MirrorEntry
+	entries := make([]MirrorEntry, 0, len(routeList.Items))
 
 	for i := range routeList.Items {
 		cr := &routeList.Items[i]

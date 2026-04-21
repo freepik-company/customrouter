@@ -63,7 +63,7 @@ type CORSEntry struct {
 // output is sorted deterministically so repeated reconciles produce identical
 // EnvoyFilters.
 func CollectCORSEntries(routeList *v1alpha1.CustomHTTPRouteList) []CORSEntry {
-	var entries []CORSEntry
+	entries := make([]CORSEntry, 0, len(routeList.Items))
 
 	for i := range routeList.Items {
 		cr := &routeList.Items[i]

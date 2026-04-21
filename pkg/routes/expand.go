@@ -318,7 +318,7 @@ func convertActions(apiActions []v1alpha1.Action) []RouteAction {
 // the controller can render the correct Istio cluster name when emitting
 // the mirror EnvoyFilter.
 func extractMirrors(apiActions []v1alpha1.Action) []RouteMirror {
-	var mirrors []RouteMirror
+	mirrors := make([]RouteMirror, 0, len(apiActions))
 	for _, a := range apiActions {
 		if a.Type != v1alpha1.ActionTypeRequestMirror || a.Mirror == nil {
 			continue
