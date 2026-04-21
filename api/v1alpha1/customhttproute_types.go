@@ -83,6 +83,9 @@ const (
 
 	// ConditionTypeConfigMapSynced indicates whether the ConfigMap was successfully generated
 	ConditionTypeConfigMapSynced = "ConfigMapSynced"
+
+	// ConditionTypeCatchAllProgrammed indicates whether the route's catchAllRoute is applied to the dataplane
+	ConditionTypeCatchAllProgrammed = "CatchAllProgrammed"
 )
 
 // PathPrefixes defines path prefixes configuration (e.g., for languages)
@@ -405,6 +408,7 @@ type CustomHTTPRouteStatus struct {
 // +kubebuilder:printcolumn:name="Target",type="string",JSONPath=".spec.targetRef.name",description="Target external processor"
 // +kubebuilder:printcolumn:name="Reconciled",type="string",JSONPath=".status.conditions[?(@.type=='Reconciled')].status",description="Whether the manifest was reconciled"
 // +kubebuilder:printcolumn:name="ConfigMapSynced",type="string",JSONPath=".status.conditions[?(@.type=='ConfigMapSynced')].status",description="Whether the ConfigMap was synced"
+// +kubebuilder:printcolumn:name="CatchAll",type="string",JSONPath=".status.conditions[?(@.type=='CatchAllProgrammed')].reason",description="Whether the route's catchAllRoute is applied to the dataplane"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // CustomHTTPRoute is the Schema for the customhttproutes API

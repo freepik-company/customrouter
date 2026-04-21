@@ -17,11 +17,15 @@ limitations under the License.
 package customhttproute
 
 import (
+	"context"
+	"fmt"
+
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/freepik-company/customrouter/api/v1alpha1"
 	"github.com/freepik-company/customrouter/internal/controller"
+	ef "github.com/freepik-company/customrouter/internal/controller/envoyfilter"
 )
 
 // UpdateConditionReconciled sets the Reconciled condition to True
@@ -74,4 +78,63 @@ func (r *CustomHTTPRouteReconciler) UpdateConditionConfigMapFailed(object *v1alp
 		Reason:             controller.ConditionReasonConfigMapError,
 		Message:            msg,
 	})
+}
+
+// UpdateConditionCatchAllProgrammed sets the CatchAllProgrammed condition from the given evaluation result.
+func (r *CustomHTTPRouteReconciler) UpdateConditionCatchAllProgrammed(
+	object *v1alpha1.CustomHTTPRoute,
+	status ef.CatchAllProgrammedStatus,
+) {
+	condStatus := metav1.ConditionFalse
+	if status.Programmed {
+		condStatus = metav1.ConditionTrue
+	}
+	meta.SetStatusCondition(&object.Status.Conditions, metav1.Condition{
+		Type:               v1alpha1.ConditionTypeCatchAllProgrammed,
+		Status:             condStatus,
+		ObservedGeneration: object.Generation,
+		Reason:             status.Reason,
+		Message:            catchAllMessageFor(status.Reason),
+	})
+}
+
+// ComputeCatchAllProgrammedStatus resolves the CatchAllProgrammed state for a route by listing
+// the routes and EPAs needed to decide dedup and overrides. Returns NotConfigured without
+// any List call when the spec has no catchAllRoute.
+func (r *CustomHTTPRouteReconciler) ComputeCatchAllProgrammedStatus(
+	ctx context.Context,
+	route *v1alpha1.CustomHTTPRoute,
+) (ef.CatchAllProgrammedStatus, error) {
+	if route.Spec.CatchAllRoute == nil {
+		return ef.CatchAllProgrammedStatus{Reason: controller.ConditionReasonCatchAllNotConfigured}, nil
+	}
+
+	routeList := &v1alpha1.CustomHTTPRouteList{}
+	if err := r.List(ctx, routeList); err != nil {
+		return ef.CatchAllProgrammedStatus{}, fmt.Errorf("failed to list CustomHTTPRoutes: %w", err)
+	}
+
+	epaList := &v1alpha1.ExternalProcessorAttachmentList{}
+	if err := r.List(ctx, epaList); err != nil {
+		return ef.CatchAllProgrammedStatus{}, fmt.Errorf("failed to list ExternalProcessorAttachments: %w", err)
+	}
+
+	return ef.EvaluateCatchAllProgrammed(route, routeList, epaList), nil
+}
+
+func catchAllMessageFor(reason string) string {
+	switch reason {
+	case controller.ConditionReasonCatchAllProgrammed:
+		return controller.ConditionReasonCatchAllProgrammedMessage
+	case controller.ConditionReasonCatchAllNotConfigured:
+		return controller.ConditionReasonCatchAllNotConfiguredMessage
+	case controller.ConditionReasonCatchAllNoEPA:
+		return controller.ConditionReasonCatchAllNoEPAMessage
+	case controller.ConditionReasonCatchAllOverriddenByEPA:
+		return controller.ConditionReasonCatchAllOverriddenByEPAMessage
+	case controller.ConditionReasonCatchAllOverriddenByRoute:
+		return controller.ConditionReasonCatchAllOverriddenByRouteMessage
+	default:
+		return ""
+	}
 }
