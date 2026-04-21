@@ -164,9 +164,11 @@ func (p *Processor) processRequestHeaders(headers *extprocv3.HttpHeaders, stream
 	reqCtx.matchedType = route.Type
 	reqCtx.matchedPriority = route.Priority
 
-	// Stash the matched route so processResponseHeaders can apply response-side
-	// header mutations when Envoy reports back.
+	// Stash the matched route and the request-time variable context so
+	// processResponseHeaders can apply response-side header mutations and
+	// expand ${...} placeholders when Envoy reports back.
 	streamCtx.matchedRoute = route
+	streamCtx.vars = vars
 
 	p.logger.Debug("route matched",
 		zap.String("originalHost", reqCtx.authority),
@@ -464,7 +466,7 @@ func (p *Processor) processResponseHeaders(streamCtx *streamContext) *extprocv3.
 			setHeaders = append(setHeaders, &corev3.HeaderValueOption{
 				Header: &corev3.HeaderValue{
 					Key:      action.HeaderName,
-					RawValue: []byte(action.Value),
+					RawValue: []byte(substituteVariables(action.Value, streamCtx.vars)),
 				},
 				AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 			})
@@ -475,7 +477,7 @@ func (p *Processor) processResponseHeaders(streamCtx *streamContext) *extprocv3.
 			setHeaders = append(setHeaders, &corev3.HeaderValueOption{
 				Header: &corev3.HeaderValue{
 					Key:      action.HeaderName,
-					RawValue: []byte(action.Value),
+					RawValue: []byte(substituteVariables(action.Value, streamCtx.vars)),
 				},
 				AppendAction: corev3.HeaderValueOption_APPEND_IF_EXISTS_OR_ADD,
 			})

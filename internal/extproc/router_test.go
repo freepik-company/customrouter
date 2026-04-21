@@ -401,6 +401,31 @@ func TestProcessResponseHeaders(t *testing.T) {
 			t.Fatalf("expected only X-Response-Side in response mutation, got %+v", set)
 		}
 	})
+
+	t.Run("response-header values expand ${...} variables", func(t *testing.T) {
+		resp := p.processResponseHeaders(&streamContext{
+			matchedRoute: &routes.Route{
+				Actions: []routes.RouteAction{
+					{Type: routes.ActionTypeResponseHeaderSet, HeaderName: "X-Request-ID", Value: "${request_id}"},
+					{Type: routes.ActionTypeResponseHeaderAdd, HeaderName: "X-Original-Path", Value: "${path}"},
+				},
+			},
+			vars: &requestVars{
+				requestID: "req-42",
+				path:      "/orig",
+			},
+		})
+		set := resp.GetResponseHeaders().GetResponse().GetHeaderMutation().SetHeaders
+		if len(set) != 2 {
+			t.Fatalf("expected 2 set headers, got %d", len(set))
+		}
+		if got := string(set[0].GetHeader().GetRawValue()); got != "req-42" {
+			t.Errorf("expected substituted request_id, got %q", got)
+		}
+		if got := string(set[1].GetHeader().GetRawValue()); got != "/orig" {
+			t.Errorf("expected substituted path, got %q", got)
+		}
+	})
 }
 
 func TestSubstituteVariables(t *testing.T) {

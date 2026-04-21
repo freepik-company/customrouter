@@ -74,6 +74,12 @@ type streamContext struct {
 	// matchedRoute is the route selected during processRequestHeaders, or nil
 	// if no route matched. Read-only after the request phase completes.
 	matchedRoute *routes.Route
+
+	// vars carries the request-time variable context (path, host, method, …)
+	// so response-side header actions can expand ${...} placeholders using
+	// the same source of truth as request-side actions. Read-only after the
+	// request phase completes.
+	vars *requestVars
 }
 
 // Process handles the bidirectional stream from Envoy
