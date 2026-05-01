@@ -2015,8 +2015,8 @@ func TestExpandRoutesWithExternalNames(t *testing.T) {
 func TestSortRoutesSpecificityTiebreakers(t *testing.T) {
 	t.Run("method constrained routes sort before unconstrained routes", func(t *testing.T) {
 		routes := []Route{
-			{Path: "/checkout", Type: RouteTypePrefix, Priority: 1000},
-			{Path: "/checkout", Type: RouteTypePrefix, Priority: 1000, Method: "GET"},
+			{Path: "/example", Type: RouteTypePrefix, Priority: 1000},
+			{Path: "/example", Type: RouteTypePrefix, Priority: 1000, Method: "GET"},
 		}
 
 		SortRoutes(routes)
@@ -2029,14 +2029,14 @@ func TestSortRoutesSpecificityTiebreakers(t *testing.T) {
 	t.Run("routes with more header matches sort first", func(t *testing.T) {
 		routes := []Route{
 			{
-				Path:     "/checkout",
+				Path:     "/example",
 				Type:     RouteTypePrefix,
 				Priority: 1000,
 				Headers: []RouteHeaderMatch{
 					{Name: "force", Value: "staging"},
 				},
 			},
-			{Path: "/checkout", Type: RouteTypePrefix, Priority: 1000},
+			{Path: "/example", Type: RouteTypePrefix, Priority: 1000},
 		}
 
 		SortRoutes(routes)
@@ -2049,14 +2049,14 @@ func TestSortRoutesSpecificityTiebreakers(t *testing.T) {
 	t.Run("routes with more query param matches sort first", func(t *testing.T) {
 		routes := []Route{
 			{
-				Path:     "/checkout",
+				Path:     "/example",
 				Type:     RouteTypePrefix,
 				Priority: 1000,
 				QueryParams: []RouteQueryParamMatch{
 					{Name: "env", Value: "staging"},
 				},
 			},
-			{Path: "/checkout", Type: RouteTypePrefix, Priority: 1000},
+			{Path: "/example", Type: RouteTypePrefix, Priority: 1000},
 		}
 
 		SortRoutes(routes)
@@ -2071,13 +2071,13 @@ func TestFindRoutePrefersMoreSpecificMatches(t *testing.T) {
 	t.Run("header-specific route wins over generic route", func(t *testing.T) {
 		routes := []Route{
 			{
-				Path:     "/checkout",
+				Path:     "/example",
 				Type:     RouteTypePrefix,
 				Priority: 1000,
 				Backend:  "stable.default.svc.cluster.local:80",
 			},
 			{
-				Path:     "/checkout",
+				Path:     "/example",
 				Type:     RouteTypePrefix,
 				Priority: 1000,
 				Backend:  "staging.default.svc.cluster.local:80",
@@ -2098,7 +2098,7 @@ func TestFindRoutePrefersMoreSpecificMatches(t *testing.T) {
 		}
 
 		route := loader.FindRoute("example.com", RequestMatch{
-			Path:    "/checkout",
+			Path:    "/example",
 			Headers: map[string]string{"force": "staging"},
 		})
 		if route == nil {
@@ -2112,13 +2112,13 @@ func TestFindRoutePrefersMoreSpecificMatches(t *testing.T) {
 	t.Run("method-specific route wins over generic route", func(t *testing.T) {
 		routes := []Route{
 			{
-				Path:     "/checkout",
+				Path:     "/example",
 				Type:     RouteTypePrefix,
 				Priority: 1000,
 				Backend:  "stable.default.svc.cluster.local:80",
 			},
 			{
-				Path:     "/checkout",
+				Path:     "/example",
 				Type:     RouteTypePrefix,
 				Priority: 1000,
 				Backend:  "get.default.svc.cluster.local:80",
@@ -2137,7 +2137,7 @@ func TestFindRoutePrefersMoreSpecificMatches(t *testing.T) {
 		}
 
 		route := loader.FindRoute("example.com", RequestMatch{
-			Path:   "/checkout",
+			Path:   "/example",
 			Method: "GET",
 		})
 		if route == nil {
@@ -2151,13 +2151,13 @@ func TestFindRoutePrefersMoreSpecificMatches(t *testing.T) {
 	t.Run("query-specific route wins over generic route", func(t *testing.T) {
 		routes := []Route{
 			{
-				Path:     "/checkout",
+				Path:     "/example",
 				Type:     RouteTypePrefix,
 				Priority: 1000,
 				Backend:  "stable.default.svc.cluster.local:80",
 			},
 			{
-				Path:     "/checkout",
+				Path:     "/example",
 				Type:     RouteTypePrefix,
 				Priority: 1000,
 				Backend:  "staging.default.svc.cluster.local:80",
@@ -2178,7 +2178,7 @@ func TestFindRoutePrefersMoreSpecificMatches(t *testing.T) {
 		}
 
 		route := loader.FindRoute("example.com", RequestMatch{
-			Path:        "/checkout",
+			Path:        "/example",
 			QueryParams: map[string]string{"env": "staging"},
 		})
 		if route == nil {
