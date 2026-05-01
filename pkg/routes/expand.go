@@ -526,6 +526,9 @@ func SortRoutes(routes []Route) {
 	})
 }
 
+// routeMethodSpecificity reports whether a route restricts the HTTP method.
+// Returns 1 when the route requires a specific method, 0 otherwise. Used as a
+// tie-breaker in SortRoutes so method-constrained routes win over generic ones.
 func routeMethodSpecificity(route Route) int {
 	if route.Method == "" {
 		return 0
