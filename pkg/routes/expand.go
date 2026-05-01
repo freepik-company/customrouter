@@ -484,9 +484,12 @@ func buildBackendString(refs []v1alpha1.BackendRef, externalNames map[string]str
 // typePriority defines the sort precedence of route types: exact > regex > prefix.
 var typePriority = map[string]int{RouteTypeExact: 0, RouteTypeRegex: 1, RouteTypePrefix: 2}
 
-// SortRoutes sorts routes by priority (descending), then by type, then by path length
+// SortRoutes sorts routes by priority (descending), then by type, then by path
+// length. When those are tied, more specific request match constraints win:
+// method-constrained routes come before unconstrained routes, followed by
+// routes with more header matches and then more query param matches.
 func SortRoutes(routes []Route) {
-	sort.Slice(routes, func(i, j int) bool {
+	sort.SliceStable(routes, func(i, j int) bool {
 		// First by priority descending (higher priority first)
 		if routes[i].Priority != routes[j].Priority {
 			return routes[i].Priority > routes[j].Priority
@@ -499,8 +502,35 @@ func SortRoutes(routes []Route) {
 		}
 
 		// Then by path length descending (longer paths first)
-		return len(routes[i].Path) > len(routes[j].Path)
+		if len(routes[i].Path) != len(routes[j].Path) {
+			return len(routes[i].Path) > len(routes[j].Path)
+		}
+
+		// Then by method specificity: constrained routes before unconstrained routes
+		mi, mj := routeMethodSpecificity(routes[i]), routeMethodSpecificity(routes[j])
+		if mi != mj {
+			return mi > mj
+		}
+
+		// Then by header specificity: more header matches first
+		if len(routes[i].Headers) != len(routes[j].Headers) {
+			return len(routes[i].Headers) > len(routes[j].Headers)
+		}
+
+		// Then by query param specificity: more query param matches first
+		if len(routes[i].QueryParams) != len(routes[j].QueryParams) {
+			return len(routes[i].QueryParams) > len(routes[j].QueryParams)
+		}
+
+		return false
 	})
+}
+
+func routeMethodSpecificity(route Route) int {
+	if route.Method == "" {
+		return 0
+	}
+	return 1
 }
 
 // MergeRoutesConfig merges routes from multiple CustomHTTPRoutes into a single config

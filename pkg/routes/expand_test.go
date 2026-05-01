@@ -2011,3 +2011,181 @@ func TestExpandRoutesWithExternalNames(t *testing.T) {
 		t.Errorf("expected backend %q, got %q", expected, routes[0].Backend)
 	}
 }
+
+func TestSortRoutesSpecificityTiebreakers(t *testing.T) {
+	t.Run("method constrained routes sort before unconstrained routes", func(t *testing.T) {
+		routes := []Route{
+			{Path: "/checkout", Type: RouteTypePrefix, Priority: 1000},
+			{Path: "/checkout", Type: RouteTypePrefix, Priority: 1000, Method: "GET"},
+		}
+
+		SortRoutes(routes)
+
+		if routes[0].Method != "GET" {
+			t.Fatalf("expected method-constrained route first, got %+v", routes[0])
+		}
+	})
+
+	t.Run("routes with more header matches sort first", func(t *testing.T) {
+		routes := []Route{
+			{
+				Path:     "/checkout",
+				Type:     RouteTypePrefix,
+				Priority: 1000,
+				Headers: []RouteHeaderMatch{
+					{Name: "force", Value: "staging"},
+				},
+			},
+			{Path: "/checkout", Type: RouteTypePrefix, Priority: 1000},
+		}
+
+		SortRoutes(routes)
+
+		if len(routes[0].Headers) != 1 {
+			t.Fatalf("expected header-constrained route first, got %+v", routes[0])
+		}
+	})
+
+	t.Run("routes with more query param matches sort first", func(t *testing.T) {
+		routes := []Route{
+			{
+				Path:     "/checkout",
+				Type:     RouteTypePrefix,
+				Priority: 1000,
+				QueryParams: []RouteQueryParamMatch{
+					{Name: "env", Value: "staging"},
+				},
+			},
+			{Path: "/checkout", Type: RouteTypePrefix, Priority: 1000},
+		}
+
+		SortRoutes(routes)
+
+		if len(routes[0].QueryParams) != 1 {
+			t.Fatalf("expected query-constrained route first, got %+v", routes[0])
+		}
+	})
+}
+
+func TestFindRoutePrefersMoreSpecificMatches(t *testing.T) {
+	t.Run("header-specific route wins over generic route", func(t *testing.T) {
+		routes := []Route{
+			{
+				Path:     "/checkout",
+				Type:     RouteTypePrefix,
+				Priority: 1000,
+				Backend:  "stable.default.svc.cluster.local:80",
+			},
+			{
+				Path:     "/checkout",
+				Type:     RouteTypePrefix,
+				Priority: 1000,
+				Backend:  "staging.default.svc.cluster.local:80",
+				Headers: []RouteHeaderMatch{
+					{Name: "force", Value: "staging"},
+				},
+			},
+		}
+		SortRoutes(routes)
+
+		loader := &Loader{
+			config: &RoutesConfig{
+				Version: 1,
+				Hosts: map[string][]Route{
+					"example.com": routes,
+				},
+			},
+		}
+
+		route := loader.FindRoute("example.com", RequestMatch{
+			Path:    "/checkout",
+			Headers: map[string]string{"force": "staging"},
+		})
+		if route == nil {
+			t.Fatal("expected matching route")
+		}
+		if route.Backend != "staging.default.svc.cluster.local:80" {
+			t.Fatalf("expected staging backend, got %q", route.Backend)
+		}
+	})
+
+	t.Run("method-specific route wins over generic route", func(t *testing.T) {
+		routes := []Route{
+			{
+				Path:     "/checkout",
+				Type:     RouteTypePrefix,
+				Priority: 1000,
+				Backend:  "stable.default.svc.cluster.local:80",
+			},
+			{
+				Path:     "/checkout",
+				Type:     RouteTypePrefix,
+				Priority: 1000,
+				Backend:  "get.default.svc.cluster.local:80",
+				Method:   "GET",
+			},
+		}
+		SortRoutes(routes)
+
+		loader := &Loader{
+			config: &RoutesConfig{
+				Version: 1,
+				Hosts: map[string][]Route{
+					"example.com": routes,
+				},
+			},
+		}
+
+		route := loader.FindRoute("example.com", RequestMatch{
+			Path:   "/checkout",
+			Method: "GET",
+		})
+		if route == nil {
+			t.Fatal("expected matching route")
+		}
+		if route.Backend != "get.default.svc.cluster.local:80" {
+			t.Fatalf("expected GET backend, got %q", route.Backend)
+		}
+	})
+
+	t.Run("query-specific route wins over generic route", func(t *testing.T) {
+		routes := []Route{
+			{
+				Path:     "/checkout",
+				Type:     RouteTypePrefix,
+				Priority: 1000,
+				Backend:  "stable.default.svc.cluster.local:80",
+			},
+			{
+				Path:     "/checkout",
+				Type:     RouteTypePrefix,
+				Priority: 1000,
+				Backend:  "staging.default.svc.cluster.local:80",
+				QueryParams: []RouteQueryParamMatch{
+					{Name: "env", Value: "staging"},
+				},
+			},
+		}
+		SortRoutes(routes)
+
+		loader := &Loader{
+			config: &RoutesConfig{
+				Version: 1,
+				Hosts: map[string][]Route{
+					"example.com": routes,
+				},
+			},
+		}
+
+		route := loader.FindRoute("example.com", RequestMatch{
+			Path:        "/checkout",
+			QueryParams: map[string]string{"env": "staging"},
+		})
+		if route == nil {
+			t.Fatal("expected matching route")
+		}
+		if route.Backend != "staging.default.svc.cluster.local:80" {
+			t.Fatalf("expected staging backend, got %q", route.Backend)
+		}
+	})
+}
