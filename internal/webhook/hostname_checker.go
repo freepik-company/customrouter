@@ -42,7 +42,8 @@ type HostnameChecker struct {
 // CheckCustomHTTPRouteHostnames checks whether any hostname in the given CustomHTTPRoute
 // conflicts with another CustomHTTPRoute (same targetRef) or any HTTPRoute in the cluster.
 // A conflict requires overlapping hostnames AND overlapping route matches
-// (path + method + headers + query parameters). It excludes self by UID to allow updates.
+// (same path with compatible method/headers/query parameters and no specificity
+// tie-break — see matchesOverlap). It excludes self by UID to allow updates.
 //
 // When a conflicting route match has AllowOverlap=true and the conflict is with another
 // CustomHTTPRoute, the overlap is reported as a warning instead of an error.
@@ -116,7 +117,8 @@ func (c *HostnameChecker) CheckCustomHTTPRouteHostnames(ctx context.Context, rou
 // CheckHTTPRouteHostnames checks whether any hostname in the given HTTPRoute
 // conflicts with an existing CustomHTTPRoute.
 // A conflict requires overlapping hostnames AND overlapping route matches
-// (path + method + headers + query parameters).
+// (same path with compatible method/headers/query parameters and no
+// specificity tie-break — see matchesOverlap).
 func (c *HostnameChecker) CheckHTTPRouteHostnames(ctx context.Context, httpRoute *gatewayv1.HTTPRoute) error {
 	hrHostnames := gatewayHostnames(httpRoute)
 	if len(hrHostnames) == 0 {
@@ -211,10 +213,8 @@ type seenEntry struct {
 // extractCustomRouteMatches returns all unique route matches from a CustomHTTPRoute.
 // It expands paths according to pathPrefixes policy (Required/Optional/Disabled)
 // so that conflict detection compares the actual expanded paths, not raw templates.
-// CustomHTTPRoute does not yet support header or query parameter matching, so
-// those fields are always empty (which means "matches all" during comparison).
-// When two rules in the same CRD produce the same expanded path+method but
-// differ in AllowOverlap, the conservative value (false) wins.
+// When two rules in the same CRD produce the same expanded path+method+headers+
+// queryParams but differ in AllowOverlap, the conservative value (false) wins.
 func extractCustomRouteMatches(route *customrouterv1alpha1.CustomHTTPRoute) []routeMatch {
 	seen := make(map[string]seenEntry)
 	var matches []routeMatch
@@ -441,12 +441,41 @@ type overlapResult struct {
 	Errors   []string
 }
 
-// matchesOverlap returns true if two route matches overlap (could match the same HTTP request).
+// matchesOverlap returns true when two route matches conflict, i.e. they could
+// match the same HTTP request AND no specificity tie-break separates them.
+// When one side is strictly more specific in any of the dimensions that
+// SortRoutes uses to break ties (method presence, header count, query param
+// count), the more specific rule wins for its narrower request set and the
+// less specific rule keeps the remainder — so they coexist and are not flagged
+// as a conflict. This mirrors standard HTTPRoute precedence semantics.
 func matchesOverlap(a, b routeMatch) bool {
-	return a.PathType == b.PathType && a.Path == b.Path &&
-		methodsCompatible(a.Method, b.Method) &&
-		headersCompatible(a.Headers, b.Headers) &&
-		queryParamsCompatible(a.QueryParams, b.QueryParams)
+	if a.PathType != b.PathType || a.Path != b.Path {
+		return false
+	}
+	if !methodsCompatible(a.Method, b.Method) ||
+		!headersCompatible(a.Headers, b.Headers) ||
+		!queryParamsCompatible(a.QueryParams, b.QueryParams) {
+		return false
+	}
+	return !specificityResolvable(a, b)
+}
+
+// specificityResolvable returns true when SortRoutes would place one match
+// strictly before the other based on method/header/query param specificity.
+// It mirrors the tie-break dimensions of SortRoutes (pkg/routes/expand.go) for
+// same-path routes: method-constrained beats unconstrained, more headers beats
+// fewer, more query params beats fewer.
+func specificityResolvable(a, b routeMatch) bool {
+	if (a.Method != "") != (b.Method != "") {
+		return true
+	}
+	if len(a.Headers) != len(b.Headers) {
+		return true
+	}
+	if len(a.QueryParams) != len(b.QueryParams) {
+		return true
+	}
+	return false
 }
 
 // classifyOverlaps checks newMatches against existingMatches for overlaps.
@@ -478,9 +507,10 @@ func classifyOverlaps(newMatches, existingMatches []routeMatch, hostConflicts []
 }
 
 // findRouteMatchOverlap returns matches from a that overlap with matches in b.
-// Two matches overlap when they have the same path type and path value,
-// compatible methods, compatible headers, and compatible query parameters
-// (i.e. they could match the same HTTP request).
+// Overlap is defined by matchesOverlap: same path type and path value with
+// compatible method/headers/query parameters AND no specificity tie-break
+// available. Subset relationships (one side strictly more specific than the
+// other) are resolved by SortRoutes ordering and do not count as overlap.
 func findRouteMatchOverlap(a, b []routeMatch) []routeMatch {
 	var overlaps []routeMatch
 	for _, ma := range a {
