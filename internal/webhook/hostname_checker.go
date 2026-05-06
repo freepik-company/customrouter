@@ -42,7 +42,8 @@ type HostnameChecker struct {
 // CheckCustomHTTPRouteHostnames checks whether any hostname in the given CustomHTTPRoute
 // conflicts with another CustomHTTPRoute (same targetRef) or any HTTPRoute in the cluster.
 // A conflict requires overlapping hostnames AND overlapping route matches
-// (path + method + headers + query parameters). It excludes self by UID to allow updates.
+// (same path with compatible method/headers/query parameters and no specificity
+// tie-break — see matchesOverlap). It excludes self by UID to allow updates.
 //
 // When a conflicting route match has AllowOverlap=true and the conflict is with another
 // CustomHTTPRoute, the overlap is reported as a warning instead of an error.
@@ -102,7 +103,7 @@ func (c *HostnameChecker) CheckCustomHTTPRouteHostnames(ctx context.Context, rou
 			continue
 		}
 		hrMatches := extractHTTPRouteMatches(hr)
-		if matchConflicts := findRouteMatchOverlap(routeMatches, hrMatches); len(matchConflicts) > 0 {
+		if matchConflicts := findCrossKindRouteMatchOverlap(routeMatches, hrMatches); len(matchConflicts) > 0 {
 			return nil, fmt.Errorf(
 				"route conflict on hostnames %v: %v already defined in HTTPRoute %s/%s",
 				hostConflicts, matchConflicts, hr.Namespace, hr.Name,
@@ -116,7 +117,8 @@ func (c *HostnameChecker) CheckCustomHTTPRouteHostnames(ctx context.Context, rou
 // CheckHTTPRouteHostnames checks whether any hostname in the given HTTPRoute
 // conflicts with an existing CustomHTTPRoute.
 // A conflict requires overlapping hostnames AND overlapping route matches
-// (path + method + headers + query parameters).
+// (same path with compatible method/headers/query parameters and no
+// specificity tie-break — see matchesOverlap).
 func (c *HostnameChecker) CheckHTTPRouteHostnames(ctx context.Context, httpRoute *gatewayv1.HTTPRoute) error {
 	hrHostnames := gatewayHostnames(httpRoute)
 	if len(hrHostnames) == 0 {
@@ -137,7 +139,7 @@ func (c *HostnameChecker) CheckHTTPRouteHostnames(ctx context.Context, httpRoute
 			continue
 		}
 		crMatches := extractCustomRouteMatches(cr)
-		if matchConflicts := findRouteMatchOverlap(hrMatches, crMatches); len(matchConflicts) > 0 {
+		if matchConflicts := findCrossKindRouteMatchOverlap(hrMatches, crMatches); len(matchConflicts) > 0 {
 			return fmt.Errorf(
 				"route conflict on hostnames %v: %v already defined in CustomHTTPRoute %s",
 				hostConflicts, matchConflicts, formatNamespacedName(cr),
@@ -149,14 +151,18 @@ func (c *HostnameChecker) CheckHTTPRouteHostnames(ctx context.Context, httpRoute
 }
 
 // routeMatch represents a single match criterion within a routing rule.
-// Two routeMatches conflict when they could match the same HTTP request,
-// determined by: path + method + headers + query parameters.
+// Two routeMatches conflict when they could match the same HTTP request and
+// SortRoutes cannot place one strictly before the other; see matchesOverlap.
+// Priority mirrors PathMatch.Priority and is the leading SortRoutes key, so a
+// less specific rule with higher Priority can shadow a more specific one — the
+// conflict check accounts for that.
 type routeMatch struct {
 	PathType     string
 	Path         string
 	Method       string
 	Headers      []headerMatch
 	QueryParams  []queryParamMatch
+	Priority     int32
 	AllowOverlap bool
 }
 
@@ -190,16 +196,23 @@ func (r routeMatch) String() string {
 	return strings.Join(parts, " ")
 }
 
-// headerMatch represents an HTTP header matching criterion.
+// headerMatch represents an HTTP header matching criterion. IsRegex preserves
+// whether the underlying API match used regular expression semantics so that
+// the conflict detector can degrade contradiction checks to "matches all"
+// without dropping the entry from the constraint count (which feeds into
+// specificity comparisons aligned with SortRoutes).
 type headerMatch struct {
-	Name  string
-	Value string
+	Name    string
+	Value   string
+	IsRegex bool
 }
 
-// queryParamMatch represents an HTTP query parameter matching criterion.
+// queryParamMatch represents an HTTP query parameter matching criterion. See
+// headerMatch for the role of IsRegex.
 type queryParamMatch struct {
-	Name  string
-	Value string
+	Name    string
+	Value   string
+	IsRegex bool
 }
 
 // seenEntry tracks the index and allowOverlap status of a previously seen route match.
@@ -211,10 +224,8 @@ type seenEntry struct {
 // extractCustomRouteMatches returns all unique route matches from a CustomHTTPRoute.
 // It expands paths according to pathPrefixes policy (Required/Optional/Disabled)
 // so that conflict detection compares the actual expanded paths, not raw templates.
-// CustomHTTPRoute does not yet support header or query parameter matching, so
-// those fields are always empty (which means "matches all" during comparison).
-// When two rules in the same CRD produce the same expanded path+method but
-// differ in AllowOverlap, the conservative value (false) wins.
+// When two rules in the same CRD produce the same expanded path+method+headers+
+// queryParams but differ in AllowOverlap, the conservative value (false) wins.
 func extractCustomRouteMatches(route *customrouterv1alpha1.CustomHTTPRoute) []routeMatch {
 	seen := make(map[string]seenEntry)
 	var matches []routeMatch
@@ -254,6 +265,7 @@ func extractCustomRouteMatches(route *customrouterv1alpha1.CustomHTTPRoute) []ro
 					Method:       method,
 					Headers:      headerMatches,
 					QueryParams:  queryMatches,
+					Priority:     m.Priority,
 					AllowOverlap: rule.AllowOverlap,
 				})
 			}
@@ -263,22 +275,21 @@ func extractCustomRouteMatches(route *customrouterv1alpha1.CustomHTTPRoute) []ro
 }
 
 // convertCustomHeaderMatches converts CustomHTTPRoute HeaderMatches to the
-// internal headerMatch form used by overlap detection. Only Exact matches are
-// considered narrowing for conflict purposes; regex matches are treated as
-// "matches all" to keep the detector conservative (i.e. they will always be
-// reported as overlapping with any concrete Exact match on the same header).
+// internal headerMatch form used by overlap detection. Regex matches are kept
+// (so the constraint count matches what SortRoutes sees) but flagged as
+// IsRegex; headersCompatible degrades contradiction checks involving them to
+// "matches all" to stay conservative.
 func convertCustomHeaderMatches(in []customrouterv1alpha1.HeaderMatch) []headerMatch {
 	if len(in) == 0 {
 		return nil
 	}
 	out := make([]headerMatch, 0, len(in))
 	for _, h := range in {
-		if h.Type == customrouterv1alpha1.HeaderMatchTypeRegularExpression {
-			// Conservative: regex value cannot be compared for overlap, skip
-			// so the dimension degrades to "match any" in the comparator.
-			continue
-		}
-		out = append(out, headerMatch{Name: h.Name, Value: h.Value})
+		out = append(out, headerMatch{
+			Name:    h.Name,
+			Value:   h.Value,
+			IsRegex: h.Type == customrouterv1alpha1.HeaderMatchTypeRegularExpression,
+		})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
@@ -293,24 +304,30 @@ func headerMatchesKey(hs []headerMatch) string {
 	}
 	parts := make([]string, len(hs))
 	for i, h := range hs {
-		parts[i] = strings.ToLower(h.Name) + "=" + h.Value
+		marker := "="
+		if h.IsRegex {
+			marker = "~"
+		}
+		parts[i] = strings.ToLower(h.Name) + marker + h.Value
 	}
 	return strings.Join(parts, ",")
 }
 
 // convertCustomQueryParamMatches is the query-param analogue of
-// convertCustomHeaderMatches. Regex-typed params are skipped for the same
-// conservatism reason.
+// convertCustomHeaderMatches. Regex-typed params are flagged as IsRegex so
+// queryParamsCompatible can skip contradiction checks for them while keeping
+// the constraint count aligned with SortRoutes.
 func convertCustomQueryParamMatches(in []customrouterv1alpha1.QueryParamMatch) []queryParamMatch {
 	if len(in) == 0 {
 		return nil
 	}
 	out := make([]queryParamMatch, 0, len(in))
 	for _, q := range in {
-		if q.Type == customrouterv1alpha1.QueryParamMatchTypeRegularExpression {
-			continue
-		}
-		out = append(out, queryParamMatch{Name: q.Name, Value: q.Value})
+		out = append(out, queryParamMatch{
+			Name:    q.Name,
+			Value:   q.Value,
+			IsRegex: q.Type == customrouterv1alpha1.QueryParamMatchTypeRegularExpression,
+		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
@@ -323,7 +340,11 @@ func queryParamMatchesKey(qs []queryParamMatch) string {
 	}
 	parts := make([]string, len(qs))
 	for i, q := range qs {
-		parts[i] = q.Name + "=" + q.Value
+		marker := "="
+		if q.IsRegex {
+			marker = "~"
+		}
+		parts[i] = q.Name + marker + q.Value
 	}
 	return strings.Join(parts, ",")
 }
@@ -406,8 +427,9 @@ func extractHTTPRouteMatches(hr *gatewayv1.HTTPRoute) []routeMatch {
 			}
 			for _, h := range m.Headers {
 				rm.Headers = append(rm.Headers, headerMatch{
-					Name:  string(h.Name),
-					Value: h.Value,
+					Name:    string(h.Name),
+					Value:   h.Value,
+					IsRegex: h.Type != nil && *h.Type == gatewayv1.HeaderMatchRegularExpression,
 				})
 			}
 			sort.Slice(rm.Headers, func(i, j int) bool {
@@ -415,8 +437,9 @@ func extractHTTPRouteMatches(hr *gatewayv1.HTTPRoute) []routeMatch {
 			})
 			for _, q := range m.QueryParams {
 				rm.QueryParams = append(rm.QueryParams, queryParamMatch{
-					Name:  string(q.Name),
-					Value: q.Value,
+					Name:    string(q.Name),
+					Value:   q.Value,
+					IsRegex: q.Type != nil && *q.Type == gatewayv1.QueryParamMatchRegularExpression,
 				})
 			}
 			sort.Slice(rm.QueryParams, func(i, j int) bool {
@@ -441,12 +464,139 @@ type overlapResult struct {
 	Errors   []string
 }
 
-// matchesOverlap returns true if two route matches overlap (could match the same HTTP request).
+// matchesOverlap returns true when two same-kind route matches conflict.
+// Two matches conflict when they could match the same HTTP request AND
+// specificityResolvable cannot place one before the other deterministically.
+// Identical constraint sets always conflict; orthogonal sets (each side has
+// constraints the other lacks) coexist because the rules segment requests
+// along different axes — a request can only match both when it carries every
+// constraint from both sets, which is the developers' responsibility to
+// avoid.
+//
+// Use matchesCrossKindOverlap instead for HTTPRoute<->CustomHTTPRoute checks:
+// those routes are not ordered together by SortRoutes (gateway-api native
+// routing vs ExtProc), so the specificity tie-break does not apply.
 func matchesOverlap(a, b routeMatch) bool {
-	return a.PathType == b.PathType && a.Path == b.Path &&
-		methodsCompatible(a.Method, b.Method) &&
+	if !matchesRequestCompat(a, b) {
+		return false
+	}
+	return !specificityResolvable(a, b)
+}
+
+// matchesCrossKindOverlap returns true when two route matches managed by
+// different routing mechanisms (HTTPRoute and CustomHTTPRoute) could match
+// the same HTTP request. The conservative behavior is intentional: there is
+// no shared sort order between the two kinds, so a more-specific rule on one
+// side is not guaranteed to be evaluated before a less-specific rule on the
+// other.
+func matchesCrossKindOverlap(a, b routeMatch) bool {
+	return matchesRequestCompat(a, b)
+}
+
+// matchesRequestCompat returns true when two route matches have the same path
+// and their method/header/query parameter constraints are compatible — i.e.
+// at least one HTTP request could satisfy both sets simultaneously.
+func matchesRequestCompat(a, b routeMatch) bool {
+	if a.PathType != b.PathType || a.Path != b.Path {
+		return false
+	}
+	return methodsCompatible(a.Method, b.Method) &&
 		headersCompatible(a.Headers, b.Headers) &&
 		queryParamsCompatible(a.QueryParams, b.QueryParams)
+}
+
+// specificityResolvable returns true when SortRoutes (or stable insertion
+// order) can place one match before the other deterministically, so the two
+// matches coexist via standard HTTPRoute precedence. There are three branches:
+//
+//   - Identical constraints: both sides subsume each other. The two rules
+//     match the exact same request set with no discriminator, so they truly
+//     conflict and the function returns false.
+//   - Strict subsumption: one side's constraints subsume the other's. The
+//     more specific rule wins for its narrower request set as long as it is
+//     not shadowed by Priority — its effective Priority must be >= the less
+//     specific rule's, since SortRoutes sorts by Priority descending first.
+//   - Orthogonal constraints: neither side subsumes the other (e.g. different
+//     header names, mixed dimensions). The rules segment requests along
+//     different axes and a request can only match both when it carries every
+//     constraint from both sets, which is the developers' responsibility to
+//     avoid. Stable sort + rule order resolves the rare intersection
+//     deterministically, so coexistence is allowed.
+func specificityResolvable(a, b routeMatch) bool {
+	aSubsumesB := atLeastAsSpecific(a, b)
+	bSubsumesA := atLeastAsSpecific(b, a)
+	switch {
+	case aSubsumesB && bSubsumesA:
+		return false
+	case aSubsumesB:
+		return effectivePriority(a) >= effectivePriority(b)
+	case bSubsumesA:
+		return effectivePriority(b) >= effectivePriority(a)
+	default:
+		return true
+	}
+}
+
+// atLeastAsSpecific returns true when every request matching a also matches b,
+// i.e. b's constraints are a subset of a's. Path is assumed equal by callers.
+// Method: a must constrain at least as much as b (b empty, or both equal).
+// Headers/QueryParams: every entry b requires must also be required by a with
+// the same name, value, and IsRegex flag.
+func atLeastAsSpecific(a, b routeMatch) bool {
+	if b.Method != "" && !strings.EqualFold(a.Method, b.Method) {
+		return false
+	}
+	if !headersSubsume(a.Headers, b.Headers) {
+		return false
+	}
+	return queryParamsSubsume(a.QueryParams, b.QueryParams)
+}
+
+// headersSubsume returns true when every header in sub is also required by
+// sup (case-insensitive name, identical value and IsRegex flag).
+func headersSubsume(sup, sub []headerMatch) bool {
+	for _, s := range sub {
+		found := false
+		for _, p := range sup {
+			if strings.EqualFold(p.Name, s.Name) && p.Value == s.Value && p.IsRegex == s.IsRegex {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// queryParamsSubsume returns true when every query param in sub is also
+// required by sup (case-sensitive name per RFC 3986, identical value and
+// IsRegex flag).
+func queryParamsSubsume(sup, sub []queryParamMatch) bool {
+	for _, s := range sub {
+		found := false
+		for _, p := range sup {
+			if p.Name == s.Name && p.Value == s.Value && p.IsRegex == s.IsRegex {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// effectivePriority returns the Priority value SortRoutes will use, defaulting
+// to v1alpha1.DefaultPriority when unset (the same default the operator
+// applies via getEffectivePriority on the runtime side).
+func effectivePriority(rm routeMatch) int32 {
+	if rm.Priority <= 0 {
+		return customrouterv1alpha1.DefaultPriority
+	}
+	return rm.Priority
 }
 
 // classifyOverlaps checks newMatches against existingMatches for overlaps.
@@ -477,15 +627,26 @@ func classifyOverlaps(newMatches, existingMatches []routeMatch, hostConflicts []
 	return result
 }
 
-// findRouteMatchOverlap returns matches from a that overlap with matches in b.
-// Two matches overlap when they have the same path type and path value,
-// compatible methods, compatible headers, and compatible query parameters
-// (i.e. they could match the same HTTP request).
+// findRouteMatchOverlap returns matches from a that overlap with matches in b
+// using same-kind semantics (matchesOverlap). Subset relationships are
+// resolved by SortRoutes ordering and do not count as overlap.
 func findRouteMatchOverlap(a, b []routeMatch) []routeMatch {
+	return findOverlapWith(a, b, matchesOverlap)
+}
+
+// findCrossKindRouteMatchOverlap returns matches from a that overlap with
+// matches in b using cross-kind semantics (matchesCrossKindOverlap). No
+// specificity tie-break is applied because HTTPRoute and CustomHTTPRoute are
+// not sorted together at runtime.
+func findCrossKindRouteMatchOverlap(a, b []routeMatch) []routeMatch {
+	return findOverlapWith(a, b, matchesCrossKindOverlap)
+}
+
+func findOverlapWith(a, b []routeMatch, overlap func(routeMatch, routeMatch) bool) []routeMatch {
 	var overlaps []routeMatch
 	for _, ma := range a {
 		for _, mb := range b {
-			if matchesOverlap(ma, mb) {
+			if overlap(ma, mb) {
 				overlaps = append(overlaps, ma)
 				break
 			}
@@ -497,17 +658,26 @@ func findRouteMatchOverlap(a, b []routeMatch) []routeMatch {
 // headersCompatible returns true if two sets of header matches could match the
 // same HTTP request. An empty header set matches all requests, so it is always
 // compatible. Two non-empty sets are incompatible only when they require
-// different values for the same header name (case-insensitive).
+// different exact values for the same header name (case-insensitive). Regex
+// matches on either side are conservatively treated as compatible since the
+// expression cannot be evaluated for contradictions here.
 func headersCompatible(a, b []headerMatch) bool {
 	if len(a) == 0 || len(b) == 0 {
 		return true
 	}
-	bMap := make(map[string]string, len(b))
+	bMap := make(map[string]headerMatch, len(b))
 	for _, h := range b {
-		bMap[strings.ToLower(h.Name)] = h.Value
+		bMap[strings.ToLower(h.Name)] = h
 	}
 	for _, h := range a {
-		if bVal, ok := bMap[strings.ToLower(h.Name)]; ok && bVal != h.Value {
+		bh, ok := bMap[strings.ToLower(h.Name)]
+		if !ok {
+			continue
+		}
+		if h.IsRegex || bh.IsRegex {
+			continue
+		}
+		if bh.Value != h.Value {
 			return false
 		}
 	}
@@ -536,17 +706,26 @@ func methodsCompatible(a, b string) bool {
 // queryParamsCompatible returns true if two sets of query parameter matches could
 // match the same HTTP request. An empty set matches all requests, so it is always
 // compatible. Two non-empty sets are incompatible only when they require different
-// values for the same parameter name (case-sensitive per RFC 3986).
+// exact values for the same parameter name (case-sensitive per RFC 3986). Regex
+// matches on either side are conservatively treated as compatible since the
+// expression cannot be evaluated for contradictions here.
 func queryParamsCompatible(a, b []queryParamMatch) bool {
 	if len(a) == 0 || len(b) == 0 {
 		return true
 	}
-	bMap := make(map[string]string, len(b))
+	bMap := make(map[string]queryParamMatch, len(b))
 	for _, q := range b {
-		bMap[q.Name] = q.Value
+		bMap[q.Name] = q
 	}
 	for _, q := range a {
-		if bVal, ok := bMap[q.Name]; ok && bVal != q.Value {
+		bq, ok := bMap[q.Name]
+		if !ok {
+			continue
+		}
+		if q.IsRegex || bq.IsRegex {
+			continue
+		}
+		if bq.Value != q.Value {
 			return false
 		}
 	}
