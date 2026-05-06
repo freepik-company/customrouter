@@ -103,7 +103,7 @@ func (c *HostnameChecker) CheckCustomHTTPRouteHostnames(ctx context.Context, rou
 			continue
 		}
 		hrMatches := extractHTTPRouteMatches(hr)
-		if matchConflicts := findRouteMatchOverlap(routeMatches, hrMatches); len(matchConflicts) > 0 {
+		if matchConflicts := findCrossKindRouteMatchOverlap(routeMatches, hrMatches); len(matchConflicts) > 0 {
 			return nil, fmt.Errorf(
 				"route conflict on hostnames %v: %v already defined in HTTPRoute %s/%s",
 				hostConflicts, matchConflicts, hr.Namespace, hr.Name,
@@ -139,7 +139,7 @@ func (c *HostnameChecker) CheckHTTPRouteHostnames(ctx context.Context, httpRoute
 			continue
 		}
 		crMatches := extractCustomRouteMatches(cr)
-		if matchConflicts := findRouteMatchOverlap(hrMatches, crMatches); len(matchConflicts) > 0 {
+		if matchConflicts := findCrossKindRouteMatchOverlap(hrMatches, crMatches); len(matchConflicts) > 0 {
 			return fmt.Errorf(
 				"route conflict on hostnames %v: %v already defined in CustomHTTPRoute %s",
 				hostConflicts, matchConflicts, formatNamespacedName(cr),
@@ -464,23 +464,44 @@ type overlapResult struct {
 	Errors   []string
 }
 
-// matchesOverlap returns true when two route matches conflict, i.e. they
-// could match the same HTTP request AND no subset relationship plus Priority
-// places one strictly before the other in SortRoutes. The more specific rule
-// wins only if it sorts first; specificityResolvable encodes when that holds.
-// Disjoint-but-non-subset constraint sets (each side has constraints the
-// other lacks) intersect on a shadowed request set and stay flagged as a
-// conflict, even when one side has more constraints in total.
+// matchesOverlap returns true when two same-kind route matches conflict, i.e.
+// they could match the same HTTP request AND no subset relationship plus
+// Priority places one strictly before the other in SortRoutes. The more
+// specific rule wins only if it sorts first; specificityResolvable encodes
+// when that holds. Disjoint-but-non-subset constraint sets (each side has
+// constraints the other lacks) intersect on a shadowed request set and stay
+// flagged as a conflict, even when one side has more constraints in total.
+//
+// Use matchesCrossKindOverlap instead for HTTPRoute<->CustomHTTPRoute checks:
+// those routes are not ordered together by SortRoutes (gateway-api native
+// routing vs ExtProc), so the specificity tie-break does not apply.
 func matchesOverlap(a, b routeMatch) bool {
-	if a.PathType != b.PathType || a.Path != b.Path {
-		return false
-	}
-	if !methodsCompatible(a.Method, b.Method) ||
-		!headersCompatible(a.Headers, b.Headers) ||
-		!queryParamsCompatible(a.QueryParams, b.QueryParams) {
+	if !matchesRequestCompat(a, b) {
 		return false
 	}
 	return !specificityResolvable(a, b)
+}
+
+// matchesCrossKindOverlap returns true when two route matches managed by
+// different routing mechanisms (HTTPRoute and CustomHTTPRoute) could match
+// the same HTTP request. The conservative behavior is intentional: there is
+// no shared sort order between the two kinds, so a more-specific rule on one
+// side is not guaranteed to be evaluated before a less-specific rule on the
+// other.
+func matchesCrossKindOverlap(a, b routeMatch) bool {
+	return matchesRequestCompat(a, b)
+}
+
+// matchesRequestCompat returns true when two route matches have the same path
+// and their method/header/query parameter constraints are compatible — i.e.
+// at least one HTTP request could satisfy both sets simultaneously.
+func matchesRequestCompat(a, b routeMatch) bool {
+	if a.PathType != b.PathType || a.Path != b.Path {
+		return false
+	}
+	return methodsCompatible(a.Method, b.Method) &&
+		headersCompatible(a.Headers, b.Headers) &&
+		queryParamsCompatible(a.QueryParams, b.QueryParams)
 }
 
 // specificityResolvable returns true when one match's constraint set strictly
@@ -614,16 +635,26 @@ func classifyOverlaps(newMatches, existingMatches []routeMatch, hostConflicts []
 	return result
 }
 
-// findRouteMatchOverlap returns matches from a that overlap with matches in b.
-// Overlap is defined by matchesOverlap: same path type and path value with
-// compatible method/headers/query parameters AND no specificity tie-break
-// available. Subset relationships (one side strictly more specific than the
-// other) are resolved by SortRoutes ordering and do not count as overlap.
+// findRouteMatchOverlap returns matches from a that overlap with matches in b
+// using same-kind semantics (matchesOverlap). Subset relationships are
+// resolved by SortRoutes ordering and do not count as overlap.
 func findRouteMatchOverlap(a, b []routeMatch) []routeMatch {
+	return findOverlapWith(a, b, matchesOverlap)
+}
+
+// findCrossKindRouteMatchOverlap returns matches from a that overlap with
+// matches in b using cross-kind semantics (matchesCrossKindOverlap). No
+// specificity tie-break is applied because HTTPRoute and CustomHTTPRoute are
+// not sorted together at runtime.
+func findCrossKindRouteMatchOverlap(a, b []routeMatch) []routeMatch {
+	return findOverlapWith(a, b, matchesCrossKindOverlap)
+}
+
+func findOverlapWith(a, b []routeMatch, overlap func(routeMatch, routeMatch) bool) []routeMatch {
 	var overlaps []routeMatch
 	for _, ma := range a {
 		for _, mb := range b {
-			if matchesOverlap(ma, mb) {
+			if overlap(ma, mb) {
 				overlaps = append(overlaps, ma)
 				break
 			}

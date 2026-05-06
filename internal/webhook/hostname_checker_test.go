@@ -415,7 +415,7 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 			errContains: "route conflict",
 		},
 		{
-			name: "no conflict — HTTPRoute with same path and headers is strictly more specific",
+			name: "conflict — HTTPRoute with same path and headers (cross-kind, no specificity tie-break)",
 			route: newCustomHTTPRouteWithPaths("route-a", "default", "default", []string{"example.com"},
 				[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}},
 			),
@@ -432,7 +432,8 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 					},
 				}),
 			},
-			wantErr: false,
+			wantErr:     true,
+			errContains: "route conflict",
 		},
 		// --- PathPrefixes expansion ---
 		{
@@ -517,7 +518,7 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 		},
 		// --- Method-aware HTTPRoute conflict detection ---
 		{
-			name: "no conflict — HTTPRoute method-restricted matches are strictly more specific",
+			name: "conflict — HTTPRoute with method-restricted matches on same path (cross-kind, no specificity tie-break)",
 			route: newCustomHTTPRouteWithPaths("route-a", "default", "default", []string{"example.com"},
 				[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}},
 			),
@@ -539,11 +540,12 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 					},
 				}),
 			},
-			wantErr: false,
+			wantErr:     true,
+			errContains: "route conflict",
 		},
 		// --- QueryParam-aware HTTPRoute conflict detection ---
 		{
-			name: "no conflict — HTTPRoute with query params is strictly more specific",
+			name: "conflict — HTTPRoute with query params (cross-kind, no specificity tie-break)",
 			route: newCustomHTTPRouteWithPaths("route-a", "default", "default", []string{"example.com"},
 				[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}},
 			),
@@ -560,7 +562,8 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 					},
 				}),
 			},
-			wantErr: false,
+			wantErr:     true,
+			errContains: "route conflict",
 		},
 		// --- allowOverlap tests ---
 		{
@@ -794,7 +797,7 @@ func TestCheckHTTPRouteHostnames(t *testing.T) {
 		},
 		// --- Method-aware conflict detection ---
 		{
-			name: "no conflict — method-restricted HTTPRoute is strictly more specific",
+			name: "conflict — HTTPRoute with method vs CustomHTTPRoute (cross-kind, no specificity tie-break)",
 			httpRoute: newHTTPRouteWithMatches([]string{"example.com"}, []gatewayv1.HTTPRouteMatch{
 				{
 					Path: &gatewayv1.HTTPPathMatch{
@@ -809,11 +812,12 @@ func TestCheckHTTPRouteHostnames(t *testing.T) {
 					[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}},
 				),
 			},
-			wantErr: false,
+			wantErr:     true,
+			errContains: "route conflict",
 		},
 		// --- QueryParam-aware conflict detection ---
 		{
-			name: "no conflict — query-param-restricted HTTPRoute is strictly more specific",
+			name: "conflict — HTTPRoute with query params vs CustomHTTPRoute (cross-kind, no specificity tie-break)",
 			httpRoute: newHTTPRouteWithMatches([]string{"example.com"}, []gatewayv1.HTTPRouteMatch{
 				{
 					Path: &gatewayv1.HTTPPathMatch{
@@ -830,7 +834,8 @@ func TestCheckHTTPRouteHostnames(t *testing.T) {
 					[]customrouterv1alpha1.PathMatch{{Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix}},
 				),
 			},
-			wantErr: false,
+			wantErr:     true,
+			errContains: "route conflict",
 		},
 	}
 
