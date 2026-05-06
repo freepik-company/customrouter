@@ -151,14 +151,18 @@ func (c *HostnameChecker) CheckHTTPRouteHostnames(ctx context.Context, httpRoute
 }
 
 // routeMatch represents a single match criterion within a routing rule.
-// Two routeMatches conflict when they could match the same HTTP request,
-// determined by: path + method + headers + query parameters.
+// Two routeMatches conflict when they could match the same HTTP request and
+// SortRoutes cannot place one strictly before the other; see matchesOverlap.
+// Priority mirrors PathMatch.Priority and is the leading SortRoutes key, so a
+// less specific rule with higher Priority can shadow a more specific one — the
+// conflict check accounts for that.
 type routeMatch struct {
 	PathType     string
 	Path         string
 	Method       string
 	Headers      []headerMatch
 	QueryParams  []queryParamMatch
+	Priority     int32
 	AllowOverlap bool
 }
 
@@ -192,16 +196,23 @@ func (r routeMatch) String() string {
 	return strings.Join(parts, " ")
 }
 
-// headerMatch represents an HTTP header matching criterion.
+// headerMatch represents an HTTP header matching criterion. IsRegex preserves
+// whether the underlying API match used regular expression semantics so that
+// the conflict detector can degrade contradiction checks to "matches all"
+// without dropping the entry from the constraint count (which feeds into
+// specificity comparisons aligned with SortRoutes).
 type headerMatch struct {
-	Name  string
-	Value string
+	Name    string
+	Value   string
+	IsRegex bool
 }
 
-// queryParamMatch represents an HTTP query parameter matching criterion.
+// queryParamMatch represents an HTTP query parameter matching criterion. See
+// headerMatch for the role of IsRegex.
 type queryParamMatch struct {
-	Name  string
-	Value string
+	Name    string
+	Value   string
+	IsRegex bool
 }
 
 // seenEntry tracks the index and allowOverlap status of a previously seen route match.
@@ -254,6 +265,7 @@ func extractCustomRouteMatches(route *customrouterv1alpha1.CustomHTTPRoute) []ro
 					Method:       method,
 					Headers:      headerMatches,
 					QueryParams:  queryMatches,
+					Priority:     m.Priority,
 					AllowOverlap: rule.AllowOverlap,
 				})
 			}
@@ -263,22 +275,21 @@ func extractCustomRouteMatches(route *customrouterv1alpha1.CustomHTTPRoute) []ro
 }
 
 // convertCustomHeaderMatches converts CustomHTTPRoute HeaderMatches to the
-// internal headerMatch form used by overlap detection. Only Exact matches are
-// considered narrowing for conflict purposes; regex matches are treated as
-// "matches all" to keep the detector conservative (i.e. they will always be
-// reported as overlapping with any concrete Exact match on the same header).
+// internal headerMatch form used by overlap detection. Regex matches are kept
+// (so the constraint count matches what SortRoutes sees) but flagged as
+// IsRegex; headersCompatible degrades contradiction checks involving them to
+// "matches all" to stay conservative.
 func convertCustomHeaderMatches(in []customrouterv1alpha1.HeaderMatch) []headerMatch {
 	if len(in) == 0 {
 		return nil
 	}
 	out := make([]headerMatch, 0, len(in))
 	for _, h := range in {
-		if h.Type == customrouterv1alpha1.HeaderMatchTypeRegularExpression {
-			// Conservative: regex value cannot be compared for overlap, skip
-			// so the dimension degrades to "match any" in the comparator.
-			continue
-		}
-		out = append(out, headerMatch{Name: h.Name, Value: h.Value})
+		out = append(out, headerMatch{
+			Name:    h.Name,
+			Value:   h.Value,
+			IsRegex: h.Type == customrouterv1alpha1.HeaderMatchTypeRegularExpression,
+		})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
@@ -293,24 +304,30 @@ func headerMatchesKey(hs []headerMatch) string {
 	}
 	parts := make([]string, len(hs))
 	for i, h := range hs {
-		parts[i] = strings.ToLower(h.Name) + "=" + h.Value
+		marker := "="
+		if h.IsRegex {
+			marker = "~"
+		}
+		parts[i] = strings.ToLower(h.Name) + marker + h.Value
 	}
 	return strings.Join(parts, ",")
 }
 
 // convertCustomQueryParamMatches is the query-param analogue of
-// convertCustomHeaderMatches. Regex-typed params are skipped for the same
-// conservatism reason.
+// convertCustomHeaderMatches. Regex-typed params are flagged as IsRegex so
+// queryParamsCompatible can skip contradiction checks for them while keeping
+// the constraint count aligned with SortRoutes.
 func convertCustomQueryParamMatches(in []customrouterv1alpha1.QueryParamMatch) []queryParamMatch {
 	if len(in) == 0 {
 		return nil
 	}
 	out := make([]queryParamMatch, 0, len(in))
 	for _, q := range in {
-		if q.Type == customrouterv1alpha1.QueryParamMatchTypeRegularExpression {
-			continue
-		}
-		out = append(out, queryParamMatch{Name: q.Name, Value: q.Value})
+		out = append(out, queryParamMatch{
+			Name:    q.Name,
+			Value:   q.Value,
+			IsRegex: q.Type == customrouterv1alpha1.QueryParamMatchTypeRegularExpression,
+		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
@@ -323,7 +340,11 @@ func queryParamMatchesKey(qs []queryParamMatch) string {
 	}
 	parts := make([]string, len(qs))
 	for i, q := range qs {
-		parts[i] = q.Name + "=" + q.Value
+		marker := "="
+		if q.IsRegex {
+			marker = "~"
+		}
+		parts[i] = q.Name + marker + q.Value
 	}
 	return strings.Join(parts, ",")
 }
@@ -406,8 +427,9 @@ func extractHTTPRouteMatches(hr *gatewayv1.HTTPRoute) []routeMatch {
 			}
 			for _, h := range m.Headers {
 				rm.Headers = append(rm.Headers, headerMatch{
-					Name:  string(h.Name),
-					Value: h.Value,
+					Name:    string(h.Name),
+					Value:   h.Value,
+					IsRegex: h.Type != nil && *h.Type == gatewayv1.HeaderMatchRegularExpression,
 				})
 			}
 			sort.Slice(rm.Headers, func(i, j int) bool {
@@ -415,8 +437,9 @@ func extractHTTPRouteMatches(hr *gatewayv1.HTTPRoute) []routeMatch {
 			})
 			for _, q := range m.QueryParams {
 				rm.QueryParams = append(rm.QueryParams, queryParamMatch{
-					Name:  string(q.Name),
-					Value: q.Value,
+					Name:    string(q.Name),
+					Value:   q.Value,
+					IsRegex: q.Type != nil && *q.Type == gatewayv1.QueryParamMatchRegularExpression,
 				})
 			}
 			sort.Slice(rm.QueryParams, func(i, j int) bool {
@@ -442,12 +465,11 @@ type overlapResult struct {
 }
 
 // matchesOverlap returns true when two route matches conflict, i.e. they could
-// match the same HTTP request AND no specificity tie-break separates them.
-// When one side is strictly more specific in any of the dimensions that
-// SortRoutes uses to break ties (method presence, header count, query param
-// count), the more specific rule wins for its narrower request set and the
-// less specific rule keeps the remainder — so they coexist and are not flagged
-// as a conflict. This mirrors standard HTTPRoute precedence semantics.
+// match the same HTTP request AND SortRoutes cannot place the more specific
+// rule strictly before the less specific one. The more specific rule wins
+// only if it sorts first; specificityResolvable encodes when that holds,
+// including Priority — a higher Priority on the less specific rule shadows
+// the more specific one and keeps the conflict.
 func matchesOverlap(a, b routeMatch) bool {
 	if a.PathType != b.PathType || a.Path != b.Path {
 		return false
@@ -460,22 +482,68 @@ func matchesOverlap(a, b routeMatch) bool {
 	return !specificityResolvable(a, b)
 }
 
-// specificityResolvable returns true when SortRoutes would place one match
-// strictly before the other based on method/header/query param specificity.
-// It mirrors the tie-break dimensions of SortRoutes (pkg/routes/expand.go) for
-// same-path routes: method-constrained beats unconstrained, more headers beats
-// fewer, more query params beats fewer.
+// specificityResolvable returns true when SortRoutes orders the more specific
+// match strictly before the less specific one, so they coexist via standard
+// HTTPRoute precedence. The check has two stages, mirroring SortRoutes
+// (pkg/routes/expand.go):
+//
+//  1. compareSpecificity ranks the matches over the SortRoutes tie-break
+//     dimensions (method presence, header count, query param count). When the
+//     ranking is incomparable (each side leads in a different dimension) or
+//     fully tied, no ordering exists and the matches conflict.
+//  2. The more specific match must not sort after the less specific one. Since
+//     SortRoutes sorts by Priority descending first, the more specific match's
+//     effective Priority must be >= the less specific match's; otherwise the
+//     less specific rule is evaluated first and shadows the more specific one.
 func specificityResolvable(a, b routeMatch) bool {
-	if (a.Method != "") != (b.Method != "") {
-		return true
+	cmp := compareSpecificity(a, b)
+	if cmp == 0 {
+		return false
 	}
-	if len(a.Headers) != len(b.Headers) {
-		return true
+	if cmp > 0 {
+		return effectivePriority(a) >= effectivePriority(b)
 	}
-	if len(a.QueryParams) != len(b.QueryParams) {
-		return true
+	return effectivePriority(b) >= effectivePriority(a)
+}
+
+// compareSpecificity returns +1 when a is strictly more specific than b on
+// every dimension SortRoutes uses for tie-break, -1 when b is, and 0 when the
+// matches are tied or incomparable (each side leads in some dimension).
+func compareSpecificity(a, b routeMatch) int {
+	am, bm := methodSpecificity(a.Method), methodSpecificity(b.Method)
+	ah, bh := len(a.Headers), len(b.Headers)
+	aq, bq := len(a.QueryParams), len(b.QueryParams)
+
+	aGreater := am > bm || ah > bh || aq > bq
+	bGreater := am < bm || ah < bh || aq < bq
+
+	switch {
+	case aGreater && !bGreater:
+		return 1
+	case bGreater && !aGreater:
+		return -1
+	default:
+		return 0
 	}
-	return false
+}
+
+// methodSpecificity returns 1 for a method-constrained match and 0 otherwise,
+// matching the routeMethodSpecificity helper used by SortRoutes.
+func methodSpecificity(m string) int {
+	if m == "" {
+		return 0
+	}
+	return 1
+}
+
+// effectivePriority returns the Priority value SortRoutes will use, defaulting
+// to v1alpha1.DefaultPriority when unset (the same default the operator
+// applies via getEffectivePriority on the runtime side).
+func effectivePriority(rm routeMatch) int32 {
+	if rm.Priority <= 0 {
+		return customrouterv1alpha1.DefaultPriority
+	}
+	return rm.Priority
 }
 
 // classifyOverlaps checks newMatches against existingMatches for overlaps.
@@ -527,17 +595,26 @@ func findRouteMatchOverlap(a, b []routeMatch) []routeMatch {
 // headersCompatible returns true if two sets of header matches could match the
 // same HTTP request. An empty header set matches all requests, so it is always
 // compatible. Two non-empty sets are incompatible only when they require
-// different values for the same header name (case-insensitive).
+// different exact values for the same header name (case-insensitive). Regex
+// matches on either side are conservatively treated as compatible since the
+// expression cannot be evaluated for contradictions here.
 func headersCompatible(a, b []headerMatch) bool {
 	if len(a) == 0 || len(b) == 0 {
 		return true
 	}
-	bMap := make(map[string]string, len(b))
+	bMap := make(map[string]headerMatch, len(b))
 	for _, h := range b {
-		bMap[strings.ToLower(h.Name)] = h.Value
+		bMap[strings.ToLower(h.Name)] = h
 	}
 	for _, h := range a {
-		if bVal, ok := bMap[strings.ToLower(h.Name)]; ok && bVal != h.Value {
+		bh, ok := bMap[strings.ToLower(h.Name)]
+		if !ok {
+			continue
+		}
+		if h.IsRegex || bh.IsRegex {
+			continue
+		}
+		if bh.Value != h.Value {
 			return false
 		}
 	}
@@ -566,17 +643,26 @@ func methodsCompatible(a, b string) bool {
 // queryParamsCompatible returns true if two sets of query parameter matches could
 // match the same HTTP request. An empty set matches all requests, so it is always
 // compatible. Two non-empty sets are incompatible only when they require different
-// values for the same parameter name (case-sensitive per RFC 3986).
+// exact values for the same parameter name (case-sensitive per RFC 3986). Regex
+// matches on either side are conservatively treated as compatible since the
+// expression cannot be evaluated for contradictions here.
 func queryParamsCompatible(a, b []queryParamMatch) bool {
 	if len(a) == 0 || len(b) == 0 {
 		return true
 	}
-	bMap := make(map[string]string, len(b))
+	bMap := make(map[string]queryParamMatch, len(b))
 	for _, q := range b {
-		bMap[q.Name] = q.Value
+		bMap[q.Name] = q
 	}
 	for _, q := range a {
-		if bVal, ok := bMap[q.Name]; ok && bVal != q.Value {
+		bq, ok := bMap[q.Name]
+		if !ok {
+			continue
+		}
+		if q.IsRegex || bq.IsRegex {
+			continue
+		}
+		if bq.Value != q.Value {
 			return false
 		}
 	}
