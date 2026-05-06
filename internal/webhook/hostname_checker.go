@@ -464,12 +464,13 @@ type overlapResult struct {
 	Errors   []string
 }
 
-// matchesOverlap returns true when two route matches conflict, i.e. they could
-// match the same HTTP request AND SortRoutes cannot place the more specific
-// rule strictly before the less specific one. The more specific rule wins
-// only if it sorts first; specificityResolvable encodes when that holds,
-// including Priority — a higher Priority on the less specific rule shadows
-// the more specific one and keeps the conflict.
+// matchesOverlap returns true when two route matches conflict, i.e. they
+// could match the same HTTP request AND no subset relationship plus Priority
+// places one strictly before the other in SortRoutes. The more specific rule
+// wins only if it sorts first; specificityResolvable encodes when that holds.
+// Disjoint-but-non-subset constraint sets (each side has constraints the
+// other lacks) intersect on a shadowed request set and stay flagged as a
+// conflict, even when one side has more constraints in total.
 func matchesOverlap(a, b routeMatch) bool {
 	if a.PathType != b.PathType || a.Path != b.Path {
 		return false
@@ -482,19 +483,16 @@ func matchesOverlap(a, b routeMatch) bool {
 	return !specificityResolvable(a, b)
 }
 
-// specificityResolvable returns true when SortRoutes orders the more specific
-// match strictly before the less specific one, so they coexist via standard
-// HTTPRoute precedence. The check has two stages, mirroring SortRoutes
-// (pkg/routes/expand.go):
-//
-//  1. compareSpecificity ranks the matches over the SortRoutes tie-break
-//     dimensions (method presence, header count, query param count). When the
-//     ranking is incomparable (each side leads in a different dimension) or
-//     fully tied, no ordering exists and the matches conflict.
-//  2. The more specific match must not sort after the less specific one. Since
-//     SortRoutes sorts by Priority descending first, the more specific match's
-//     effective Priority must be >= the less specific match's; otherwise the
-//     less specific rule is evaluated first and shadows the more specific one.
+// specificityResolvable returns true when one match's constraint set strictly
+// subsumes the other's AND the more specific side is not shadowed by Priority.
+// Subsumption (compareSpecificity) requires every request matching the more
+// specific rule to also match the less specific one — counts alone are not
+// enough, because two rules with disjoint header/queryParam names share an
+// intersection of requests where the bigger-count rule shadows the smaller
+// one. Once subsumption is established, the more specific rule must not sort
+// after the less specific one in SortRoutes (pkg/routes/expand.go); since
+// SortRoutes sorts by Priority descending first, the more specific match's
+// effective Priority must be >= the less specific match's.
 func specificityResolvable(a, b routeMatch) bool {
 	cmp := compareSpecificity(a, b)
 	if cmp == 0 {
@@ -506,34 +504,76 @@ func specificityResolvable(a, b routeMatch) bool {
 	return effectivePriority(b) >= effectivePriority(a)
 }
 
-// compareSpecificity returns +1 when a is strictly more specific than b on
-// every dimension SortRoutes uses for tie-break, -1 when b is, and 0 when the
-// matches are tied or incomparable (each side leads in some dimension).
+// compareSpecificity returns +1 when a is strictly more specific than b
+// (every request matching a also matches b, with a requiring strictly more),
+// -1 when b is, and 0 when neither holds — including the disjoint-constraints
+// case where each side requires constraints the other does not. Counting
+// constraints alone is not enough: a route with two disjoint headers can
+// shadow a route with one different header on requests that satisfy both
+// sets, even though SortRoutes orders the bigger count first.
 func compareSpecificity(a, b routeMatch) int {
-	am, bm := methodSpecificity(a.Method), methodSpecificity(b.Method)
-	ah, bh := len(a.Headers), len(b.Headers)
-	aq, bq := len(a.QueryParams), len(b.QueryParams)
-
-	aGreater := am > bm || ah > bh || aq > bq
-	bGreater := am < bm || ah < bh || aq < bq
-
+	aSubsumesB := atLeastAsSpecific(a, b)
+	bSubsumesA := atLeastAsSpecific(b, a)
 	switch {
-	case aGreater && !bGreater:
+	case aSubsumesB && !bSubsumesA:
 		return 1
-	case bGreater && !aGreater:
+	case bSubsumesA && !aSubsumesB:
 		return -1
 	default:
 		return 0
 	}
 }
 
-// methodSpecificity returns 1 for a method-constrained match and 0 otherwise,
-// matching the routeMethodSpecificity helper used by SortRoutes.
-func methodSpecificity(m string) int {
-	if m == "" {
-		return 0
+// atLeastAsSpecific returns true when every request matching a also matches b,
+// i.e. b's constraints are a subset of a's. Path is assumed equal by callers.
+// Method: a must constrain at least as much as b (b empty, or both equal).
+// Headers/QueryParams: every entry b requires must also be required by a with
+// the same name, value, and IsRegex flag.
+func atLeastAsSpecific(a, b routeMatch) bool {
+	if b.Method != "" && !strings.EqualFold(a.Method, b.Method) {
+		return false
 	}
-	return 1
+	if !headersSubsume(a.Headers, b.Headers) {
+		return false
+	}
+	return queryParamsSubsume(a.QueryParams, b.QueryParams)
+}
+
+// headersSubsume returns true when every header in sub is also required by
+// sup (case-insensitive name, identical value and IsRegex flag).
+func headersSubsume(sup, sub []headerMatch) bool {
+	for _, s := range sub {
+		found := false
+		for _, p := range sup {
+			if strings.EqualFold(p.Name, s.Name) && p.Value == s.Value && p.IsRegex == s.IsRegex {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// queryParamsSubsume returns true when every query param in sub is also
+// required by sup (case-sensitive name per RFC 3986, identical value and
+// IsRegex flag).
+func queryParamsSubsume(sup, sub []queryParamMatch) bool {
+	for _, s := range sub {
+		found := false
+		for _, p := range sup {
+			if p.Name == s.Name && p.Value == s.Value && p.IsRegex == s.IsRegex {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 // effectivePriority returns the Priority value SortRoutes will use, defaulting

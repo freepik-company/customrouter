@@ -1144,6 +1144,24 @@ func TestFindRouteMatchOverlap(t *testing.T) {
 			b:    []routeMatch{{PathType: "PathPrefix", Path: "/api", Priority: 1000}},
 			want: 0,
 		},
+		{
+			name: "same path, disjoint headers with different counts — overlap (no subset relationship)",
+			a:    []routeMatch{{PathType: "PathPrefix", Path: "/api", Headers: []headerMatch{{Name: "X-V", Value: "1"}, {Name: "X-Tenant", Value: "acme"}}}},
+			b:    []routeMatch{{PathType: "PathPrefix", Path: "/api", Headers: []headerMatch{{Name: "X-Env", Value: "prod"}}}},
+			want: 1,
+		},
+		{
+			name: "same path, disjoint query params with different counts — overlap (no subset relationship)",
+			a:    []routeMatch{{PathType: "PathPrefix", Path: "/api", QueryParams: []queryParamMatch{{Name: "v", Value: "1"}, {Name: "tenant", Value: "acme"}}}},
+			b:    []routeMatch{{PathType: "PathPrefix", Path: "/api", QueryParams: []queryParamMatch{{Name: "env", Value: "prod"}}}},
+			want: 1,
+		},
+		{
+			name: "same path, mixed dimensions, neither subsumes the other — overlap",
+			a:    []routeMatch{{PathType: "PathPrefix", Path: "/api", Method: "GET"}},
+			b:    []routeMatch{{PathType: "PathPrefix", Path: "/api", Headers: []headerMatch{{Name: "X-V", Value: "1"}}}},
+			want: 1,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
