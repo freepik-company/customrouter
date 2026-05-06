@@ -464,13 +464,14 @@ type overlapResult struct {
 	Errors   []string
 }
 
-// matchesOverlap returns true when two same-kind route matches conflict, i.e.
-// they could match the same HTTP request AND no subset relationship plus
-// Priority places one strictly before the other in SortRoutes. The more
-// specific rule wins only if it sorts first; specificityResolvable encodes
-// when that holds. Disjoint-but-non-subset constraint sets (each side has
-// constraints the other lacks) intersect on a shadowed request set and stay
-// flagged as a conflict, even when one side has more constraints in total.
+// matchesOverlap returns true when two same-kind route matches conflict.
+// Two matches conflict when they could match the same HTTP request AND
+// specificityResolvable cannot place one before the other deterministically.
+// Identical constraint sets always conflict; orthogonal sets (each side has
+// constraints the other lacks) coexist because the rules segment requests
+// along different axes — a request can only match both when it carries every
+// constraint from both sets, which is the developers' responsibility to
+// avoid.
 //
 // Use matchesCrossKindOverlap instead for HTTPRoute<->CustomHTTPRoute checks:
 // those routes are not ordered together by SortRoutes (gateway-api native
@@ -504,44 +505,35 @@ func matchesRequestCompat(a, b routeMatch) bool {
 		queryParamsCompatible(a.QueryParams, b.QueryParams)
 }
 
-// specificityResolvable returns true when one match's constraint set strictly
-// subsumes the other's AND the more specific side is not shadowed by Priority.
-// Subsumption (compareSpecificity) requires every request matching the more
-// specific rule to also match the less specific one — counts alone are not
-// enough, because two rules with disjoint header/queryParam names share an
-// intersection of requests where the bigger-count rule shadows the smaller
-// one. Once subsumption is established, the more specific rule must not sort
-// after the less specific one in SortRoutes (pkg/routes/expand.go); since
-// SortRoutes sorts by Priority descending first, the more specific match's
-// effective Priority must be >= the less specific match's.
+// specificityResolvable returns true when SortRoutes (or stable insertion
+// order) can place one match before the other deterministically, so the two
+// matches coexist via standard HTTPRoute precedence. There are three branches:
+//
+//   - Identical constraints: both sides subsume each other. The two rules
+//     match the exact same request set with no discriminator, so they truly
+//     conflict and the function returns false.
+//   - Strict subsumption: one side's constraints subsume the other's. The
+//     more specific rule wins for its narrower request set as long as it is
+//     not shadowed by Priority — its effective Priority must be >= the less
+//     specific rule's, since SortRoutes sorts by Priority descending first.
+//   - Orthogonal constraints: neither side subsumes the other (e.g. different
+//     header names, mixed dimensions). The rules segment requests along
+//     different axes and a request can only match both when it carries every
+//     constraint from both sets, which is the developers' responsibility to
+//     avoid. Stable sort + rule order resolves the rare intersection
+//     deterministically, so coexistence is allowed.
 func specificityResolvable(a, b routeMatch) bool {
-	cmp := compareSpecificity(a, b)
-	if cmp == 0 {
-		return false
-	}
-	if cmp > 0 {
-		return effectivePriority(a) >= effectivePriority(b)
-	}
-	return effectivePriority(b) >= effectivePriority(a)
-}
-
-// compareSpecificity returns +1 when a is strictly more specific than b
-// (every request matching a also matches b, with a requiring strictly more),
-// -1 when b is, and 0 when neither holds — including the disjoint-constraints
-// case where each side requires constraints the other does not. Counting
-// constraints alone is not enough: a route with two disjoint headers can
-// shadow a route with one different header on requests that satisfy both
-// sets, even though SortRoutes orders the bigger count first.
-func compareSpecificity(a, b routeMatch) int {
 	aSubsumesB := atLeastAsSpecific(a, b)
 	bSubsumesA := atLeastAsSpecific(b, a)
 	switch {
-	case aSubsumesB && !bSubsumesA:
-		return 1
-	case bSubsumesA && !aSubsumesB:
-		return -1
+	case aSubsumesB && bSubsumesA:
+		return false
+	case aSubsumesB:
+		return effectivePriority(a) >= effectivePriority(b)
+	case bSubsumesA:
+		return effectivePriority(b) >= effectivePriority(a)
 	default:
-		return 0
+		return true
 	}
 }
 

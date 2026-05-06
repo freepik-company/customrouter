@@ -253,25 +253,22 @@ func TestCheckCustomHTTPRouteHostnames(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "conflict — regex header counted in specificity (same count as exact, no tie-break)",
+			name: "no conflict — orthogonal headers on same path (different names)",
 			route: newCustomHTTPRouteWithPaths("route-a", "default", "default", []string{"example.com"},
 				[]customrouterv1alpha1.PathMatch{{
-					Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix,
-					Headers: []customrouterv1alpha1.HeaderMatch{
-						{Name: "X-Tenant", Value: ".*", Type: customrouterv1alpha1.HeaderMatchTypeRegularExpression},
-					},
+					Path: "/checkout", Type: customrouterv1alpha1.MatchTypePathPrefix,
+					Headers: []customrouterv1alpha1.HeaderMatch{{Name: "env", Value: "staging-checkout-web"}},
 				}},
 			),
 			existingCR: []customrouterv1alpha1.CustomHTTPRoute{
 				*newCustomHTTPRouteWithPaths("route-b", "default", "default", []string{"example.com"},
 					[]customrouterv1alpha1.PathMatch{{
-						Path: "/api", Type: customrouterv1alpha1.MatchTypePathPrefix,
-						Headers: []customrouterv1alpha1.HeaderMatch{{Name: "X-Env", Value: "prod"}},
+						Path: "/checkout", Type: customrouterv1alpha1.MatchTypePathPrefix,
+						Headers: []customrouterv1alpha1.HeaderMatch{{Name: "force", Value: "staging"}},
 					}},
 				),
 			},
-			wantErr:     true,
-			errContains: "route conflict",
+			wantErr: false,
 		},
 		{
 			name: "conflict — less-specific has higher priority and shadows the more-specific rule",
@@ -1114,10 +1111,10 @@ func TestFindRouteMatchOverlap(t *testing.T) {
 			want: 0,
 		},
 		{
-			name: "same path, same header count, different names — overlap",
+			name: "same path, same header count, different names — no overlap (orthogonal)",
 			a:    []routeMatch{{PathType: "PathPrefix", Path: "/api", Headers: []headerMatch{{Name: "X-V", Value: "1"}}}},
 			b:    []routeMatch{{PathType: "PathPrefix", Path: "/api", Headers: []headerMatch{{Name: "X-Env", Value: "prod"}}}},
-			want: 1,
+			want: 0,
 		},
 		{
 			name: "same path, one side has more query params — no overlap (specificity tie-break)",
@@ -1126,10 +1123,10 @@ func TestFindRouteMatchOverlap(t *testing.T) {
 			want: 0,
 		},
 		{
-			name: "same path, regex header vs exact header — overlap (regex counted, no specificity ordering)",
+			name: "same path, regex header vs exact header on different names — no overlap (orthogonal)",
 			a:    []routeMatch{{PathType: "PathPrefix", Path: "/api", Headers: []headerMatch{{Name: "X-V", Value: ".*", IsRegex: true}}}},
 			b:    []routeMatch{{PathType: "PathPrefix", Path: "/api", Headers: []headerMatch{{Name: "X-Env", Value: "prod"}}}},
-			want: 1,
+			want: 0,
 		},
 		{
 			name: "same path, more-specific has lower priority — overlap (shadowed by less-specific higher priority)",
@@ -1150,20 +1147,32 @@ func TestFindRouteMatchOverlap(t *testing.T) {
 			want: 0,
 		},
 		{
-			name: "same path, disjoint headers with different counts — overlap (no subset relationship)",
+			name: "same path, disjoint headers with different counts — no overlap (orthogonal)",
 			a:    []routeMatch{{PathType: "PathPrefix", Path: "/api", Headers: []headerMatch{{Name: "X-V", Value: "1"}, {Name: "X-Tenant", Value: "acme"}}}},
 			b:    []routeMatch{{PathType: "PathPrefix", Path: "/api", Headers: []headerMatch{{Name: "X-Env", Value: "prod"}}}},
-			want: 1,
+			want: 0,
 		},
 		{
-			name: "same path, disjoint query params with different counts — overlap (no subset relationship)",
+			name: "same path, disjoint query params with different counts — no overlap (orthogonal)",
 			a:    []routeMatch{{PathType: "PathPrefix", Path: "/api", QueryParams: []queryParamMatch{{Name: "v", Value: "1"}, {Name: "tenant", Value: "acme"}}}},
 			b:    []routeMatch{{PathType: "PathPrefix", Path: "/api", QueryParams: []queryParamMatch{{Name: "env", Value: "prod"}}}},
+			want: 0,
+		},
+		{
+			name: "same path, mixed dimensions, neither subsumes the other — no overlap (orthogonal)",
+			a:    []routeMatch{{PathType: "PathPrefix", Path: "/api", Method: "GET"}},
+			b:    []routeMatch{{PathType: "PathPrefix", Path: "/api", Headers: []headerMatch{{Name: "X-V", Value: "1"}}}},
+			want: 0,
+		},
+		{
+			name: "same path, identical empty constraints — overlap (truly identical)",
+			a:    []routeMatch{{PathType: "PathPrefix", Path: "/api"}},
+			b:    []routeMatch{{PathType: "PathPrefix", Path: "/api"}},
 			want: 1,
 		},
 		{
-			name: "same path, mixed dimensions, neither subsumes the other — overlap",
-			a:    []routeMatch{{PathType: "PathPrefix", Path: "/api", Method: "GET"}},
+			name: "same path, identical headers — overlap (truly identical)",
+			a:    []routeMatch{{PathType: "PathPrefix", Path: "/api", Headers: []headerMatch{{Name: "X-V", Value: "1"}}}},
 			b:    []routeMatch{{PathType: "PathPrefix", Path: "/api", Headers: []headerMatch{{Name: "X-V", Value: "1"}}}},
 			want: 1,
 		},
