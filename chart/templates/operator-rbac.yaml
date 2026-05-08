@@ -68,7 +68,6 @@ rules:
       - patch
       - update
       - watch
-  {{- if .Values.operator.webhook.enabled }}
   - apiGroups:
       - gateway.networking.k8s.io
     resources:
@@ -77,6 +76,7 @@ rules:
       - get
       - list
       - watch
+  {{- if .Values.operator.webhook.enabled }}
   - apiGroups:
       - admissionregistration.k8s.io
     resources:
