@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/util/retry"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -77,11 +78,18 @@ const (
 
 // ReconcileObject handles the reconciliation logic for CustomHTTPRoute resources.
 // It rebuilds only the ConfigMaps for the affected target, not all targets.
+//
+// To bound the API/etcd write rate when many CustomHTTPRoutes sharing a
+// target are reconciled together (typically at controller cache resync), the
+// rebuild is rate-limited per target via rebuildWait. Reconciles arriving
+// while a target is in cooldown return a non-zero ctrl.Result.RequeueAfter so
+// the work item is reprocessed later — by which time a single concurrent
+// rebuild will have incorporated every CR's current state.
 func (r *CustomHTTPRouteReconciler) ReconcileObject(
 	ctx context.Context,
 	eventType watch.EventType,
 	resourceManifest *v1alpha1.CustomHTTPRoute,
-) error {
+) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	target := resourceManifest.Spec.TargetRef.Name
 
@@ -98,6 +106,18 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 			"target", target)
 	}
 
+	// Cooldown: cap rebuild rate per target. Skipped for deletions so that
+	// stale ConfigMaps and EnvoyFilters are cleaned up promptly when a CR
+	// goes away.
+	if eventType != watch.Deleted {
+		if remaining, throttled := r.rebuildWait(target, time.Now()); throttled {
+			logger.V(1).Info("target rebuild in cooldown, requeueing",
+				"target", target,
+				"wait", remaining.String())
+			return ctrl.Result{RequeueAfter: remaining}, nil
+		}
+	}
+
 	// If the target changed, also rebuild the old target to clean up its stale ConfigMaps
 	if previousTarget, ok := resourceManifest.Annotations[lastTargetAnnotation]; ok && previousTarget != target {
 		logger.Info("Target changed, also rebuilding previous target",
@@ -105,21 +125,23 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 			"previousTarget", previousTarget,
 			"newTarget", target)
 		if err := r.rebuildConfigMapsForTarget(ctx, previousTarget); err != nil {
-			return fmt.Errorf("failed to rebuild ConfigMaps for previous target %s: %w", previousTarget, err)
+			return ctrl.Result{}, fmt.Errorf("failed to rebuild ConfigMaps for previous target %s: %w", previousTarget, err)
 		}
+		r.markRebuilt(previousTarget, time.Now())
 	}
 
 	// Update the last-target annotation — skip for deletions as the resource is being removed
 	if eventType != watch.Deleted {
 		if err := r.ensureLastTargetAnnotation(ctx, resourceManifest, target); err != nil {
-			return fmt.Errorf("failed to update last-target annotation: %w", err)
+			return ctrl.Result{}, fmt.Errorf("failed to update last-target annotation: %w", err)
 		}
 	}
 
 	// Rebuild ConfigMaps for the current target
 	if err := r.rebuildConfigMapsForTarget(ctx, target); err != nil {
-		return err
+		return ctrl.Result{}, err
 	}
+	r.markRebuilt(target, time.Now())
 
 	// Reconcile catch-all EnvoyFilter when:
 	// - the route currently has catchAllRoute configured
@@ -131,14 +153,14 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 
 	if needsCatchAllReconcile {
 		if err := r.reconcileCatchAllFromAllRoutes(ctx); err != nil {
-			return fmt.Errorf("failed to reconcile catch-all routes: %w", err)
+			return ctrl.Result{}, fmt.Errorf("failed to reconcile catch-all routes: %w", err)
 		}
 	}
 
 	// Track whether this route has catchAllRoute for future change detection — skip for deletions
 	if eventType != watch.Deleted {
 		if err := r.ensureHadCatchAllAnnotation(ctx, resourceManifest, hasCatchAll); err != nil {
-			return fmt.Errorf("failed to update had-catch-all annotation: %w", err)
+			return ctrl.Result{}, fmt.Errorf("failed to update had-catch-all annotation: %w", err)
 		}
 	}
 
@@ -146,13 +168,13 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 	hasMirror := routeHasMirrorAction(resourceManifest)
 	if hasMirror || eventType == watch.Deleted || hadMirror {
 		if err := r.reconcileMirrorFromAllRoutes(ctx); err != nil {
-			return fmt.Errorf("failed to reconcile mirror routes: %w", err)
+			return ctrl.Result{}, fmt.Errorf("failed to reconcile mirror routes: %w", err)
 		}
 	}
 
 	if eventType != watch.Deleted {
 		if err := r.ensureHadMirrorAnnotation(ctx, resourceManifest, hasMirror); err != nil {
-			return fmt.Errorf("failed to update had-mirror annotation: %w", err)
+			return ctrl.Result{}, fmt.Errorf("failed to update had-mirror annotation: %w", err)
 		}
 	}
 
@@ -160,17 +182,17 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 	hasCORS := routeHasCORSAction(resourceManifest)
 	if hasCORS || eventType == watch.Deleted || hadCORS {
 		if err := r.reconcileCORSFromAllRoutes(ctx); err != nil {
-			return fmt.Errorf("failed to reconcile cors routes: %w", err)
+			return ctrl.Result{}, fmt.Errorf("failed to reconcile cors routes: %w", err)
 		}
 	}
 
 	if eventType != watch.Deleted {
 		if err := r.ensureHadCORSAnnotation(ctx, resourceManifest, hasCORS); err != nil {
-			return fmt.Errorf("failed to update had-cors annotation: %w", err)
+			return ctrl.Result{}, fmt.Errorf("failed to update had-cors annotation: %w", err)
 		}
 	}
 
-	return nil
+	return ctrl.Result{}, nil
 }
 
 // routeHasCORSAction returns true if any rule in the route declares a cors action.
