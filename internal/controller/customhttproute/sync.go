@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"sort"
 	"strings"
 	"time"
@@ -565,51 +566,105 @@ func (r *CustomHTTPRouteReconciler) splitByHosts(
 	return partitions
 }
 
-// splitHostRoutes splits a single host's routes across multiple partitions
+// splitHostRoutes splits a single host's routes across multiple partitions.
+//
+// Assignment is stable: each route is mapped to a partition by hashing a key
+// derived from its identity (path type, path, method, backend, header and
+// query-param signatures). A single route mutation in the input therefore
+// changes at most one partition's content, instead of cascading through every
+// downstream partition as a greedy size-based packing would. Within each
+// partition the routes are sorted so the JSON serialisation is deterministic
+// for the per-partition content dedup at upsertSingleConfigMap.
+//
+// The bucket count is derived from the total payload size with a generous
+// safety margin so small growth does not force a re-bucket. If an unlucky
+// hash distribution puts a bucket over maxConfigMapSize the bucket count is
+// doubled and the assignment retried.
 func (r *CustomHTTPRouteReconciler) splitHostRoutes(
 	target string,
 	host string,
 	hostRoutes []routes.Route,
 	startIndex int,
 ) []ConfigMapPartition {
-	var partitions []ConfigMapPartition
-	partIndex := startIndex
-
-	currentRoutes := make([]routes.Route, 0, len(hostRoutes))
-	currentSize := 0
-	baseSize := len(fmt.Sprintf(`{"version":1,"hosts":{"%s":[]}}`, host))
-
-	for _, route := range hostRoutes {
-		routeData, _ := json.Marshal(route)
-		routeSize := len(routeData) + 1 // +1 for comma
-
-		if currentSize+routeSize+baseSize > maxConfigMapSize && len(currentRoutes) > 0 {
-			// Flush current routes
-			partConfig := &routes.RoutesConfig{
-				Version: 1,
-				Hosts:   map[string][]routes.Route{host: currentRoutes},
-			}
-			partData, _ := partConfig.ToJSON()
-			partitions = append(partitions, ConfigMapPartition{
-				Name:   r.partitionName(target, partIndex),
-				Target: target,
-				Data:   string(partData),
-			})
-			partIndex++
-
-			currentRoutes = make([]routes.Route, 0)
-			currentSize = 0
-		}
-
-		currentRoutes = append(currentRoutes, route)
-		currentSize += routeSize
+	if len(hostRoutes) == 0 {
+		return nil
 	}
 
-	// Flush remaining routes
-	if len(currentRoutes) > 0 {
+	// Estimate total payload and the minimum number of buckets needed so each
+	// bucket comfortably fits under maxConfigMapSize. The 0.7 capacity factor
+	// leaves room for routes added between rebuilds without triggering a
+	// rebucket immediately.
+	baseSize := len(fmt.Sprintf(`{"version":1,"hosts":{"%s":[]}}`, host))
+	const partitionCapacityFactor = 0.7
+	usableSize := int(float64(maxConfigMapSize) * partitionCapacityFactor)
+	if usableSize <= baseSize {
+		usableSize = maxConfigMapSize - baseSize
+	}
+
+	routeSizes := make([]int, len(hostRoutes))
+	totalSize := 0
+	for i, route := range hostRoutes {
+		routeData, _ := json.Marshal(route)
+		routeSizes[i] = len(routeData) + 1 // +1 for comma
+		totalSize += routeSizes[i]
+	}
+
+	bucketCount := 1
+	if totalSize > usableSize {
+		bucketCount = (totalSize + usableSize - 1) / usableSize
+	}
+
+	// Try to assign with the current bucket count; if any bucket ends up
+	// above maxConfigMapSize, double and try again. Capped to avoid runaway
+	// growth on pathological inputs.
+	var buckets [][]routes.Route
+	const maxRetries = 4
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		buckets = make([][]routes.Route, bucketCount)
+		bucketBytes := make([]int, bucketCount)
+		overflow := false
+
+		for i, route := range hostRoutes {
+			idx := int(routeBucket(host, route, uint32(bucketCount)))
+			buckets[idx] = append(buckets[idx], route)
+			bucketBytes[idx] += routeSizes[i]
+			if bucketBytes[idx]+baseSize > maxConfigMapSize {
+				overflow = true
+			}
+		}
+
+		if !overflow {
+			break
+		}
+		bucketCount *= 2
+	}
+
+	// Sort each bucket so the JSON output is byte-stable across reconciles.
+	// SortRoutes itself can leave ties (e.g. equal path length) in input
+	// order, so we apply a full-identity tiebreaker here. The extproc loader
+	// merges all partitions for a host and re-applies SortRoutes globally,
+	// so the per-bucket order has no effect on routing priority — only on
+	// the byte equality used by the per-partition dedup at
+	// upsertSingleConfigMap.
+	for i := range buckets {
+		if len(buckets[i]) <= 1 {
+			continue
+		}
+		sortRoutesByIdentity(buckets[i])
+	}
+
+	var partitions []ConfigMapPartition
+	partIndex := startIndex
+	for _, bucket := range buckets {
+		if len(bucket) == 0 {
+			// Skip empty buckets but keep partition indexes monotonic so the
+			// ordering of emitted partitions is stable for the same input.
+			partIndex++
+			continue
+		}
 		partConfig := &routes.RoutesConfig{
 			Version: 1,
-			Hosts:   map[string][]routes.Route{host: currentRoutes},
+			Hosts:   map[string][]routes.Route{host: bucket},
 		}
 		partData, _ := partConfig.ToJSON()
 		partitions = append(partitions, ConfigMapPartition{
@@ -617,9 +672,71 @@ func (r *CustomHTTPRouteReconciler) splitHostRoutes(
 			Target: target,
 			Data:   string(partData),
 		})
+		partIndex++
 	}
-
 	return partitions
+}
+
+// sortRoutesByIdentity orders routes by a fully deterministic identity
+// signature so the JSON output of a bucket is byte-stable across reconciles
+// even when SortRoutes would tie on its real-routing-priority comparisons.
+// Used only inside splitHostRoutes; routing priority is re-established by
+// the extproc loader after merge.
+func sortRoutesByIdentity(rs []routes.Route) {
+	sort.SliceStable(rs, func(i, j int) bool {
+		a, b := rs[i], rs[j]
+		if a.Path != b.Path {
+			return a.Path < b.Path
+		}
+		if a.Type != b.Type {
+			return a.Type < b.Type
+		}
+		if a.Method != b.Method {
+			return a.Method < b.Method
+		}
+		if a.Backend != b.Backend {
+			return a.Backend < b.Backend
+		}
+		// Final tiebreaker: the marshalled byte form is fully deterministic
+		// once Path/Type/Method/Backend match.
+		ad, _ := json.Marshal(a)
+		bd, _ := json.Marshal(b)
+		return string(ad) < string(bd)
+	})
+}
+
+// routeBucket maps a route to a partition index. The hash input combines the
+// host with the route identity fields so the same route is always assigned to
+// the same bucket given a fixed bucketCount.
+func routeBucket(host string, route routes.Route, bucketCount uint32) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(host))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(route.Type))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(route.Path))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(route.Method))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(route.Backend))
+	_, _ = h.Write([]byte{0})
+	for _, hm := range route.Headers {
+		_, _ = h.Write([]byte(hm.Name))
+		_, _ = h.Write([]byte{1})
+		_, _ = h.Write([]byte(hm.Value))
+		_, _ = h.Write([]byte{1})
+		_, _ = h.Write([]byte(hm.Type))
+		_, _ = h.Write([]byte{2})
+	}
+	for _, qm := range route.QueryParams {
+		_, _ = h.Write([]byte(qm.Name))
+		_, _ = h.Write([]byte{1})
+		_, _ = h.Write([]byte(qm.Value))
+		_, _ = h.Write([]byte{1})
+		_, _ = h.Write([]byte(qm.Type))
+		_, _ = h.Write([]byte{2})
+	}
+	return h.Sum32() % bucketCount
 }
 
 // partitionName generates the name for a partition: customrouter-routes-<target>-<index>
