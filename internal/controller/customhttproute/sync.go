@@ -590,15 +590,19 @@ func (r *CustomHTTPRouteReconciler) splitHostRoutes(
 		return nil
 	}
 
-	// Estimate total payload and the minimum number of buckets needed so each
-	// bucket comfortably fits under maxConfigMapSize. The 0.7 capacity factor
-	// leaves room for routes added between rebuilds without triggering a
-	// rebucket immediately.
+	// Estimate the total payload and the minimum number of buckets needed so
+	// each bucket fits under maxConfigMapSize. To keep the bucket count
+	// stable across reconciles (so a route's hash modulo bucketCount maps to
+	// the same bucket between runs), we round up to the next power of two
+	// large enough to absorb at least one doubling of the input. Small churn
+	// in totalSize therefore does not change bucketCount, which means a
+	// route mutation only modifies its own bucket's ConfigMap; bucketCount
+	// only grows (one-shot re-bucketing event) when total payload more than
+	// doubles since the last bucket-count step.
 	baseSize := len(fmt.Sprintf(`{"version":1,"hosts":{"%s":[]}}`, host))
-	const partitionCapacityFactor = 0.7
-	usableSize := int(float64(maxConfigMapSize) * partitionCapacityFactor)
-	if usableSize <= baseSize {
-		usableSize = maxConfigMapSize - baseSize
+	usableSize := maxConfigMapSize - baseSize
+	if usableSize <= 0 {
+		usableSize = maxConfigMapSize
 	}
 
 	routeSizes := make([]int, len(hostRoutes))
@@ -609,10 +613,11 @@ func (r *CustomHTTPRouteReconciler) splitHostRoutes(
 		totalSize += routeSizes[i]
 	}
 
-	bucketCount := 1
+	minBuckets := 1
 	if totalSize > usableSize {
-		bucketCount = (totalSize + usableSize - 1) / usableSize
+		minBuckets = (totalSize + usableSize - 1) / usableSize
 	}
+	bucketCount := stableBucketCount(minBuckets)
 
 	// Try to assign with the current bucket count; if any bucket ends up
 	// above maxConfigMapSize, double and try again. Capped to avoid runaway
@@ -675,6 +680,26 @@ func (r *CustomHTTPRouteReconciler) splitHostRoutes(
 		partIndex++
 	}
 	return partitions
+}
+
+// stableBucketCount rounds the minimum required bucket count up to the next
+// power of two AND ensures we leave at least one doubling of headroom before
+// the next step. This keeps the bucket count stable across reconciles: small
+// changes in total payload do not change bucketCount, so a route's
+// hash-modulo-bucketCount placement is unaffected by churn elsewhere. The
+// count only grows when the working set more than doubles, which is a rare
+// event and a single one-shot rebucketing is the only cost.
+func stableBucketCount(minBuckets int) int {
+	if minBuckets <= 1 {
+		return 1
+	}
+	// Smallest power of two >= 2 * minBuckets.
+	target := 2 * minBuckets
+	bc := 2
+	for bc < target {
+		bc *= 2
+	}
+	return bc
 }
 
 // sortRoutesByIdentity orders routes by a fully deterministic identity

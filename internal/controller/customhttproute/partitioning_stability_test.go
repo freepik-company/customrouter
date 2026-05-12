@@ -208,6 +208,51 @@ func TestRouteBucket_Deterministic(t *testing.T) {
 	}
 }
 
+// TestStableBucketCount_DoesNotOscillate is the regression that caught the
+// real-world write storm: a small change in input size used to flip
+// bucketCount (e.g. 110 ↔ 111) and re-map every route to a different bucket,
+// turning a one-route mutation into a full ConfigMap rewrite. With
+// power-of-two stepping plus 2× headroom, bucketCount must not change
+// across a representative small-growth window.
+func TestStableBucketCount_DoesNotOscillate(t *testing.T) {
+	r := &CustomHTTPRouteReconciler{ConfigMapNamespace: "default"}
+	host := testHost
+
+	base := largeRouteSet("base", 600)
+	beforeParts := r.splitHostRoutes("default", host, base, 0)
+	bcBefore := len(beforeParts)
+
+	// Add 5% more routes (well within the 2× headroom).
+	grown := largeRouteSet("base", 630)
+	afterParts := r.splitHostRoutes("default", host, grown, 0)
+	bcAfter := len(afterParts)
+
+	if bcAfter != bcBefore {
+		t.Fatalf("bucket count changed on 5%% growth: %d → %d (should remain stable)",
+			bcBefore, bcAfter)
+	}
+}
+
+// TestStableBucketCount_PowerOfTwo confirms the helper returns a power of two
+// with at least 2× the requested minimum (anti-oscillation guarantee).
+func TestStableBucketCount_PowerOfTwo(t *testing.T) {
+	cases := []struct{ min, want int }{
+		{0, 1},
+		{1, 1},
+		{2, 4},
+		{50, 128},
+		{100, 256},
+		{127, 256},
+		{128, 256},
+		{129, 512},
+	}
+	for _, tc := range cases {
+		if got := stableBucketCount(tc.min); got != tc.want {
+			t.Errorf("stableBucketCount(%d) = %d, want %d", tc.min, got, tc.want)
+		}
+	}
+}
+
 // TestRouteBucket_DistinctRoutesDistribute is a smoke test that the hash
 // distributes a range of routes across the available buckets. We allow a
 // generous tolerance because FNV does not guarantee perfect uniformity but
