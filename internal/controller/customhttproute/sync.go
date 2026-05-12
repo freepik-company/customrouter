@@ -658,7 +658,7 @@ func (r *CustomHTTPRouteReconciler) splitHostRoutes(
 		sortRoutesByIdentity(buckets[i])
 	}
 
-	var partitions []ConfigMapPartition
+	partitions := make([]ConfigMapPartition, 0, bucketCount)
 	partIndex := startIndex
 	for _, bucket := range buckets {
 		if len(bucket) == 0 {
