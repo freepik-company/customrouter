@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"sort"
 	"strings"
 	"time"
@@ -32,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/util/retry"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -77,11 +79,18 @@ const (
 
 // ReconcileObject handles the reconciliation logic for CustomHTTPRoute resources.
 // It rebuilds only the ConfigMaps for the affected target, not all targets.
+//
+// To bound the API/etcd write rate when many CustomHTTPRoutes sharing a
+// target are reconciled together (typically at controller cache resync), the
+// rebuild is rate-limited per target via rebuildWait. Reconciles arriving
+// while a target is in cooldown return a non-zero ctrl.Result.RequeueAfter so
+// the work item is reprocessed later — by which time a single concurrent
+// rebuild will have incorporated every CR's current state.
 func (r *CustomHTTPRouteReconciler) ReconcileObject(
 	ctx context.Context,
 	eventType watch.EventType,
 	resourceManifest *v1alpha1.CustomHTTPRoute,
-) error {
+) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	target := resourceManifest.Spec.TargetRef.Name
 
@@ -98,6 +107,18 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 			"target", target)
 	}
 
+	// Cooldown: cap rebuild rate per target. Skipped for deletions so that
+	// stale ConfigMaps and EnvoyFilters are cleaned up promptly when a CR
+	// goes away.
+	if eventType != watch.Deleted {
+		if remaining, throttled := r.rebuildWait(target, time.Now()); throttled {
+			logger.V(1).Info("target rebuild in cooldown, requeueing",
+				"target", target,
+				"wait", remaining.String())
+			return ctrl.Result{RequeueAfter: remaining}, nil
+		}
+	}
+
 	// If the target changed, also rebuild the old target to clean up its stale ConfigMaps
 	if previousTarget, ok := resourceManifest.Annotations[lastTargetAnnotation]; ok && previousTarget != target {
 		logger.Info("Target changed, also rebuilding previous target",
@@ -105,21 +126,23 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 			"previousTarget", previousTarget,
 			"newTarget", target)
 		if err := r.rebuildConfigMapsForTarget(ctx, previousTarget); err != nil {
-			return fmt.Errorf("failed to rebuild ConfigMaps for previous target %s: %w", previousTarget, err)
+			return ctrl.Result{}, fmt.Errorf("failed to rebuild ConfigMaps for previous target %s: %w", previousTarget, err)
 		}
+		r.markRebuilt(previousTarget, time.Now())
 	}
 
 	// Update the last-target annotation — skip for deletions as the resource is being removed
 	if eventType != watch.Deleted {
 		if err := r.ensureLastTargetAnnotation(ctx, resourceManifest, target); err != nil {
-			return fmt.Errorf("failed to update last-target annotation: %w", err)
+			return ctrl.Result{}, fmt.Errorf("failed to update last-target annotation: %w", err)
 		}
 	}
 
 	// Rebuild ConfigMaps for the current target
 	if err := r.rebuildConfigMapsForTarget(ctx, target); err != nil {
-		return err
+		return ctrl.Result{}, err
 	}
+	r.markRebuilt(target, time.Now())
 
 	// Reconcile catch-all EnvoyFilter when:
 	// - the route currently has catchAllRoute configured
@@ -131,14 +154,14 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 
 	if needsCatchAllReconcile {
 		if err := r.reconcileCatchAllFromAllRoutes(ctx); err != nil {
-			return fmt.Errorf("failed to reconcile catch-all routes: %w", err)
+			return ctrl.Result{}, fmt.Errorf("failed to reconcile catch-all routes: %w", err)
 		}
 	}
 
 	// Track whether this route has catchAllRoute for future change detection — skip for deletions
 	if eventType != watch.Deleted {
 		if err := r.ensureHadCatchAllAnnotation(ctx, resourceManifest, hasCatchAll); err != nil {
-			return fmt.Errorf("failed to update had-catch-all annotation: %w", err)
+			return ctrl.Result{}, fmt.Errorf("failed to update had-catch-all annotation: %w", err)
 		}
 	}
 
@@ -146,13 +169,13 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 	hasMirror := routeHasMirrorAction(resourceManifest)
 	if hasMirror || eventType == watch.Deleted || hadMirror {
 		if err := r.reconcileMirrorFromAllRoutes(ctx); err != nil {
-			return fmt.Errorf("failed to reconcile mirror routes: %w", err)
+			return ctrl.Result{}, fmt.Errorf("failed to reconcile mirror routes: %w", err)
 		}
 	}
 
 	if eventType != watch.Deleted {
 		if err := r.ensureHadMirrorAnnotation(ctx, resourceManifest, hasMirror); err != nil {
-			return fmt.Errorf("failed to update had-mirror annotation: %w", err)
+			return ctrl.Result{}, fmt.Errorf("failed to update had-mirror annotation: %w", err)
 		}
 	}
 
@@ -160,17 +183,17 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 	hasCORS := routeHasCORSAction(resourceManifest)
 	if hasCORS || eventType == watch.Deleted || hadCORS {
 		if err := r.reconcileCORSFromAllRoutes(ctx); err != nil {
-			return fmt.Errorf("failed to reconcile cors routes: %w", err)
+			return ctrl.Result{}, fmt.Errorf("failed to reconcile cors routes: %w", err)
 		}
 	}
 
 	if eventType != watch.Deleted {
 		if err := r.ensureHadCORSAnnotation(ctx, resourceManifest, hasCORS); err != nil {
-			return fmt.Errorf("failed to update had-cors annotation: %w", err)
+			return ctrl.Result{}, fmt.Errorf("failed to update had-cors annotation: %w", err)
 		}
 	}
 
-	return nil
+	return ctrl.Result{}, nil
 }
 
 // routeHasCORSAction returns true if any rule in the route declares a cors action.
@@ -500,9 +523,9 @@ func (r *CustomHTTPRouteReconciler) splitByHosts(
 			}
 
 			// Split this host's routes across multiple partitions
-			hostPartitions := r.splitHostRoutes(target, host, hostRoutes, partIndex)
+			hostPartitions, nextIndex := r.splitHostRoutes(target, host, hostRoutes, partIndex)
 			partitions = append(partitions, hostPartitions...)
-			partIndex += len(hostPartitions)
+			partIndex = nextIndex
 			continue
 		}
 
@@ -543,61 +566,208 @@ func (r *CustomHTTPRouteReconciler) splitByHosts(
 	return partitions
 }
 
-// splitHostRoutes splits a single host's routes across multiple partitions
+// splitHostRoutes splits a single host's routes across multiple partitions.
+//
+// Assignment is stable: each route is mapped to a partition by hashing a key
+// derived from its identity (path type, path, method, backend, header and
+// query-param signatures). A single route mutation in the input therefore
+// changes at most one partition's content, instead of cascading through every
+// downstream partition as a greedy size-based packing would. Within each
+// partition the routes are sorted so the JSON serialisation is deterministic
+// for the per-partition content dedup at upsertSingleConfigMap.
+//
+// The bucket count is derived from the total payload size with a generous
+// safety margin so small growth does not force a re-bucket. If an unlucky
+// hash distribution puts a bucket over maxConfigMapSize the bucket count is
+// doubled and the assignment retried.
+//
+// The second return value is the next partition index the caller should use
+// for subsequent hosts. It is always startIndex + bucketCount even when some
+// buckets are empty, so partition naming for a given bucket position stays
+// stable across reconciles (an empty bucket today does not shift the index
+// of its non-empty neighbours tomorrow) and downstream hosts do not collide
+// on the names of the empty-bucket slots reserved here.
 func (r *CustomHTTPRouteReconciler) splitHostRoutes(
 	target string,
 	host string,
 	hostRoutes []routes.Route,
 	startIndex int,
-) []ConfigMapPartition {
-	var partitions []ConfigMapPartition
-	partIndex := startIndex
-
-	currentRoutes := make([]routes.Route, 0, len(hostRoutes))
-	currentSize := 0
-	baseSize := len(fmt.Sprintf(`{"version":1,"hosts":{"%s":[]}}`, host))
-
-	for _, route := range hostRoutes {
-		routeData, _ := json.Marshal(route)
-		routeSize := len(routeData) + 1 // +1 for comma
-
-		if currentSize+routeSize+baseSize > maxConfigMapSize && len(currentRoutes) > 0 {
-			// Flush current routes
-			partConfig := &routes.RoutesConfig{
-				Version: 1,
-				Hosts:   map[string][]routes.Route{host: currentRoutes},
-			}
-			partData, _ := partConfig.ToJSON()
-			partitions = append(partitions, ConfigMapPartition{
-				Name:   r.partitionName(target, partIndex),
-				Target: target,
-				Data:   string(partData),
-			})
-			partIndex++
-
-			currentRoutes = make([]routes.Route, 0)
-			currentSize = 0
-		}
-
-		currentRoutes = append(currentRoutes, route)
-		currentSize += routeSize
+) ([]ConfigMapPartition, int) {
+	if len(hostRoutes) == 0 {
+		return nil, startIndex
 	}
 
-	// Flush remaining routes
-	if len(currentRoutes) > 0 {
+	// Estimate the total payload and the minimum number of buckets needed so
+	// each bucket fits under maxConfigMapSize. To keep the bucket count
+	// stable across reconciles (so a route's hash modulo bucketCount maps to
+	// the same bucket between runs), we round up to the next power of two
+	// large enough to absorb at least one doubling of the input. Small churn
+	// in totalSize therefore does not change bucketCount, which means a
+	// route mutation only modifies its own bucket's ConfigMap; bucketCount
+	// only grows (one-shot re-bucketing event) when total payload more than
+	// doubles since the last bucket-count step.
+	baseSize := len(fmt.Sprintf(`{"version":1,"hosts":{"%s":[]}}`, host))
+	usableSize := maxConfigMapSize - baseSize
+	if usableSize <= 0 {
+		usableSize = maxConfigMapSize
+	}
+
+	routeSizes := make([]int, len(hostRoutes))
+	totalSize := 0
+	for i, route := range hostRoutes {
+		routeData, _ := json.Marshal(route)
+		routeSizes[i] = len(routeData) + 1 // +1 for comma
+		totalSize += routeSizes[i]
+	}
+
+	minBuckets := 1
+	if totalSize > usableSize {
+		minBuckets = (totalSize + usableSize - 1) / usableSize
+	}
+	bucketCount := stableBucketCount(minBuckets)
+
+	// Try to assign with the current bucket count; if any bucket ends up
+	// above maxConfigMapSize, double and try again. Capped to avoid runaway
+	// growth on pathological inputs.
+	var buckets [][]routes.Route
+	const maxRetries = 4
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		buckets = make([][]routes.Route, bucketCount)
+		bucketBytes := make([]int, bucketCount)
+		overflow := false
+
+		for i, route := range hostRoutes {
+			idx := int(routeBucket(host, route, uint32(bucketCount)))
+			buckets[idx] = append(buckets[idx], route)
+			bucketBytes[idx] += routeSizes[i]
+			if bucketBytes[idx]+baseSize > maxConfigMapSize {
+				overflow = true
+			}
+		}
+
+		if !overflow {
+			break
+		}
+		bucketCount *= 2
+	}
+
+	// Sort each bucket so the JSON output is byte-stable across reconciles.
+	// SortRoutes itself can leave ties (e.g. equal path length) in input
+	// order, so we apply a full-identity tiebreaker here. The extproc loader
+	// merges all partitions for a host and re-applies SortRoutes globally,
+	// so the per-bucket order has no effect on routing priority — only on
+	// the byte equality used by the per-partition dedup at
+	// upsertSingleConfigMap.
+	for i := range buckets {
+		if len(buckets[i]) <= 1 {
+			continue
+		}
+		sortRoutesByIdentity(buckets[i])
+	}
+
+	partitions := make([]ConfigMapPartition, 0, bucketCount)
+	for bucketIdx, bucket := range buckets {
+		if len(bucket) == 0 {
+			// Empty buckets do not emit a ConfigMap, but the bucket index is
+			// still reserved so a non-empty neighbour keeps the same partition
+			// name across reconciles (stability), and so downstream hosts
+			// (advanced via the returned index) do not reuse our names.
+			continue
+		}
 		partConfig := &routes.RoutesConfig{
 			Version: 1,
-			Hosts:   map[string][]routes.Route{host: currentRoutes},
+			Hosts:   map[string][]routes.Route{host: bucket},
 		}
 		partData, _ := partConfig.ToJSON()
 		partitions = append(partitions, ConfigMapPartition{
-			Name:   r.partitionName(target, partIndex),
+			Name:   r.partitionName(target, startIndex+bucketIdx),
 			Target: target,
 			Data:   string(partData),
 		})
 	}
+	return partitions, startIndex + bucketCount
+}
 
-	return partitions
+// stableBucketCount rounds the minimum required bucket count up to the next
+// power of two AND ensures we leave at least one doubling of headroom before
+// the next step. This keeps the bucket count stable across reconciles: small
+// changes in total payload do not change bucketCount, so a route's
+// hash-modulo-bucketCount placement is unaffected by churn elsewhere. The
+// count only grows when the working set more than doubles, which is a rare
+// event and a single one-shot rebucketing is the only cost.
+func stableBucketCount(minBuckets int) int {
+	if minBuckets <= 1 {
+		return 1
+	}
+	// Smallest power of two >= 2 * minBuckets.
+	target := 2 * minBuckets
+	bc := 2
+	for bc < target {
+		bc *= 2
+	}
+	return bc
+}
+
+// sortRoutesByIdentity orders routes by a fully deterministic identity
+// signature so the JSON output of a bucket is byte-stable across reconciles
+// even when SortRoutes would tie on its real-routing-priority comparisons.
+// Used only inside splitHostRoutes; routing priority is re-established by
+// the extproc loader after merge.
+func sortRoutesByIdentity(rs []routes.Route) {
+	sort.SliceStable(rs, func(i, j int) bool {
+		a, b := rs[i], rs[j]
+		if a.Path != b.Path {
+			return a.Path < b.Path
+		}
+		if a.Type != b.Type {
+			return a.Type < b.Type
+		}
+		if a.Method != b.Method {
+			return a.Method < b.Method
+		}
+		if a.Backend != b.Backend {
+			return a.Backend < b.Backend
+		}
+		// Final tiebreaker: the marshalled byte form is fully deterministic
+		// once Path/Type/Method/Backend match.
+		ad, _ := json.Marshal(a)
+		bd, _ := json.Marshal(b)
+		return string(ad) < string(bd)
+	})
+}
+
+// routeBucket maps a route to a partition index. The hash input combines the
+// host with the route identity fields so the same route is always assigned to
+// the same bucket given a fixed bucketCount.
+func routeBucket(host string, route routes.Route, bucketCount uint32) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(host))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(route.Type))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(route.Path))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(route.Method))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(route.Backend))
+	_, _ = h.Write([]byte{0})
+	for _, hm := range route.Headers {
+		_, _ = h.Write([]byte(hm.Name))
+		_, _ = h.Write([]byte{1})
+		_, _ = h.Write([]byte(hm.Value))
+		_, _ = h.Write([]byte{1})
+		_, _ = h.Write([]byte(hm.Type))
+		_, _ = h.Write([]byte{2})
+	}
+	for _, qm := range route.QueryParams {
+		_, _ = h.Write([]byte(qm.Name))
+		_, _ = h.Write([]byte{1})
+		_, _ = h.Write([]byte(qm.Value))
+		_, _ = h.Write([]byte{1})
+		_, _ = h.Write([]byte(qm.Type))
+		_, _ = h.Write([]byte{2})
+	}
+	return h.Sum32() % bucketCount
 }
 
 // partitionName generates the name for a partition: customrouter-routes-<target>-<index>

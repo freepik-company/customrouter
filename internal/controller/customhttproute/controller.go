@@ -19,6 +19,8 @@ package customhttproute
 import (
 	"context"
 	"fmt"
+	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -39,12 +41,70 @@ import (
 
 const targetRefIndexField = ".spec.targetRef.name"
 
+// DefaultRebuildCooldown is the minimum interval enforced between successful
+// ConfigMap rebuilds for the same target. It bounds the API/etcd write rate
+// that the controller can generate when many CustomHTTPRoutes sharing a
+// target are enqueued together (typically at controller cache resync).
+const DefaultRebuildCooldown = 500 * time.Millisecond
+
 // CustomHTTPRouteReconciler reconciles a CustomHTTPRoute object
 type CustomHTTPRouteReconciler struct {
 	client.Client
 	Scheme                  *runtime.Scheme
 	ConfigMapNamespace      string
 	MaxConcurrentReconciles int
+
+	// RebuildCooldown caps how often a single target's ConfigMaps can be
+	// rebuilt. Reconciles arriving while a target is in cooldown are requeued
+	// after the remaining wait instead of repeating the rebuild work.
+	// When zero, DefaultRebuildCooldown is used.
+	RebuildCooldown time.Duration
+
+	// lastRebuildAt records the last successful rebuild time per target name.
+	// Read/written under rebuildMu.
+	lastRebuildAt map[string]time.Time
+	rebuildMu     sync.Mutex
+}
+
+// effectiveRebuildCooldown returns the cooldown to apply. A zero value falls
+// back to DefaultRebuildCooldown; a negative value disables throttling (useful
+// in tests).
+func (r *CustomHTTPRouteReconciler) effectiveRebuildCooldown() time.Duration {
+	if r.RebuildCooldown == 0 {
+		return DefaultRebuildCooldown
+	}
+	return r.RebuildCooldown
+}
+
+// rebuildWait reports the remaining cooldown for the given target. The bool
+// result is true when the target is still in cooldown and the caller should
+// requeue instead of rebuilding.
+func (r *CustomHTTPRouteReconciler) rebuildWait(target string, now time.Time) (time.Duration, bool) {
+	cooldown := r.effectiveRebuildCooldown()
+	if cooldown <= 0 {
+		return 0, false
+	}
+	r.rebuildMu.Lock()
+	defer r.rebuildMu.Unlock()
+	last, ok := r.lastRebuildAt[target]
+	if !ok {
+		return 0, false
+	}
+	elapsed := now.Sub(last)
+	if elapsed >= cooldown {
+		return 0, false
+	}
+	return cooldown - elapsed, true
+}
+
+// markRebuilt records a successful rebuild for the given target.
+func (r *CustomHTTPRouteReconciler) markRebuilt(target string, when time.Time) {
+	r.rebuildMu.Lock()
+	defer r.rebuildMu.Unlock()
+	if r.lastRebuildAt == nil {
+		r.lastRebuildAt = make(map[string]time.Time)
+	}
+	r.lastRebuildAt[target] = when
 }
 
 // +kubebuilder:rbac:groups=customrouter.freepik.com,resources=customhttproutes,verbs=get;list;watch;create;update;patch;delete
@@ -78,7 +138,7 @@ func (r *CustomHTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	// 3. Check if the resource instance is marked to be deleted
 	if !objectManifest.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(objectManifest, controller.ResourceFinalizer) {
-			err = r.ReconcileObject(ctx, watch.Deleted, objectManifest)
+			result, err = r.ReconcileObject(ctx, watch.Deleted, objectManifest)
 			if err != nil {
 				logger.Error(err, "Failed to reconcile deletion", "name", req.Name)
 				return result, err
@@ -114,8 +174,17 @@ func (r *CustomHTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return result, nil // Don't requeue validation errors
 	}
 
-	// 6. Update the status before the requeue
+	// 6. Update the status before the requeue.
+	// Skipped on throttled rebuilds: bumping ObservedGeneration without
+	// actually processing the resource would falsely signal that the current
+	// Generation has been reconciled, and would generate a wasted status PUT
+	// per throttled reconcile — defeating the write-reduction the cooldown is
+	// here to provide.
+	statusUpdateNeeded := true
 	defer func() {
+		if !statusUpdateNeeded {
+			return
+		}
 		statusToApply := objectManifest.Status
 		statusToApply.ObservedGeneration = objectManifest.Generation
 		statusErr := controller.UpdateStatusWithRetry(ctx, r.Client, objectManifest, func(object client.Object) error {
@@ -129,12 +198,19 @@ func (r *CustomHTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}()
 
 	// 7. The resource already exists: manage the update
-	err = r.ReconcileObject(ctx, watch.Modified, objectManifest)
+	result, err = r.ReconcileObject(ctx, watch.Modified, objectManifest)
 	if err != nil {
 		r.UpdateConditionReconciled(objectManifest)
 		r.UpdateConditionConfigMapFailed(objectManifest, err.Error())
 		logger.Error(err, "Failed to reconcile", "name", req.Name)
 		return result, err
+	}
+	// If the rebuild was throttled (RequeueAfter set), stop here without a
+	// status update. Conditions and ObservedGeneration are refreshed on the
+	// next reconcile when the rebuild actually runs.
+	if result.RequeueAfter > 0 {
+		statusUpdateNeeded = false
+		return result, nil
 	}
 
 	// 8. Success, update the status
