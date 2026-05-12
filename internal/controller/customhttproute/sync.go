@@ -523,9 +523,9 @@ func (r *CustomHTTPRouteReconciler) splitByHosts(
 			}
 
 			// Split this host's routes across multiple partitions
-			hostPartitions := r.splitHostRoutes(target, host, hostRoutes, partIndex)
+			hostPartitions, nextIndex := r.splitHostRoutes(target, host, hostRoutes, partIndex)
 			partitions = append(partitions, hostPartitions...)
-			partIndex += len(hostPartitions)
+			partIndex = nextIndex
 			continue
 		}
 
@@ -580,14 +580,21 @@ func (r *CustomHTTPRouteReconciler) splitByHosts(
 // safety margin so small growth does not force a re-bucket. If an unlucky
 // hash distribution puts a bucket over maxConfigMapSize the bucket count is
 // doubled and the assignment retried.
+//
+// The second return value is the next partition index the caller should use
+// for subsequent hosts. It is always startIndex + bucketCount even when some
+// buckets are empty, so partition naming for a given bucket position stays
+// stable across reconciles (an empty bucket today does not shift the index
+// of its non-empty neighbours tomorrow) and downstream hosts do not collide
+// on the names of the empty-bucket slots reserved here.
 func (r *CustomHTTPRouteReconciler) splitHostRoutes(
 	target string,
 	host string,
 	hostRoutes []routes.Route,
 	startIndex int,
-) []ConfigMapPartition {
+) ([]ConfigMapPartition, int) {
 	if len(hostRoutes) == 0 {
-		return nil
+		return nil, startIndex
 	}
 
 	// Estimate the total payload and the minimum number of buckets needed so
@@ -659,12 +666,12 @@ func (r *CustomHTTPRouteReconciler) splitHostRoutes(
 	}
 
 	partitions := make([]ConfigMapPartition, 0, bucketCount)
-	partIndex := startIndex
-	for _, bucket := range buckets {
+	for bucketIdx, bucket := range buckets {
 		if len(bucket) == 0 {
-			// Skip empty buckets but keep partition indexes monotonic so the
-			// ordering of emitted partitions is stable for the same input.
-			partIndex++
+			// Empty buckets do not emit a ConfigMap, but the bucket index is
+			// still reserved so a non-empty neighbour keeps the same partition
+			// name across reconciles (stability), and so downstream hosts
+			// (advanced via the returned index) do not reuse our names.
 			continue
 		}
 		partConfig := &routes.RoutesConfig{
@@ -673,13 +680,12 @@ func (r *CustomHTTPRouteReconciler) splitHostRoutes(
 		}
 		partData, _ := partConfig.ToJSON()
 		partitions = append(partitions, ConfigMapPartition{
-			Name:   r.partitionName(target, partIndex),
+			Name:   r.partitionName(target, startIndex+bucketIdx),
 			Target: target,
 			Data:   string(partData),
 		})
-		partIndex++
 	}
-	return partitions
+	return partitions, startIndex + bucketCount
 }
 
 // stableBucketCount rounds the minimum required bucket count up to the next
