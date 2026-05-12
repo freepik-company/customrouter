@@ -174,8 +174,17 @@ func (r *CustomHTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return result, nil // Don't requeue validation errors
 	}
 
-	// 6. Update the status before the requeue
+	// 6. Update the status before the requeue.
+	// Skipped on throttled rebuilds: bumping ObservedGeneration without
+	// actually processing the resource would falsely signal that the current
+	// Generation has been reconciled, and would generate a wasted status PUT
+	// per throttled reconcile — defeating the write-reduction the cooldown is
+	// here to provide.
+	statusUpdateNeeded := true
 	defer func() {
+		if !statusUpdateNeeded {
+			return
+		}
 		statusToApply := objectManifest.Status
 		statusToApply.ObservedGeneration = objectManifest.Generation
 		statusErr := controller.UpdateStatusWithRetry(ctx, r.Client, objectManifest, func(object client.Object) error {
@@ -196,9 +205,11 @@ func (r *CustomHTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		logger.Error(err, "Failed to reconcile", "name", req.Name)
 		return result, err
 	}
-	// If the rebuild was throttled (RequeueAfter set), stop here. Conditions
-	// will be refreshed on the next reconcile when the rebuild actually runs.
+	// If the rebuild was throttled (RequeueAfter set), stop here without a
+	// status update. Conditions and ObservedGeneration are refreshed on the
+	// next reconcile when the rebuild actually runs.
 	if result.RequeueAfter > 0 {
+		statusUpdateNeeded = false
 		return result, nil
 	}
 
