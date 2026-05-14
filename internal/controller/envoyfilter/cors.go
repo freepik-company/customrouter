@@ -147,8 +147,9 @@ func BuildCORSEnvoyFilter(
 	selectorInterface := SelectorToInterface(epa.Spec.GatewayRef.Selector)
 
 	configPatches := make([]interface{}, 0, len(entries))
+	numRetries := GetNumRetries(epa)
 	for i := range entries {
-		configPatches = append(configPatches, buildCORSPatch(&entries[i]))
+		configPatches = append(configPatches, buildCORSPatch(&entries[i], numRetries))
 	}
 
 	spec := map[string]interface{}{
@@ -166,7 +167,7 @@ func BuildCORSEnvoyFilter(
 	return ef, nil
 }
 
-func buildCORSPatch(entry *CORSEntry) map[string]interface{} {
+func buildCORSPatch(entry *CORSEntry, numRetries int64) map[string]interface{} {
 	match := BuildRouteMatch(&entry.Route)
 
 	headers, _ := match["headers"].([]interface{})
@@ -187,7 +188,7 @@ func buildCORSPatch(entry *CORSEntry) map[string]interface{} {
 		"timeout":        "30s",
 		"retry_policy": map[string]interface{}{
 			"retry_on":               "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes",
-			"num_retries":            int64(2),
+			"num_retries":            numRetries,
 			"retriable_status_codes": []interface{}{int64(503)},
 		},
 	}

@@ -165,6 +165,21 @@ spec:
                 required:
                 - selector
                 type: object
+              retryPolicy:
+                description: |-
+                  retryPolicy configures the Envoy retry policy applied to all
+                  customrouter-managed routes. When not specified, no retries are performed.
+                properties:
+                  numRetries:
+                    default: 0
+                    description: |-
+                      numRetries is the number of retries Envoy will attempt on connection
+                      failures or retriable status codes before returning an error to the client.
+                      Defaults to 0 (no retries) when not specified.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                type: object
             required:
             - externalProcessorRef
             - gatewayRef
