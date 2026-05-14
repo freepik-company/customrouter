@@ -119,9 +119,9 @@ func TestBuildCatchAllVirtualHostPatchUsesNumRetries(t *testing.T) {
 		{3},
 	} {
 		patch := buildCatchAllVirtualHostPatch(entry, tc.numRetries)
-		routes := patch["patch"].(map[string]interface{})["value"].(map[string]interface{})["routes"].([]interface{})
+		routeSlice := patch["patch"].(map[string]interface{})["value"].(map[string]interface{})["routes"].([]interface{})
 		// The first route is the dynamic route with a retry_policy
-		dynRoute := routes[0].(map[string]interface{})
+		dynRoute := routeSlice[0].(map[string]interface{})
 		rp, ok := dynRoute["route"].(map[string]interface{})["retry_policy"].(map[string]interface{})
 		if !ok {
 			t.Fatalf("numRetries=%d: retry_policy missing from dynamic route", tc.numRetries)
@@ -147,7 +147,7 @@ func TestBuildMirrorEnvoyFilterUsesNumRetriesFromEPA(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	patches, _, _ := getNestedSlice(ef.Object, "spec", "configPatches")
+	patches := getNestedSlice(ef.Object, "spec", "configPatches")
 	if len(patches) == 0 {
 		t.Fatal("no configPatches in EnvoyFilter")
 	}
@@ -171,7 +171,7 @@ func TestBuildCORSEnvoyFilterUsesNumRetriesFromEPA(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	patches, _, _ := getNestedSlice(ef.Object, "spec", "configPatches")
+	patches := getNestedSlice(ef.Object, "spec", "configPatches")
 	if len(patches) == 0 {
 		t.Fatal("no configPatches in EnvoyFilter")
 	}
@@ -183,22 +183,22 @@ func TestBuildCORSEnvoyFilterUsesNumRetriesFromEPA(t *testing.T) {
 }
 
 // getNestedSlice is a helper to retrieve a nested slice from an unstructured map.
-func getNestedSlice(obj map[string]interface{}, fields ...string) ([]interface{}, bool, error) {
+func getNestedSlice(obj map[string]interface{}, fields ...string) []interface{} {
 	cur := obj
 	for i, f := range fields {
 		if i == len(fields)-1 {
 			v, ok := cur[f]
 			if !ok {
-				return nil, false, nil
+				return nil
 			}
-			s, ok := v.([]interface{})
-			return s, ok, nil
+			s, _ := v.([]interface{})
+			return s
 		}
 		next, ok := cur[f].(map[string]interface{})
 		if !ok {
-			return nil, false, nil
+			return nil
 		}
 		cur = next
 	}
-	return nil, false, nil
+	return nil
 }
