@@ -65,6 +65,15 @@ var GVK = schema.GroupVersionKind{
 	Kind:    "EnvoyFilter",
 }
 
+// GetNumRetries returns the configured numRetries from the EPA's retryPolicy,
+// defaulting to 0 when not specified.
+func GetNumRetries(epa *v1alpha1.ExternalProcessorAttachment) int64 {
+	if epa.Spec.RetryPolicy != nil {
+		return epa.Spec.RetryPolicy.NumRetries
+	}
+	return 0
+}
+
 // CatchAllEntry represents a hostname with its default backend for catch-all routing.
 type CatchAllEntry struct {
 	Hostname   string
@@ -262,8 +271,9 @@ func BuildCatchAllEnvoyFilter(
 	selectorInterface := SelectorToInterface(epa.Spec.GatewayRef.Selector)
 
 	configPatches := make([]interface{}, 0, len(entries))
+	numRetries := GetNumRetries(epa)
 	for _, entry := range entries {
-		for _, patch := range buildCatchAllPatches(entry, hostnamesWithHTTPRoute[entry.Hostname]) {
+		for _, patch := range buildCatchAllPatches(entry, hostnamesWithHTTPRoute[entry.Hostname], numRetries) {
 			configPatches = append(configPatches, patch)
 		}
 	}
@@ -287,9 +297,9 @@ func BuildCatchAllEnvoyFilter(
 // the domain, one HTTP_ROUTE INSERT_FIRST per port in DefaultCatchAllPorts is returned
 // — Envoy would reject a second virtual host with the same domain, so the fallback is
 // injected into the existing one instead.
-func buildCatchAllPatches(entry CatchAllEntry, hostnameHasHTTPRoute bool) []map[string]interface{} {
+func buildCatchAllPatches(entry CatchAllEntry, hostnameHasHTTPRoute bool, numRetries int64) []map[string]interface{} {
 	if !hostnameHasHTTPRoute {
-		return []map[string]interface{}{buildCatchAllVirtualHostPatch(entry)}
+		return []map[string]interface{}{buildCatchAllVirtualHostPatch(entry, numRetries)}
 	}
 	patches := make([]map[string]interface{}, 0, len(DefaultCatchAllPorts))
 	for _, port := range DefaultCatchAllPorts {
@@ -300,7 +310,7 @@ func buildCatchAllPatches(entry CatchAllEntry, hostnameHasHTTPRoute bool) []map[
 
 // buildCatchAllVirtualHostPatch builds the legacy VIRTUAL_HOST ADD patch, creating a
 // new virtual host with both the header-gated dynamic route and the default fallback.
-func buildCatchAllVirtualHostPatch(entry CatchAllEntry) map[string]interface{} {
+func buildCatchAllVirtualHostPatch(entry CatchAllEntry, numRetries int64) map[string]interface{} {
 	clusterName := BuildClusterName(entry.BackendRef)
 
 	return map[string]interface{}{
@@ -330,7 +340,7 @@ func buildCatchAllVirtualHostPatch(entry CatchAllEntry) map[string]interface{} {
 							"timeout":        "30s",
 							"retry_policy": map[string]interface{}{
 								"retry_on":               "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes",
-								"num_retries":            int64(2),
+								"num_retries":            numRetries,
 								"retriable_status_codes": []interface{}{int64(503)},
 							},
 						},

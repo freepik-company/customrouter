@@ -49,6 +49,6 @@ spec:
             timeout: 30s
             retry_policy:
               retry_on: "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes"
-              num_retries: 2
+              num_retries: 0
               retriable_status_codes:
                 - 503

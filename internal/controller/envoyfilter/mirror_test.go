@@ -179,7 +179,7 @@ func TestBuildMirrorPatchIncludesAuthorityAndClusterHeaderMatchers(t *testing.T)
 			BackendRef: v1alpha1.BackendRef{Name: "shadow", Namespace: "default", Port: 80},
 		},
 	}
-	patch := buildMirrorPatch(entry)
+	patch := buildMirrorPatch(entry, 0)
 
 	value := patch["patch"].(map[string]interface{})["value"].(map[string]interface{})
 	match := value["match"].(map[string]interface{})

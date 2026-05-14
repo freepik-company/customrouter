@@ -302,7 +302,7 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileRoutesEnvoyFilter(
 							"timeout":        "30s",
 							"retry_policy": map[string]interface{}{
 								"retry_on":               "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes",
-								"num_retries":            int64(2),
+								"num_retries":            ef.GetNumRetries(attachment),
 								"retriable_status_codes": []interface{}{int64(503)},
 							},
 						},

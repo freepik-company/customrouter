@@ -73,6 +73,19 @@ type ExternalProcessorRef struct {
 	MessageTimeout string `json:"messageTimeout,omitempty"`
 }
 
+// RetryPolicyConfig defines the retry policy configuration applied to all
+// customrouter-managed Envoy routes (routes, catch-all virtual hosts, mirror
+// routes, and CORS routes).
+type RetryPolicyConfig struct {
+	// NumRetries is the number of retries Envoy will attempt on connection
+	// failures or retriable status codes before returning an error to the client.
+	// Defaults to 0 (no retries) when not specified.
+	// +optional
+	// +kubebuilder:default=0
+	// +kubebuilder:validation:Minimum=0
+	NumRetries int64 `json:"numRetries,omitempty"`
+}
+
 // CatchAllRouteConfig defines the configuration for the catch-all route
 type CatchAllRouteConfig struct {
 	// hostnames is a list of hostnames that the catch-all route should match.
@@ -104,6 +117,11 @@ type ExternalProcessorAttachmentSpec struct {
 	// without requiring a base HTTPRoute to be configured separately.
 	// +optional
 	CatchAllRoute *CatchAllRouteConfig `json:"catchAllRoute,omitempty"`
+
+	// retryPolicy configures the Envoy retry policy applied to all
+	// customrouter-managed routes. When not specified, no retries are performed.
+	// +optional
+	RetryPolicy *RetryPolicyConfig `json:"retryPolicy,omitempty"`
 }
 
 // ExternalProcessorAttachmentStatus defines the observed state of ExternalProcessorAttachment.

@@ -151,7 +151,7 @@ func TestBuildCORSPatchIncludesTypedPerFilterConfig(t *testing.T) {
 			AllowMethods: []string{"GET"},
 		},
 	}
-	patch := buildCORSPatch(entry)
+	patch := buildCORSPatch(entry, 0)
 	value := patch["patch"].(map[string]interface{})["value"].(map[string]interface{})
 
 	tpf, ok := value["typed_per_filter_config"].(map[string]interface{})
