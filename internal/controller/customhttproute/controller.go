@@ -123,10 +123,15 @@ func (r *CustomHTTPRouteReconciler) clearTargetState(target string) {
 	delete(r.lastRebuildAt, target)
 	r.rebuildMu.Unlock()
 
+	// Partition names follow the pattern "customrouter-routes-<target>-<index>"
+	// where <index> is a non-negative integer. We must verify that the
+	// character immediately after the prefix is a digit to avoid accidentally
+	// evicting entries for targets that share a hyphenated prefix (e.g.
+	// target "foo" must not match "customrouter-routes-foo-bar-0").
 	prefix := configMapBaseName + "-" + target + "-"
 	r.partitionHashesMu.Lock()
 	for name := range r.partitionHashes {
-		if len(name) >= len(prefix) && name[:len(prefix)] == prefix {
+		if len(name) > len(prefix) && name[:len(prefix)] == prefix && name[len(prefix)] >= '0' && name[len(prefix)] <= '9' {
 			delete(r.partitionHashes, name)
 		}
 	}
