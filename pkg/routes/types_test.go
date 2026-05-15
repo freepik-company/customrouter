@@ -1,6 +1,8 @@
 package routes
 
 import (
+	"bytes"
+	"encoding/json"
 	"testing"
 )
 
@@ -361,5 +363,50 @@ func TestRouteMatchMethod(t *testing.T) {
 					tt.req, tt.route.Method, got, tt.wantMatch)
 			}
 		})
+	}
+}
+
+// TestToJSON_StableBytesAcrossSpecialChars is a tripwire for the
+// partitionHashes dedup in the controller: ToJSON must emit bytes that are
+// identical to a plain json.Marshal call, in particular for routes whose
+// Path / headers / query params contain '&', '<' or '>'. Switching the
+// underlying encoder to SetEscapeHTML(false) (or any other formatting tweak)
+// would silently invalidate every cached partition hash on the next reconcile
+// after an upgrade and force a one-time mass rewrite of managed ConfigMaps.
+func TestToJSON_StableBytesAcrossSpecialChars(t *testing.T) {
+	rc := &RoutesConfig{Hosts: map[string][]Route{
+		"x": {{Path: "/api?a=1&b=2&c=<x>", Type: RouteTypePrefix, Backend: "svc&backend"}},
+	}}
+
+	got, err := rc.ToJSON()
+	if err != nil {
+		t.Fatalf("ToJSON returned error: %v", err)
+	}
+
+	want, err := json.Marshal(rc)
+	if err != nil {
+		t.Fatalf("json.Marshal returned error: %v", err)
+	}
+
+	if !bytes.Equal(got, want) {
+		t.Fatalf("ToJSON output drifted from json.Marshal:\n got: %s\nwant: %s", got, want)
+	}
+
+	// Belt-and-suspenders: lock in the actual escaping behaviour rather than
+	// just byte-equality, so any future change to either side is caught.
+	for _, esc := range []string{`\u0026`, `\u003c`, `\u003e`} {
+		if !bytes.Contains(got, []byte(esc)) {
+			t.Errorf("ToJSON output missing expected escape %q: %s", esc, got)
+		}
+	}
+
+	// Two consecutive invocations must produce identical bytes; protects
+	// against pooled-buffer leakage corrupting the second call.
+	got2, err := rc.ToJSON()
+	if err != nil {
+		t.Fatalf("second ToJSON returned error: %v", err)
+	}
+	if !bytes.Equal(got, got2) {
+		t.Fatalf("ToJSON not deterministic across calls:\nfirst:  %s\nsecond: %s", got, got2)
 	}
 }

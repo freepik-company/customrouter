@@ -72,6 +72,19 @@ func diffPartitions(before, after map[string]string) (changed, added, removed []
 	return
 }
 
+func mustSplitHostRoutes(
+	t *testing.T,
+	r *CustomHTTPRouteReconciler,
+	hostRoutes []routes.Route,
+) ([]ConfigMapPartition, int) {
+	t.Helper()
+	parts, next, err := r.splitHostRoutes("default", testHost, hostRoutes, 0)
+	if err != nil {
+		t.Fatalf("splitHostRoutes returned error: %v", err)
+	}
+	return parts, next
+}
+
 // TestSplitHostRoutes_StableUnderInsertion is the core regression test for the
 // hash-based partitioning. With greedy size-based packing, inserting a single
 // route at an arbitrary position in the input slice cascades every downstream
@@ -79,10 +92,9 @@ func diffPartitions(before, after map[string]string) (changed, added, removed []
 // most one partition.
 func TestSplitHostRoutes_StableUnderInsertion(t *testing.T) {
 	r := &CustomHTTPRouteReconciler{ConfigMapNamespace: "default"}
-	host := testHost
 
 	base := largeRouteSet("base", 600)
-	beforeParts, _ := r.splitHostRoutes("default", host, base, 0)
+	beforeParts, _ := mustSplitHostRoutes(t, r, base)
 	if len(beforeParts) < 5 {
 		t.Fatalf("test setup too small: only %d partitions", len(beforeParts))
 	}
@@ -99,7 +111,7 @@ func TestSplitHostRoutes_StableUnderInsertion(t *testing.T) {
 	})
 	withInsert = append(withInsert, base[300:]...)
 
-	afterParts, _ := r.splitHostRoutes("default", host, withInsert, 0)
+	afterParts, _ := mustSplitHostRoutes(t, r, withInsert)
 	after := partitionsByName(afterParts)
 
 	changed, added, removed := diffPartitions(before, after)
@@ -114,10 +126,9 @@ func TestSplitHostRoutes_StableUnderInsertion(t *testing.T) {
 // without changing the set of routes produces identical partitions.
 func TestSplitHostRoutes_StableUnderReorder(t *testing.T) {
 	r := &CustomHTTPRouteReconciler{ConfigMapNamespace: "default"}
-	host := testHost
 
 	base := largeRouteSet("base", 600)
-	beforeParts, _ := r.splitHostRoutes("default", host, base, 0)
+	beforeParts, _ := mustSplitHostRoutes(t, r, base)
 	before := partitionsByName(beforeParts)
 
 	// Reverse the slice to exercise the "different input order, same set"
@@ -126,7 +137,7 @@ func TestSplitHostRoutes_StableUnderReorder(t *testing.T) {
 	for i := range base {
 		reordered[i] = base[len(base)-1-i]
 	}
-	afterParts, _ := r.splitHostRoutes("default", host, reordered, 0)
+	afterParts, _ := mustSplitHostRoutes(t, r, reordered)
 	after := partitionsByName(afterParts)
 
 	changed, added, removed := diffPartitions(before, after)
@@ -141,12 +152,11 @@ func TestSplitHostRoutes_StableUnderReorder(t *testing.T) {
 // content dedup at upsertSingleConfigMap).
 func TestSplitHostRoutes_DeterministicForSameInput(t *testing.T) {
 	r := &CustomHTTPRouteReconciler{ConfigMapNamespace: "default"}
-	host := testHost
 	base := largeRouteSet("base", 200)
 
-	run1Parts, _ := r.splitHostRoutes("default", host, base, 0)
+	run1Parts, _ := mustSplitHostRoutes(t, r, base)
 	run1 := partitionsByName(run1Parts)
-	run2Parts, _ := r.splitHostRoutes("default", host, base, 0)
+	run2Parts, _ := mustSplitHostRoutes(t, r, base)
 	run2 := partitionsByName(run2Parts)
 
 	if len(run1) != len(run2) {
@@ -169,10 +179,9 @@ func TestSplitHostRoutes_DeterministicForSameInput(t *testing.T) {
 // distribution would have packed too many large routes together.
 func TestSplitHostRoutes_RespectsConfigMapSizeLimit(t *testing.T) {
 	r := &CustomHTTPRouteReconciler{ConfigMapNamespace: "default"}
-	host := testHost
 
 	base := largeRouteSet("base", 1500)
-	parts, _ := r.splitHostRoutes("default", host, base, 0)
+	parts, _ := mustSplitHostRoutes(t, r, base)
 
 	for _, p := range parts {
 		if len(p.Data) > maxConfigMapSize {
@@ -184,7 +193,7 @@ func TestSplitHostRoutes_RespectsConfigMapSizeLimit(t *testing.T) {
 // TestSplitHostRoutes_EmptyInput returns no partitions for an empty input.
 func TestSplitHostRoutes_EmptyInput(t *testing.T) {
 	r := &CustomHTTPRouteReconciler{ConfigMapNamespace: "default"}
-	parts, _ := r.splitHostRoutes("default", testHost, nil, 0)
+	parts, _ := mustSplitHostRoutes(t, r, nil)
 	if len(parts) != 0 {
 		t.Fatalf("expected 0 partitions for empty input, got %d", len(parts))
 	}
@@ -198,14 +207,13 @@ func TestSplitHostRoutes_EmptyInput(t *testing.T) {
 // not reuse the names reserved here for empty-bucket slots.
 func TestSplitHostRoutes_NextIndexReservesEmptyBuckets(t *testing.T) {
 	r := &CustomHTTPRouteReconciler{ConfigMapNamespace: "default"}
-	host := testHost
 
 	// 600 padded routes push the total well past the 1MB partition limit so
 	// bucketCount lands on a power of two large enough to leave several empty
 	// slots after hashing — exactly the case where the caller must advance
 	// by bucketCount rather than by len(returnedPartitions).
 	base := largeRouteSet("base", 600)
-	parts, next := r.splitHostRoutes("default", host, base, 0)
+	parts, next := mustSplitHostRoutes(t, r, base)
 
 	// The emitted set of partition names must form a strict subset of the
 	// reserved index range, with at least one empty slot to make this test
@@ -242,7 +250,10 @@ func TestSplitByHosts_MultipleHostsNoCollision(t *testing.T) {
 			"b.example.com": largeRouteSet("b", 200),
 		},
 	}
-	parts := r.splitByHosts("default", config)
+	parts, err := r.splitByHosts("default", config)
+	if err != nil {
+		t.Fatalf("splitByHosts returned error: %v", err)
+	}
 
 	seen := make(map[string]struct{}, len(parts))
 	for _, p := range parts {
@@ -286,15 +297,14 @@ func TestRouteBucket_Deterministic(t *testing.T) {
 // across a representative small-growth window.
 func TestStableBucketCount_DoesNotOscillate(t *testing.T) {
 	r := &CustomHTTPRouteReconciler{ConfigMapNamespace: "default"}
-	host := testHost
 
 	base := largeRouteSet("base", 600)
-	beforeParts, _ := r.splitHostRoutes("default", host, base, 0)
+	beforeParts, _ := mustSplitHostRoutes(t, r, base)
 	bcBefore := len(beforeParts)
 
 	// Add 5% more routes (well within the 2× headroom).
 	grown := largeRouteSet("base", 630)
-	afterParts, _ := r.splitHostRoutes("default", host, grown, 0)
+	afterParts, _ := mustSplitHostRoutes(t, r, grown)
 	bcAfter := len(afterParts)
 
 	if bcAfter != bcBefore {
@@ -340,5 +350,24 @@ func TestRouteBucket_DistinctRoutesDistribute(t *testing.T) {
 	}
 	if len(hits) < buckets/2 {
 		t.Fatalf("hash distribution too narrow: %d buckets hit out of %d", len(hits), buckets)
+	}
+}
+
+func TestSplitHostRoutes_RouteTooLargeReturnsError(t *testing.T) {
+	r := &CustomHTTPRouteReconciler{ConfigMapNamespace: "default"}
+	hostRoutes := []routes.Route{
+		{
+			Type:    routes.RouteTypePrefix,
+			Path:    "/too-big",
+			Backend: strings.Repeat("z", maxConfigMapSize),
+		},
+	}
+
+	_, _, err := r.splitHostRoutes("default", testHost, hostRoutes, 0)
+	if err == nil {
+		t.Fatalf("expected splitHostRoutes to fail for oversized single route")
+	}
+	if !strings.Contains(err.Error(), "exceeds single-partition limit") {
+		t.Fatalf("unexpected error for oversized route: %v", err)
 	}
 }

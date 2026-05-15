@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -90,7 +91,7 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 	ctx context.Context,
 	eventType watch.EventType,
 	resourceManifest *v1alpha1.CustomHTTPRoute,
-) (ctrl.Result, error) {
+) (ctrl.Result, *v1alpha1.CustomHTTPRouteList, *v1alpha1.ExternalProcessorAttachmentList, error) {
 	logger := log.FromContext(ctx)
 	target := resourceManifest.Spec.TargetRef.Name
 
@@ -115,7 +116,7 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 			logger.V(1).Info("target rebuild in cooldown, requeueing",
 				"target", target,
 				"wait", remaining.String())
-			return ctrl.Result{RequeueAfter: remaining}, nil
+			return ctrl.Result{RequeueAfter: remaining}, nil, nil, nil
 		}
 	}
 
@@ -134,39 +135,58 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 			"previousTarget", previousTarget,
 			"newTarget", target)
 		if err := r.rebuildConfigMapsForTarget(ctx, previousTarget); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to rebuild ConfigMaps for previous target %s: %w", previousTarget, err)
+			return ctrl.Result{}, nil, nil, fmt.Errorf("failed to rebuild ConfigMaps for previous target %s: %w", previousTarget, err)
 		}
 		r.markRebuilt(previousTarget, time.Now())
 	}
 
 	// Rebuild ConfigMaps for the current target
 	if err := r.rebuildConfigMapsForTarget(ctx, target); err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, nil, nil, err
 	}
 	r.markRebuilt(target, time.Now())
 
-	// Reconcile catch-all EnvoyFilter when:
-	// - the route currently has catchAllRoute configured
-	// - the route is being deleted (may have had catch-all entries)
-	// - the route previously had catchAllRoute but it was removed (annotation present, field nil)
+	// Reconcile catch-all / mirror / CORS EnvoyFilters when any axis is
+	// active or was previously active for this route. To avoid listing
+	// CustomHTTPRoutes and ExternalProcessorAttachments three separate
+	// times (once per axis), list them once here and pass them into each
+	// reconciler. On a controller resync against a large catalogue this
+	// removes 4 redundant API/cache reads (2 axes × 2 list types) per
+	// reconcile, on top of the writes already saved by the cooldown.
 	hasCatchAll := resourceManifest.Spec.CatchAllRoute != nil
-	if hasCatchAll || eventType == watch.Deleted || hadCatchAll {
-		if err := r.reconcileCatchAllFromAllRoutes(ctx); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to reconcile catch-all routes: %w", err)
-		}
-	}
-
 	hasMirror := routeHasMirrorAction(resourceManifest)
-	if hasMirror || eventType == watch.Deleted || hadMirror {
-		if err := r.reconcileMirrorFromAllRoutes(ctx); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to reconcile mirror routes: %w", err)
-		}
-	}
-
 	hasCORS := routeHasCORSAction(resourceManifest)
-	if hasCORS || eventType == watch.Deleted || hadCORS {
-		if err := r.reconcileCORSFromAllRoutes(ctx); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to reconcile cors routes: %w", err)
+	needCatchAll := hasCatchAll || eventType == watch.Deleted || hadCatchAll
+	needMirror := hasMirror || eventType == watch.Deleted || hadMirror
+	needCORS := hasCORS || eventType == watch.Deleted || hadCORS
+
+	var routeList *v1alpha1.CustomHTTPRouteList
+	var epaList *v1alpha1.ExternalProcessorAttachmentList
+
+	if needCatchAll || needMirror || needCORS {
+		routeList = &v1alpha1.CustomHTTPRouteList{}
+		if err := r.List(ctx, routeList); err != nil {
+			return ctrl.Result{}, nil, nil, fmt.Errorf("failed to list CustomHTTPRoutes for envoyfilter reconciliation: %w", err)
+		}
+		epaList = &v1alpha1.ExternalProcessorAttachmentList{}
+		if err := r.List(ctx, epaList); err != nil {
+			return ctrl.Result{}, nil, nil, fmt.Errorf("failed to list ExternalProcessorAttachments for envoyfilter reconciliation: %w", err)
+		}
+
+		if needCatchAll {
+			if err := r.reconcileCatchAllFromRoutes(ctx, routeList, epaList); err != nil {
+				return ctrl.Result{}, nil, nil, fmt.Errorf("failed to reconcile catch-all routes: %w", err)
+			}
+		}
+		if needMirror {
+			if err := r.reconcileMirrorFromRoutes(ctx, routeList, epaList); err != nil {
+				return ctrl.Result{}, nil, nil, fmt.Errorf("failed to reconcile mirror routes: %w", err)
+			}
+		}
+		if needCORS {
+			if err := r.reconcileCORSFromRoutes(ctx, routeList, epaList); err != nil {
+				return ctrl.Result{}, nil, nil, fmt.Errorf("failed to reconcile cors routes: %w", err)
+			}
 		}
 	}
 
@@ -176,11 +196,11 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 	// additional reconcile cycles per route change.
 	if eventType != watch.Deleted {
 		if err := r.ensureAnnotations(ctx, resourceManifest, target, hasCatchAll, hasMirror, hasCORS); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to update tracking annotations: %w", err)
+			return ctrl.Result{}, nil, nil, fmt.Errorf("failed to update tracking annotations: %w", err)
 		}
 	}
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{}, routeList, epaList, nil
 }
 
 // routeHasCORSAction returns true if any rule in the route declares a cors action.
@@ -195,16 +215,6 @@ func routeHasCORSAction(cr *v1alpha1.CustomHTTPRoute) bool {
 	return false
 }
 
-// reconcileCORSFromAllRoutes lists all routes and drives the per-EPA CORS
-// EnvoyFilter reconciliation.
-func (r *CustomHTTPRouteReconciler) reconcileCORSFromAllRoutes(ctx context.Context) error {
-	routeList := &v1alpha1.CustomHTTPRouteList{}
-	if err := r.List(ctx, routeList); err != nil {
-		return fmt.Errorf("failed to list CustomHTTPRoutes for cors reconciliation: %w", err)
-	}
-	return r.reconcileCORSFromRoutes(ctx, routeList)
-}
-
 // routeHasMirrorAction returns true if any rule in the route declares a
 // request-mirror action. Kept package-local for use in the reconcile trigger.
 func routeHasMirrorAction(cr *v1alpha1.CustomHTTPRoute) bool {
@@ -216,16 +226,6 @@ func routeHasMirrorAction(cr *v1alpha1.CustomHTTPRoute) bool {
 		}
 	}
 	return false
-}
-
-// reconcileMirrorFromAllRoutes lists all routes and drives the per-EPA mirror
-// EnvoyFilter reconciliation.
-func (r *CustomHTTPRouteReconciler) reconcileMirrorFromAllRoutes(ctx context.Context) error {
-	routeList := &v1alpha1.CustomHTTPRouteList{}
-	if err := r.List(ctx, routeList); err != nil {
-		return fmt.Errorf("failed to list CustomHTTPRoutes for mirror reconciliation: %w", err)
-	}
-	return r.reconcileMirrorFromRoutes(ctx, routeList)
 }
 
 // ensureAnnotations batch-updates all tracking annotations (last-target,
@@ -285,16 +285,6 @@ func setBoolAnnotation(ann map[string]string, key string, value bool) {
 	}
 }
 
-// reconcileCatchAllFromAllRoutes lists all routes and reconciles catch-all EnvoyFilters.
-// This is only called when a route with catchAllRoute is modified or any route is deleted.
-func (r *CustomHTTPRouteReconciler) reconcileCatchAllFromAllRoutes(ctx context.Context) error {
-	routeList := &v1alpha1.CustomHTTPRouteList{}
-	if err := r.List(ctx, routeList); err != nil {
-		return fmt.Errorf("failed to list CustomHTTPRoutes for catch-all reconciliation: %w", err)
-	}
-	return r.reconcileCatchAllFromRoutes(ctx, routeList)
-}
-
 // rebuildConfigMapsForTarget rebuilds ConfigMaps only for a specific target
 func (r *CustomHTTPRouteReconciler) rebuildConfigMapsForTarget(ctx context.Context, target string) error {
 	logger := log.FromContext(ctx)
@@ -341,7 +331,10 @@ func (r *CustomHTTPRouteReconciler) rebuildConfigMapsForTarget(ctx context.Conte
 		config := routes.MergeRoutesConfig(allRoutes...)
 
 		// Partition the config into multiple ConfigMaps if needed
-		partitions := r.partitionConfig(target, config)
+		partitions, err := r.partitionConfig(target, config)
+		if err != nil {
+			return fmt.Errorf("failed to partition routes for target %s: %w", target, err)
+		}
 
 		// Create or update the ConfigMaps for this target
 		if err := r.upsertConfigMaps(ctx, partitions); err != nil {
@@ -408,9 +401,12 @@ func (r *CustomHTTPRouteReconciler) resolveExternalNames(
 func (r *CustomHTTPRouteReconciler) partitionConfig(
 	target string,
 	config *routes.RoutesConfig,
-) []ConfigMapPartition {
+) ([]ConfigMapPartition, error) {
 	// Try single partition first
-	data, _ := config.ToJSON()
+	data, err := config.ToJSON()
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize routes for target %s: %w", target, err)
+	}
 	if len(data) <= maxConfigMapSize {
 		return []ConfigMapPartition{
 			{
@@ -418,7 +414,7 @@ func (r *CustomHTTPRouteReconciler) partitionConfig(
 				Target: target,
 				Data:   string(data),
 			},
-		}
+		}, nil
 	}
 
 	// Need to split by hosts
@@ -436,7 +432,7 @@ type ConfigMapPartition struct {
 func (r *CustomHTTPRouteReconciler) splitByHosts(
 	target string,
 	config *routes.RoutesConfig,
-) []ConfigMapPartition {
+) ([]ConfigMapPartition, error) {
 	var partitions []ConfigMapPartition
 
 	// Sort hosts for deterministic ordering
@@ -461,14 +457,20 @@ func (r *CustomHTTPRouteReconciler) splitByHosts(
 			Version: config.Version,
 			Hosts:   map[string][]routes.Route{host: hostRoutes},
 		}
-		hostData, _ := hostConfig.ToJSON()
+		hostData, err := hostConfig.ToJSON()
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize host %s: %w", host, err)
+		}
 		hostSize := len(hostData)
 
 		// If single host exceeds limit, we need to split the host's routes
 		if hostSize > maxConfigMapSize {
 			// Flush current partition if not empty
 			if len(currentPartition.Hosts) > 0 {
-				partData, _ := currentPartition.ToJSON()
+				partData, err := currentPartition.ToJSON()
+				if err != nil {
+					return nil, fmt.Errorf("failed to serialize partition %d: %w", partIndex, err)
+				}
 				partitions = append(partitions, ConfigMapPartition{
 					Name:   r.partitionName(target, partIndex),
 					Target: target,
@@ -483,7 +485,10 @@ func (r *CustomHTTPRouteReconciler) splitByHosts(
 			}
 
 			// Split this host's routes across multiple partitions
-			hostPartitions, nextIndex := r.splitHostRoutes(target, host, hostRoutes, partIndex)
+			hostPartitions, nextIndex, err := r.splitHostRoutes(target, host, hostRoutes, partIndex)
+			if err != nil {
+				return nil, err
+			}
 			partitions = append(partitions, hostPartitions...)
 			partIndex = nextIndex
 			continue
@@ -492,7 +497,10 @@ func (r *CustomHTTPRouteReconciler) splitByHosts(
 		// Check if adding this host would exceed the limit
 		if currentSize+hostSize > maxConfigMapSize && len(currentPartition.Hosts) > 0 {
 			// Flush current partition
-			partData, _ := currentPartition.ToJSON()
+			partData, err := currentPartition.ToJSON()
+			if err != nil {
+				return nil, fmt.Errorf("failed to serialize partition %d: %w", partIndex, err)
+			}
 			partitions = append(partitions, ConfigMapPartition{
 				Name:   r.partitionName(target, partIndex),
 				Target: target,
@@ -515,7 +523,10 @@ func (r *CustomHTTPRouteReconciler) splitByHosts(
 
 	// Flush remaining partition
 	if len(currentPartition.Hosts) > 0 {
-		partData, _ := currentPartition.ToJSON()
+		partData, err := currentPartition.ToJSON()
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize final partition %d: %w", partIndex, err)
+		}
 		partitions = append(partitions, ConfigMapPartition{
 			Name:   r.partitionName(target, partIndex),
 			Target: target,
@@ -523,7 +534,7 @@ func (r *CustomHTTPRouteReconciler) splitByHosts(
 		})
 	}
 
-	return partitions
+	return partitions, nil
 }
 
 // splitHostRoutes splits a single host's routes across multiple partitions.
@@ -552,9 +563,9 @@ func (r *CustomHTTPRouteReconciler) splitHostRoutes(
 	host string,
 	hostRoutes []routes.Route,
 	startIndex int,
-) ([]ConfigMapPartition, int) {
+) ([]ConfigMapPartition, int, error) {
 	if len(hostRoutes) == 0 {
-		return nil, startIndex
+		return nil, startIndex, nil
 	}
 
 	// Estimate the total payload and the minimum number of buckets needed so
@@ -575,8 +586,21 @@ func (r *CustomHTTPRouteReconciler) splitHostRoutes(
 	routeSizes := make([]int, len(hostRoutes))
 	totalSize := 0
 	for i, route := range hostRoutes {
-		routeData, _ := json.Marshal(route)
+		routeData, err := json.Marshal(route)
+		if err != nil {
+			return nil, startIndex, fmt.Errorf("failed to serialize route %d for host %s: %w", i, host, err)
+		}
 		routeSizes[i] = len(routeData) + 1 // +1 for comma
+		if routeSizes[i]+baseSize > maxConfigMapSize {
+			return nil, startIndex, fmt.Errorf(
+				"route %d for host %s exceeds single-partition limit: routeBytes=%d baseOverhead=%d max=%d",
+				i,
+				host,
+				routeSizes[i],
+				baseSize,
+				maxConfigMapSize,
+			)
+		}
 		totalSize += routeSizes[i]
 	}
 
@@ -588,13 +612,15 @@ func (r *CustomHTTPRouteReconciler) splitHostRoutes(
 
 	// Try to assign with the current bucket count; if any bucket ends up
 	// above maxConfigMapSize, double and try again. Capped to avoid runaway
-	// growth on pathological inputs.
+	// growth on pathological inputs; if still overflowing after all retries,
+	// return an explicit error.
 	var buckets [][]routes.Route
 	const maxRetries = 4
+	overflow := false
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		buckets = make([][]routes.Route, bucketCount)
 		bucketBytes := make([]int, bucketCount)
-		overflow := false
+		overflow = false
 
 		for i, route := range hostRoutes {
 			idx := int(routeBucket(host, route, uint32(bucketCount)))
@@ -608,7 +634,17 @@ func (r *CustomHTTPRouteReconciler) splitHostRoutes(
 		if !overflow {
 			break
 		}
-		bucketCount *= 2
+		if attempt < maxRetries-1 {
+			bucketCount *= 2
+		}
+	}
+	if overflow {
+		return nil, startIndex, fmt.Errorf(
+			"unable to partition host %s within size limit after %d retries (bucketCount=%d)",
+			host,
+			maxRetries,
+			bucketCount,
+		)
 	}
 
 	// Sort each bucket so the JSON output is byte-stable across reconciles.
@@ -622,7 +658,9 @@ func (r *CustomHTTPRouteReconciler) splitHostRoutes(
 		if len(buckets[i]) <= 1 {
 			continue
 		}
-		sortRoutesByIdentity(buckets[i])
+		if err := sortRoutesByIdentity(buckets[i]); err != nil {
+			return nil, startIndex, fmt.Errorf("failed to sort routes for host %s: %w", host, err)
+		}
 	}
 
 	partitions := make([]ConfigMapPartition, 0, bucketCount)
@@ -638,14 +676,17 @@ func (r *CustomHTTPRouteReconciler) splitHostRoutes(
 			Version: 1,
 			Hosts:   map[string][]routes.Route{host: bucket},
 		}
-		partData, _ := partConfig.ToJSON()
+		partData, err := partConfig.ToJSON()
+		if err != nil {
+			return nil, startIndex, fmt.Errorf("failed to serialize bucket %d for host %s: %w", bucketIdx, host, err)
+		}
 		partitions = append(partitions, ConfigMapPartition{
 			Name:   r.partitionName(target, startIndex+bucketIdx),
 			Target: target,
 			Data:   string(partData),
 		})
 	}
-	return partitions, startIndex + bucketCount
+	return partitions, startIndex + bucketCount, nil
 }
 
 // stableBucketCount rounds the minimum required bucket count up to the next
@@ -673,18 +714,22 @@ func stableBucketCount(minBuckets int) int {
 // even when SortRoutes would tie on its real-routing-priority comparisons.
 // Used only inside splitHostRoutes; routing priority is re-established by
 // the extproc loader after merge.
-func sortRoutesByIdentity(rs []routes.Route) {
+func sortRoutesByIdentity(rs []routes.Route) error {
 	// Pre-compute identity keys once (O(n)) so the sort comparator does not
 	// re-marshal routes on every comparison (which would be O(n log n)
 	// allocations in the worst case, creating significant GC pressure for
 	// large buckets).
 	keys := make([]string, len(rs))
 	for i := range rs {
-		k, _ := json.Marshal(rs[i])
+		k, err := json.Marshal(rs[i])
+		if err != nil {
+			return fmt.Errorf("failed to compute identity key for route %d: %w", i, err)
+		}
 		keys[i] = string(k)
 	}
 
 	sort.Stable(routesByIdentity{routes: rs, keys: keys})
+	return nil
 }
 
 // routesByIdentity implements sort.Interface, keeping the pre-computed
@@ -759,6 +804,30 @@ func (r *CustomHTTPRouteReconciler) partitionName(target string, index int) stri
 	return fmt.Sprintf("%s-%s-%d", configMapBaseName, target, index)
 }
 
+// parsePartitionName parses a ConfigMap name produced by partitionName and
+// returns the embedded target name. The boolean is true when the name matches
+// the expected pattern "customrouter-routes-<target>-<index>" with <index> a
+// non-negative decimal integer. Used to evict per-target cache entries
+// without prefix-matching pitfalls (e.g. target "foo" must not match a
+// partition belonging to "foo-bar").
+func parsePartitionName(name string) (target string, index int, ok bool) {
+	prefix := configMapBaseName + "-"
+	if !strings.HasPrefix(name, prefix) {
+		return "", 0, false
+	}
+	rest := name[len(prefix):]
+	dash := strings.LastIndexByte(rest, '-')
+	if dash <= 0 || dash == len(rest)-1 {
+		return "", 0, false
+	}
+	idxStr := rest[dash+1:]
+	idx, err := strconv.Atoi(idxStr)
+	if err != nil || idx < 0 {
+		return "", 0, false
+	}
+	return rest[:dash], idx, true
+}
+
 // upsertConfigMaps creates or updates all ConfigMap partitions for a target
 func (r *CustomHTTPRouteReconciler) upsertConfigMaps(
 	ctx context.Context,
@@ -799,9 +868,8 @@ func (r *CustomHTTPRouteReconciler) upsertSingleConfigMap(
 	}
 
 	partNumber := "0"
-	parts := strings.Split(partition.Name, "-")
-	if len(parts) > 0 {
-		partNumber = parts[len(parts)-1]
+	if _, idx, ok := parsePartitionName(partition.Name); ok {
+		partNumber = strconv.Itoa(idx)
 	}
 
 	configMapLabels := map[string]string{

@@ -19,9 +19,11 @@ limitations under the License.
 package routes
 
 import (
+	"bytes"
 	"encoding/json"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/freepik-company/customrouter/api/v1alpha1"
 )
@@ -188,10 +190,59 @@ func ParseJSON(data []byte) (*RoutesConfig, error) {
 	return &config, nil
 }
 
+// jsonBufferPool reuses bytes.Buffer instances across ToJSON / MarshalRoute
+// invocations. ConfigMap partitioning calls ToJSON many times per reconcile
+// (one per host plus one per bucket), so a pool measurably cuts allocator
+// and GC pressure on large route sets.
+var jsonBufferPool = sync.Pool{
+	New: func() any { return new(bytes.Buffer) },
+}
+
+// jsonMaxRetainedSize bounds the buffer size that gets returned to the pool.
+// Buffers above this threshold are dropped so a single very large reconcile
+// does not pin oversized buffers indefinitely.
+const jsonMaxRetainedSize = 1 << 20 // 1 MiB
+
+func acquireJSONBuffer() *bytes.Buffer {
+	buf := jsonBufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	return buf
+}
+
+func releaseJSONBuffer(buf *bytes.Buffer) {
+	if buf.Cap() > jsonMaxRetainedSize {
+		return
+	}
+	jsonBufferPool.Put(buf)
+}
+
 // ToJSON serializes the routes config to compact JSON (no indentation)
 // to minimize ConfigMap size and ensure accurate size calculations
 func (rc *RoutesConfig) ToJSON() ([]byte, error) {
-	return json.Marshal(rc)
+	buf := acquireJSONBuffer()
+	defer releaseJSONBuffer(buf)
+
+	// Use the default encoder settings (HTML escaping ON) so the output is
+	// byte-identical to the previous json.Marshal-based implementation. The
+	// partitionHashes dedup in the controller depends on this stability:
+	// changing the escaping rules would force a one-time rewrite of every
+	// managed ConfigMap whose routes contain '&', '<' or '>' (e.g. query
+	// strings), defeating the etcd-pressure reduction this pool exists for.
+	enc := json.NewEncoder(buf)
+	if err := enc.Encode(rc); err != nil {
+		return nil, err
+	}
+	// json.Encoder.Encode appends a trailing newline; strip it to match
+	// json.Marshal's output exactly.
+	out := buf.Bytes()
+	if n := len(out); n > 0 && out[n-1] == '\n' {
+		out = out[:n-1]
+	}
+	// Copy out of the pooled buffer because we are about to return the
+	// buffer to the pool; callers may retain the slice arbitrarily.
+	copied := make([]byte, len(out))
+	copy(copied, out)
+	return copied, nil
 }
 
 // CompileRegexes compiles all regex patterns in the routes config (both path

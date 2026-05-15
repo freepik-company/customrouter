@@ -36,7 +36,9 @@ func BenchmarkSplitHostRoutes(b *testing.B) {
 		b.Run(tc.name, func(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
-				_, _ = r.splitHostRoutes("default", host, routes, 0)
+				if _, _, err := r.splitHostRoutes("default", host, routes, 0); err != nil {
+					b.Fatalf("splitHostRoutes returned error: %v", err)
+				}
 			}
 		})
 	}
