@@ -588,6 +588,16 @@ func (r *CustomHTTPRouteReconciler) splitHostRoutes(
 			return nil, startIndex, fmt.Errorf("failed to serialize route %d for host %s: %w", i, host, err)
 		}
 		routeSizes[i] = len(routeData) + 1 // +1 for comma
+		if routeSizes[i]+baseSize > maxConfigMapSize {
+			return nil, startIndex, fmt.Errorf(
+				"route %d for host %s exceeds single-partition limit: routeBytes=%d baseOverhead=%d max=%d",
+				i,
+				host,
+				routeSizes[i],
+				baseSize,
+				maxConfigMapSize,
+			)
+		}
 		totalSize += routeSizes[i]
 	}
 
@@ -599,13 +609,15 @@ func (r *CustomHTTPRouteReconciler) splitHostRoutes(
 
 	// Try to assign with the current bucket count; if any bucket ends up
 	// above maxConfigMapSize, double and try again. Capped to avoid runaway
-	// growth on pathological inputs.
+	// growth on pathological inputs; if still overflowing after all retries,
+	// return an explicit error.
 	var buckets [][]routes.Route
 	const maxRetries = 4
+	overflow := false
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		buckets = make([][]routes.Route, bucketCount)
 		bucketBytes := make([]int, bucketCount)
-		overflow := false
+		overflow = false
 
 		for i, route := range hostRoutes {
 			idx := int(routeBucket(host, route, uint32(bucketCount)))
