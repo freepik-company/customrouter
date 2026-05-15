@@ -116,8 +116,11 @@ func (l *K8sLoader) buildConfig() (*RoutesConfig, error) {
 		return nil, fmt.Errorf("failed to list ConfigMaps: %w", err)
 	}
 
-	// Sort by name for deterministic ordering
-	sort.Slice(configMaps.Items, func(i, j int) bool {
+	// Sort by name for deterministic ordering. sort.Stable preserves the
+	// input order for equal keys; with unique ConfigMap names this matches
+	// sort.Slice, but the explicit guarantee is preferable here because the
+	// merged routes feed downstream byte-identical comparisons.
+	sort.SliceStable(configMaps.Items, func(i, j int) bool {
 		return configMaps.Items[i].Name < configMaps.Items[j].Name
 	})
 

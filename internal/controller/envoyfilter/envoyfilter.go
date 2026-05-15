@@ -272,7 +272,7 @@ func orderedRoutesWithCatchAll(routeList *v1alpha1.CustomHTTPRouteList) []*v1alp
 		}
 		out = append(out, route)
 	}
-	sort.Slice(out, func(i, j int) bool {
+	sort.SliceStable(out, func(i, j int) bool {
 		return routeKey(out[i]) < routeKey(out[j])
 	})
 	return out
@@ -573,7 +573,7 @@ func sortedEntries(m map[string]v1alpha1.BackendRef) []CatchAllEntry {
 	for hostname, ref := range m {
 		entries = append(entries, CatchAllEntry{Hostname: hostname, BackendRef: ref})
 	}
-	sort.Slice(entries, func(i, j int) bool {
+	sort.SliceStable(entries, func(i, j int) bool {
 		return entries[i].Hostname < entries[j].Hostname
 	})
 	return entries

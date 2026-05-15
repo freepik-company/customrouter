@@ -291,7 +291,7 @@ func convertCustomHeaderMatches(in []customrouterv1alpha1.HeaderMatch) []headerM
 			IsRegex: h.Type == customrouterv1alpha1.HeaderMatchTypeRegularExpression,
 		})
 	}
-	sort.Slice(out, func(i, j int) bool {
+	sort.SliceStable(out, func(i, j int) bool {
 		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 	})
 	return out
@@ -329,7 +329,7 @@ func convertCustomQueryParamMatches(in []customrouterv1alpha1.QueryParamMatch) [
 			IsRegex: q.Type == customrouterv1alpha1.QueryParamMatchTypeRegularExpression,
 		})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
@@ -432,7 +432,7 @@ func extractHTTPRouteMatches(hr *gatewayv1.HTTPRoute) []routeMatch {
 					IsRegex: h.Type != nil && *h.Type == gatewayv1.HeaderMatchRegularExpression,
 				})
 			}
-			sort.Slice(rm.Headers, func(i, j int) bool {
+			sort.SliceStable(rm.Headers, func(i, j int) bool {
 				return strings.ToLower(rm.Headers[i].Name) < strings.ToLower(rm.Headers[j].Name)
 			})
 			for _, q := range m.QueryParams {
@@ -442,7 +442,7 @@ func extractHTTPRouteMatches(hr *gatewayv1.HTTPRoute) []routeMatch {
 					IsRegex: q.Type != nil && *q.Type == gatewayv1.QueryParamMatchRegularExpression,
 				})
 			}
-			sort.Slice(rm.QueryParams, func(i, j int) bool {
+			sort.SliceStable(rm.QueryParams, func(i, j int) bool {
 				return strings.ToLower(rm.QueryParams[i].Name) < strings.ToLower(rm.QueryParams[j].Name)
 			})
 			matches = append(matches, rm)

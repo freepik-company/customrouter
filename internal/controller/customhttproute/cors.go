@@ -34,14 +34,17 @@ import (
 func (r *CustomHTTPRouteReconciler) reconcileCORSFromRoutes(
 	ctx context.Context,
 	routeList *v1alpha1.CustomHTTPRouteList,
+	epaList *v1alpha1.ExternalProcessorAttachmentList,
 ) error {
 	logger := log.FromContext(ctx)
 
 	entries := ef.CollectCORSEntries(routeList)
 
-	epaList := &v1alpha1.ExternalProcessorAttachmentList{}
-	if err := r.List(ctx, epaList); err != nil {
-		return fmt.Errorf("failed to list ExternalProcessorAttachments: %w", err)
+	if epaList == nil {
+		epaList = &v1alpha1.ExternalProcessorAttachmentList{}
+		if err := r.List(ctx, epaList); err != nil {
+			return fmt.Errorf("failed to list ExternalProcessorAttachments: %w", err)
+		}
 	}
 
 	if len(epaList.Items) == 0 {

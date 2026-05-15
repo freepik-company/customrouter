@@ -32,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -47,6 +48,12 @@ const targetRefIndexField = ".spec.targetRef.name"
 // target are enqueued together (typically at controller cache resync).
 const DefaultRebuildCooldown = 2 * time.Second
 
+// DefaultStateGCInterval is the period between sweeps of the in-memory state
+// (lastRebuildAt, partitionHashes). Sweeps drop entries for targets that no
+// longer have any live CustomHTTPRoute, preventing unbounded growth across
+// the controller lifetime when targets are created and deleted repeatedly.
+const DefaultStateGCInterval = 1 * time.Hour
+
 // CustomHTTPRouteReconciler reconciles a CustomHTTPRoute object
 type CustomHTTPRouteReconciler struct {
 	client.Client
@@ -59,6 +66,11 @@ type CustomHTTPRouteReconciler struct {
 	// after the remaining wait instead of repeating the rebuild work.
 	// When zero, DefaultRebuildCooldown is used.
 	RebuildCooldown time.Duration
+
+	// StateGCInterval controls how often the in-memory state GC runs.
+	// When zero, DefaultStateGCInterval is used. A negative value disables
+	// the periodic GC entirely (useful in tests).
+	StateGCInterval time.Duration
 
 	// lastRebuildAt records the last successful rebuild time per target name.
 	// Read/written under rebuildMu.
@@ -123,19 +135,113 @@ func (r *CustomHTTPRouteReconciler) clearTargetState(target string) {
 	delete(r.lastRebuildAt, target)
 	r.rebuildMu.Unlock()
 
-	// Partition names follow the pattern "customrouter-routes-<target>-<index>"
-	// where <index> is a non-negative integer. We must verify that the
-	// character immediately after the prefix is a digit to avoid accidentally
-	// evicting entries for targets that share a hyphenated prefix (e.g.
-	// target "foo" must not match "customrouter-routes-foo-bar-0").
-	prefix := configMapBaseName + "-" + target + "-"
+	// Use parsePartitionName to identify entries that genuinely belong to
+	// this target. Naive prefix matching would incorrectly evict entries
+	// from targets whose name shares a hyphenated prefix (e.g. clearing
+	// "foo" must leave "foo-bar" partitions untouched).
 	r.partitionHashesMu.Lock()
 	for name := range r.partitionHashes {
-		if len(name) > len(prefix) && name[:len(prefix)] == prefix && name[len(prefix)] >= '0' && name[len(prefix)] <= '9' {
+		if owner, _, ok := parsePartitionName(name); ok && owner == target {
 			delete(r.partitionHashes, name)
 		}
 	}
 	r.partitionHashesMu.Unlock()
+}
+
+// effectiveStateGCInterval returns the GC interval. Zero falls back to the
+// default; negative values mean "disabled".
+func (r *CustomHTTPRouteReconciler) effectiveStateGCInterval() time.Duration {
+	if r.StateGCInterval == 0 {
+		return DefaultStateGCInterval
+	}
+	return r.StateGCInterval
+}
+
+// runStateGC is registered as a manager runnable. It sweeps lastRebuildAt and
+// partitionHashes on a fixed interval, dropping entries for targets that no
+// longer have any live CustomHTTPRoute. Without this sweep the maps grow
+// monotonically as targets are created and deleted, since clearTargetState is
+// only invoked on the deletion path of the last route for a target — a path
+// that can be missed if the controller restarts mid-deletion or if entries
+// were created by a now-vanished resource.
+func (r *CustomHTTPRouteReconciler) runStateGC(ctx context.Context) error {
+	interval := r.effectiveStateGCInterval()
+	if interval <= 0 {
+		<-ctx.Done()
+		return nil
+	}
+	logger := log.FromContext(ctx).WithName("state-gc")
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			if err := r.gcStateOnce(ctx); err != nil {
+				logger.Error(err, "state GC sweep failed; will retry next interval")
+			}
+		}
+	}
+}
+
+// gcStateOnce performs a single sweep. Exposed separately so tests can
+// trigger it deterministically without waiting for the ticker.
+func (r *CustomHTTPRouteReconciler) gcStateOnce(ctx context.Context) error {
+	routeList := &crv1alpha1.CustomHTTPRouteList{}
+	if err := r.List(ctx, routeList); err != nil {
+		return fmt.Errorf("list CustomHTTPRoutes for state GC: %w", err)
+	}
+	live := make(map[string]struct{}, len(routeList.Items))
+	for i := range routeList.Items {
+		live[routeList.Items[i].Spec.TargetRef.Name] = struct{}{}
+	}
+
+	logger := log.FromContext(ctx).WithName("state-gc")
+
+	r.rebuildMu.Lock()
+	rebuildEvicted := 0
+	for t := range r.lastRebuildAt {
+		if _, ok := live[t]; !ok {
+			delete(r.lastRebuildAt, t)
+			rebuildEvicted++
+		}
+	}
+	rebuildSize := len(r.lastRebuildAt)
+	r.rebuildMu.Unlock()
+
+	r.partitionHashesMu.Lock()
+	hashesEvicted := 0
+	for name := range r.partitionHashes {
+		owner, _, ok := parsePartitionName(name)
+		if !ok {
+			// Unparseable entries cannot be safely associated with a
+			// live target, but they were inserted by us via
+			// partitionName, so this branch is unreachable in practice;
+			// drop them defensively to avoid permanent leaks if the
+			// naming scheme ever changes.
+			delete(r.partitionHashes, name)
+			hashesEvicted++
+			continue
+		}
+		if _, ok := live[owner]; !ok {
+			delete(r.partitionHashes, name)
+			hashesEvicted++
+		}
+	}
+	hashesSize := len(r.partitionHashes)
+	r.partitionHashesMu.Unlock()
+
+	if rebuildEvicted > 0 || hashesEvicted > 0 {
+		logger.Info("evicted stale in-memory state",
+			"liveTargets", len(live),
+			"rebuildEvicted", rebuildEvicted,
+			"rebuildRemaining", rebuildSize,
+			"hashesEvicted", hashesEvicted,
+			"hashesRemaining", hashesSize,
+		)
+	}
+	return nil
 }
 
 // +kubebuilder:rbac:groups=customrouter.freepik.com,resources=customhttproutes,verbs=get;list;watch;create;update;patch;delete
@@ -275,6 +381,10 @@ func (r *CustomHTTPRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	maxConcurrent := r.MaxConcurrentReconciles
 	if maxConcurrent <= 0 {
 		maxConcurrent = 1
+	}
+
+	if err := mgr.Add(manager.RunnableFunc(r.runStateGC)); err != nil {
+		return fmt.Errorf("register state GC runnable: %w", err)
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).

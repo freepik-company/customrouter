@@ -89,7 +89,10 @@ func TestPartitionConfig_SinglePartition(t *testing.T) {
 		},
 	}
 
-	partitions := r.partitionConfig("default", config)
+	partitions, err := r.partitionConfig("default", config)
+	if err != nil {
+		t.Fatalf("partitionConfig returned error: %v", err)
+	}
 	if len(partitions) != 1 {
 		t.Fatalf("expected 1 partition, got %d", len(partitions))
 	}

@@ -82,7 +82,7 @@ func TestSplitHostRoutes_StableUnderInsertion(t *testing.T) {
 	host := testHost
 
 	base := largeRouteSet("base", 600)
-	beforeParts, _ := r.splitHostRoutes("default", host, base, 0)
+	beforeParts, _, _ := r.splitHostRoutes("default", host, base, 0)
 	if len(beforeParts) < 5 {
 		t.Fatalf("test setup too small: only %d partitions", len(beforeParts))
 	}
@@ -99,7 +99,7 @@ func TestSplitHostRoutes_StableUnderInsertion(t *testing.T) {
 	})
 	withInsert = append(withInsert, base[300:]...)
 
-	afterParts, _ := r.splitHostRoutes("default", host, withInsert, 0)
+	afterParts, _, _ := r.splitHostRoutes("default", host, withInsert, 0)
 	after := partitionsByName(afterParts)
 
 	changed, added, removed := diffPartitions(before, after)
@@ -117,7 +117,7 @@ func TestSplitHostRoutes_StableUnderReorder(t *testing.T) {
 	host := testHost
 
 	base := largeRouteSet("base", 600)
-	beforeParts, _ := r.splitHostRoutes("default", host, base, 0)
+	beforeParts, _, _ := r.splitHostRoutes("default", host, base, 0)
 	before := partitionsByName(beforeParts)
 
 	// Reverse the slice to exercise the "different input order, same set"
@@ -126,7 +126,7 @@ func TestSplitHostRoutes_StableUnderReorder(t *testing.T) {
 	for i := range base {
 		reordered[i] = base[len(base)-1-i]
 	}
-	afterParts, _ := r.splitHostRoutes("default", host, reordered, 0)
+	afterParts, _, _ := r.splitHostRoutes("default", host, reordered, 0)
 	after := partitionsByName(afterParts)
 
 	changed, added, removed := diffPartitions(before, after)
@@ -144,9 +144,9 @@ func TestSplitHostRoutes_DeterministicForSameInput(t *testing.T) {
 	host := testHost
 	base := largeRouteSet("base", 200)
 
-	run1Parts, _ := r.splitHostRoutes("default", host, base, 0)
+	run1Parts, _, _ := r.splitHostRoutes("default", host, base, 0)
 	run1 := partitionsByName(run1Parts)
-	run2Parts, _ := r.splitHostRoutes("default", host, base, 0)
+	run2Parts, _, _ := r.splitHostRoutes("default", host, base, 0)
 	run2 := partitionsByName(run2Parts)
 
 	if len(run1) != len(run2) {
@@ -172,7 +172,7 @@ func TestSplitHostRoutes_RespectsConfigMapSizeLimit(t *testing.T) {
 	host := testHost
 
 	base := largeRouteSet("base", 1500)
-	parts, _ := r.splitHostRoutes("default", host, base, 0)
+	parts, _, _ := r.splitHostRoutes("default", host, base, 0)
 
 	for _, p := range parts {
 		if len(p.Data) > maxConfigMapSize {
@@ -184,7 +184,7 @@ func TestSplitHostRoutes_RespectsConfigMapSizeLimit(t *testing.T) {
 // TestSplitHostRoutes_EmptyInput returns no partitions for an empty input.
 func TestSplitHostRoutes_EmptyInput(t *testing.T) {
 	r := &CustomHTTPRouteReconciler{ConfigMapNamespace: "default"}
-	parts, _ := r.splitHostRoutes("default", testHost, nil, 0)
+	parts, _, _ := r.splitHostRoutes("default", testHost, nil, 0)
 	if len(parts) != 0 {
 		t.Fatalf("expected 0 partitions for empty input, got %d", len(parts))
 	}
@@ -205,7 +205,7 @@ func TestSplitHostRoutes_NextIndexReservesEmptyBuckets(t *testing.T) {
 	// slots after hashing — exactly the case where the caller must advance
 	// by bucketCount rather than by len(returnedPartitions).
 	base := largeRouteSet("base", 600)
-	parts, next := r.splitHostRoutes("default", host, base, 0)
+	parts, next, _ := r.splitHostRoutes("default", host, base, 0)
 
 	// The emitted set of partition names must form a strict subset of the
 	// reserved index range, with at least one empty slot to make this test
@@ -242,7 +242,10 @@ func TestSplitByHosts_MultipleHostsNoCollision(t *testing.T) {
 			"b.example.com": largeRouteSet("b", 200),
 		},
 	}
-	parts := r.splitByHosts("default", config)
+	parts, err := r.splitByHosts("default", config)
+	if err != nil {
+		t.Fatalf("splitByHosts returned error: %v", err)
+	}
 
 	seen := make(map[string]struct{}, len(parts))
 	for _, p := range parts {
@@ -289,12 +292,12 @@ func TestStableBucketCount_DoesNotOscillate(t *testing.T) {
 	host := testHost
 
 	base := largeRouteSet("base", 600)
-	beforeParts, _ := r.splitHostRoutes("default", host, base, 0)
+	beforeParts, _, _ := r.splitHostRoutes("default", host, base, 0)
 	bcBefore := len(beforeParts)
 
 	// Add 5% more routes (well within the 2× headroom).
 	grown := largeRouteSet("base", 630)
-	afterParts, _ := r.splitHostRoutes("default", host, grown, 0)
+	afterParts, _, _ := r.splitHostRoutes("default", host, grown, 0)
 	bcAfter := len(afterParts)
 
 	if bcAfter != bcBefore {
