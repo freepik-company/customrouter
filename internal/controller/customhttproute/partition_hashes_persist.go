@@ -121,9 +121,31 @@ func (r *CustomHTTPRouteReconciler) persistPartitionHashes(ctx context.Context) 
 	}
 	r.partitionHashesMu.Unlock()
 
+	key := types.NamespacedName{
+		Name:      partitionHashesConfigMapName,
+		Namespace: r.ConfigMapNamespace,
+	}
+
 	if len(snapshot) == 0 {
-		// Avoid creating an empty ConfigMap on cold start before any
-		// rebuild has populated the map.
+		// In-memory map is empty (e.g. all targets were deleted via
+		// clearTargetState). Delete any stale checkpoint instead of
+		// leaving it intact — otherwise the next restart loads stale
+		// entries, the upsert fast-path sees a "hit" for a partition
+		// name that maps to a hash matching the freshly recreated
+		// data, and silently skips the Create for a ConfigMap that no
+		// longer exists in the cluster.
+		existing := &corev1.ConfigMap{}
+		err := r.Get(ctx, key, existing)
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read checkpoint ConfigMap before delete: %w", err)
+		}
+		if err := r.Delete(ctx, existing); err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("delete stale checkpoint ConfigMap: %w", err)
+		}
+		logger.V(1).Info("deleted stale partition hash checkpoint (in-memory map is empty)")
 		return nil
 	}
 
@@ -132,10 +154,6 @@ func (r *CustomHTTPRouteReconciler) persistPartitionHashes(ctx context.Context) 
 		return fmt.Errorf("marshal partition hashes: %w", err)
 	}
 
-	key := types.NamespacedName{
-		Name:      partitionHashesConfigMapName,
-		Namespace: r.ConfigMapNamespace,
-	}
 	existing := &corev1.ConfigMap{}
 	err = r.Get(ctx, key, existing)
 	if errors.IsNotFound(err) {

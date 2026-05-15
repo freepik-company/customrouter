@@ -93,6 +93,38 @@ func TestPartitionHashesPersistEmpty(t *testing.T) {
 	}
 }
 
+// TestPartitionHashesPersistDeletesStaleCheckpointWhenMapEmpty fixes the
+// scenario flagged in PR #40 review: if persistPartitionHashes returned
+// early on an empty in-memory map without touching the on-disk checkpoint,
+// a subsequent restart would load stale entries. The fast-path in
+// upsertSingleConfigMap could then skip the Create for a freshly-needed
+// ConfigMap (same name, same content hash by coincidence), silently breaking
+// routing. The contract here: empty in-memory ⇒ no checkpoint in cluster.
+func TestPartitionHashesPersistDeletesStaleCheckpointWhenMapEmpty(t *testing.T) {
+	// Seed a reconciler that already has a checkpoint in the cluster from
+	// a previous run with non-empty state.
+	stale := &corev1.ConfigMap{}
+	stale.Name = partitionHashesConfigMapName
+	stale.Namespace = "test-ns"
+	stale.Data = map[string]string{
+		partitionHashesDataKey: `{"customrouter-routes-default-0":"3735928559"}`,
+	}
+	r := newReconciler(stale)
+	// In-memory map is empty: simulating the post-clearTargetState state.
+	r.partitionHashes = map[string]uint32{}
+
+	if err := r.persistPartitionHashes(context.Background()); err != nil {
+		t.Fatalf("persist with empty map: %v", err)
+	}
+
+	cm := &corev1.ConfigMap{}
+	key := types.NamespacedName{Name: partitionHashesConfigMapName, Namespace: "test-ns"}
+	err := r.Get(context.Background(), key, cm)
+	if err == nil {
+		t.Errorf("stale checkpoint should have been deleted, found: %v", cm.Data)
+	}
+}
+
 // TestPartitionHashesPersistMalformedRecoverable lets the controller boot
 // even when the checkpoint was corrupted by some external actor (manual edit,
 // upgrade from a future-incompatible format, etc.). Surfacing as an error
