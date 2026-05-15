@@ -10,7 +10,7 @@ RUN go mod download
 COPY . .
 
 # Native Go cross-compilation — no QEMU emulation needed
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o manager cmd/main.go
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o manager ./cmd/
 
 FROM gcr.io/distroless/static:nonroot
 WORKDIR /

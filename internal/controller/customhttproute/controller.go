@@ -45,7 +45,7 @@ const targetRefIndexField = ".spec.targetRef.name"
 // ConfigMap rebuilds for the same target. It bounds the API/etcd write rate
 // that the controller can generate when many CustomHTTPRoutes sharing a
 // target are enqueued together (typically at controller cache resync).
-const DefaultRebuildCooldown = 500 * time.Millisecond
+const DefaultRebuildCooldown = 2 * time.Second
 
 // CustomHTTPRouteReconciler reconciles a CustomHTTPRoute object
 type CustomHTTPRouteReconciler struct {
@@ -64,6 +64,13 @@ type CustomHTTPRouteReconciler struct {
 	// Read/written under rebuildMu.
 	lastRebuildAt map[string]time.Time
 	rebuildMu     sync.Mutex
+
+	// partitionHashes caches the FNV-32a hash of the last successfully
+	// written (or confirmed unchanged) data for each ConfigMap partition.
+	// Keyed by ConfigMap name. Used to skip etcd Get+Compare when the
+	// computed partition content has not changed since the last reconcile.
+	partitionHashes   map[string]uint32
+	partitionHashesMu sync.Mutex
 }
 
 // effectiveRebuildCooldown returns the cooldown to apply. A zero value falls
@@ -105,6 +112,25 @@ func (r *CustomHTTPRouteReconciler) markRebuilt(target string, when time.Time) {
 		r.lastRebuildAt = make(map[string]time.Time)
 	}
 	r.lastRebuildAt[target] = when
+}
+
+// clearTargetState removes all in-memory state associated with a target that
+// no longer has any active CustomHTTPRoutes. This prevents lastRebuildAt and
+// partitionHashes from growing without bound as targets are created and
+// deleted over the lifetime of the controller.
+func (r *CustomHTTPRouteReconciler) clearTargetState(target string) {
+	r.rebuildMu.Lock()
+	delete(r.lastRebuildAt, target)
+	r.rebuildMu.Unlock()
+
+	prefix := configMapBaseName + "-" + target + "-"
+	r.partitionHashesMu.Lock()
+	for name := range r.partitionHashes {
+		if len(name) >= len(prefix) && name[:len(prefix)] == prefix {
+			delete(r.partitionHashes, name)
+		}
+	}
+	r.partitionHashesMu.Unlock()
 }
 
 // +kubebuilder:rbac:groups=customrouter.freepik.com,resources=customhttproutes,verbs=get;list;watch;create;update;patch;delete

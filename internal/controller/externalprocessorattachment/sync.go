@@ -47,8 +47,17 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileEnvoyFilters(
 		return fmt.Errorf("failed to reconcile routes EnvoyFilter: %w", err)
 	}
 
+	// List all CustomHTTPRoutes once and reuse across catch-all, mirror, and
+	// CORS aggregation. Previously each axis listed independently, tripling
+	// memory allocations and API-server load on every reconcile.
+	routeList := &v1alpha1.CustomHTTPRouteList{}
+	if err := r.List(ctx, routeList); err != nil {
+		return fmt.Errorf("failed to list CustomHTTPRoutes: %w", err)
+	}
+
 	// Collect catch-all entries from CustomHTTPRoutes and merge with EPA config
-	mergedEntries := r.collectMergedCatchAllEntries(ctx, attachment)
+	catchAllEntries := ef.CollectCatchAllEntries(routeList)
+	mergedEntries := ef.MergeCatchAllEntries(catchAllEntries, attachment)
 
 	if len(mergedEntries) > 0 {
 		hostnames := make([]string, 0, len(mergedEntries))
@@ -78,7 +87,7 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileEnvoyFilters(
 		}
 	}
 
-	mirrorEntries := r.collectMirrorEntries(ctx)
+	mirrorEntries := ef.CollectMirrorEntries(routeList)
 	if len(mirrorEntries) > 0 {
 		envoyFilter, err := ef.BuildMirrorEnvoyFilter(attachment, mirrorEntries)
 		if err != nil {
@@ -97,7 +106,7 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileEnvoyFilters(
 		}
 	}
 
-	corsEntries := r.collectCORSEntries(ctx)
+	corsEntries := ef.CollectCORSEntries(routeList)
 	if len(corsEntries) > 0 {
 		envoyFilter, err := ef.BuildCORSEnvoyFilter(attachment, corsEntries)
 		if err != nil {
@@ -124,57 +133,6 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileEnvoyFilters(
 		"corsEntries", len(corsEntries))
 
 	return nil
-}
-
-// collectMirrorEntries lists every CustomHTTPRoute and extracts the request-mirror
-// targets across all of them. Follows the same "list then aggregate" pattern as
-// collectMergedCatchAllEntries so behaviour between the two EnvoyFilters is
-// consistent.
-func (r *ExternalProcessorAttachmentReconciler) collectMirrorEntries(
-	ctx context.Context,
-) []ef.MirrorEntry {
-	logger := log.FromContext(ctx)
-
-	routeList := &v1alpha1.CustomHTTPRouteList{}
-	if err := r.List(ctx, routeList); err != nil {
-		logger.Error(err, "Failed to list CustomHTTPRoutes for mirror aggregation")
-		return nil
-	}
-
-	return ef.CollectMirrorEntries(routeList)
-}
-
-// collectCORSEntries mirrors collectMirrorEntries for CORS actions.
-func (r *ExternalProcessorAttachmentReconciler) collectCORSEntries(
-	ctx context.Context,
-) []ef.CORSEntry {
-	logger := log.FromContext(ctx)
-
-	routeList := &v1alpha1.CustomHTTPRouteList{}
-	if err := r.List(ctx, routeList); err != nil {
-		logger.Error(err, "Failed to list CustomHTTPRoutes for CORS aggregation")
-		return nil
-	}
-
-	return ef.CollectCORSEntries(routeList)
-}
-
-// collectMergedCatchAllEntries lists CustomHTTPRoutes, collects their catchAllRoute entries,
-// and merges with the EPA's own catchAllRoute config. EPA entries override route entries for same hostname.
-func (r *ExternalProcessorAttachmentReconciler) collectMergedCatchAllEntries(
-	ctx context.Context,
-	attachment *v1alpha1.ExternalProcessorAttachment,
-) []ef.CatchAllEntry {
-	logger := log.FromContext(ctx)
-
-	routeList := &v1alpha1.CustomHTTPRouteList{}
-	if err := r.List(ctx, routeList); err != nil {
-		logger.Error(err, "Failed to list CustomHTTPRoutes for catch-all aggregation")
-		return nil
-	}
-
-	entries := ef.CollectCatchAllEntries(routeList)
-	return ef.MergeCatchAllEntries(entries, attachment)
 }
 
 // reconcileExtProcEnvoyFilter creates or updates the ext_proc EnvoyFilter
