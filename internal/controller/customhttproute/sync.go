@@ -119,6 +119,14 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 		}
 	}
 
+	// Snapshot current annotation state BEFORE any modifications. These are
+	// used below to detect whether catch-all / mirror / CORS axes were
+	// previously active and therefore need reconciliation even when the
+	// current spec no longer declares them.
+	hadCatchAll := resourceManifest.Annotations[hadCatchAllAnnotation] == annotationValueTrue
+	hadMirror := resourceManifest.Annotations[hadMirrorAnnotation] == annotationValueTrue
+	hadCORS := resourceManifest.Annotations[hadCORSAnnotation] == annotationValueTrue
+
 	// If the target changed, also rebuild the old target to clean up its stale ConfigMaps
 	if previousTarget, ok := resourceManifest.Annotations[lastTargetAnnotation]; ok && previousTarget != target {
 		logger.Info("Target changed, also rebuilding previous target",
@@ -131,13 +139,6 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 		r.markRebuilt(previousTarget, time.Now())
 	}
 
-	// Update the last-target annotation — skip for deletions as the resource is being removed
-	if eventType != watch.Deleted {
-		if err := r.ensureLastTargetAnnotation(ctx, resourceManifest, target); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to update last-target annotation: %w", err)
-		}
-	}
-
 	// Rebuild ConfigMaps for the current target
 	if err := r.rebuildConfigMapsForTarget(ctx, target); err != nil {
 		return ctrl.Result{}, err
@@ -148,24 +149,13 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 	// - the route currently has catchAllRoute configured
 	// - the route is being deleted (may have had catch-all entries)
 	// - the route previously had catchAllRoute but it was removed (annotation present, field nil)
-	hadCatchAll := resourceManifest.Annotations[hadCatchAllAnnotation] == annotationValueTrue
 	hasCatchAll := resourceManifest.Spec.CatchAllRoute != nil
-	needsCatchAllReconcile := hasCatchAll || eventType == watch.Deleted || hadCatchAll
-
-	if needsCatchAllReconcile {
+	if hasCatchAll || eventType == watch.Deleted || hadCatchAll {
 		if err := r.reconcileCatchAllFromAllRoutes(ctx); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to reconcile catch-all routes: %w", err)
 		}
 	}
 
-	// Track whether this route has catchAllRoute for future change detection — skip for deletions
-	if eventType != watch.Deleted {
-		if err := r.ensureHadCatchAllAnnotation(ctx, resourceManifest, hasCatchAll); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to update had-catch-all annotation: %w", err)
-		}
-	}
-
-	hadMirror := resourceManifest.Annotations[hadMirrorAnnotation] == annotationValueTrue
 	hasMirror := routeHasMirrorAction(resourceManifest)
 	if hasMirror || eventType == watch.Deleted || hadMirror {
 		if err := r.reconcileMirrorFromAllRoutes(ctx); err != nil {
@@ -173,13 +163,6 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 		}
 	}
 
-	if eventType != watch.Deleted {
-		if err := r.ensureHadMirrorAnnotation(ctx, resourceManifest, hasMirror); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to update had-mirror annotation: %w", err)
-		}
-	}
-
-	hadCORS := resourceManifest.Annotations[hadCORSAnnotation] == annotationValueTrue
 	hasCORS := routeHasCORSAction(resourceManifest)
 	if hasCORS || eventType == watch.Deleted || hadCORS {
 		if err := r.reconcileCORSFromAllRoutes(ctx); err != nil {
@@ -187,9 +170,13 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 		}
 	}
 
+	// Batch-update all tracking annotations in a single API call to minimise
+	// etcd writes and avoid cascading reconciles from individual updates.
+	// Previously each annotation was updated separately, triggering up to 4
+	// additional reconcile cycles per route change.
 	if eventType != watch.Deleted {
-		if err := r.ensureHadCORSAnnotation(ctx, resourceManifest, hasCORS); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to update had-cors annotation: %w", err)
+		if err := r.ensureAnnotations(ctx, resourceManifest, target, hasCatchAll, hasMirror, hasCORS); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to update tracking annotations: %w", err)
 		}
 	}
 
@@ -206,31 +193,6 @@ func routeHasCORSAction(cr *v1alpha1.CustomHTTPRoute) bool {
 		}
 	}
 	return false
-}
-
-// ensureHadCORSAnnotation mirrors ensureHadMirrorAnnotation for the cors axis.
-func (r *CustomHTTPRouteReconciler) ensureHadCORSAnnotation(
-	ctx context.Context,
-	resource *v1alpha1.CustomHTTPRoute,
-	hasCORS bool,
-) error {
-	currentValue := resource.Annotations[hadCORSAnnotation]
-	desiredValue := ""
-	if hasCORS {
-		desiredValue = annotationValueTrue
-	}
-	if currentValue == desiredValue {
-		return nil
-	}
-	if resource.Annotations == nil {
-		resource.Annotations = make(map[string]string)
-	}
-	if hasCORS {
-		resource.Annotations[hadCORSAnnotation] = annotationValueTrue
-	} else {
-		delete(resource.Annotations, hadCORSAnnotation)
-	}
-	return r.Update(ctx, resource)
 }
 
 // reconcileCORSFromAllRoutes lists all routes and drives the per-EPA CORS
@@ -256,31 +218,6 @@ func routeHasMirrorAction(cr *v1alpha1.CustomHTTPRoute) bool {
 	return false
 }
 
-// ensureHadMirrorAnnotation mirrors ensureHadCatchAllAnnotation for the mirror axis.
-func (r *CustomHTTPRouteReconciler) ensureHadMirrorAnnotation(
-	ctx context.Context,
-	resource *v1alpha1.CustomHTTPRoute,
-	hasMirror bool,
-) error {
-	currentValue := resource.Annotations[hadMirrorAnnotation]
-	desiredValue := ""
-	if hasMirror {
-		desiredValue = annotationValueTrue
-	}
-	if currentValue == desiredValue {
-		return nil
-	}
-	if resource.Annotations == nil {
-		resource.Annotations = make(map[string]string)
-	}
-	if hasMirror {
-		resource.Annotations[hadMirrorAnnotation] = annotationValueTrue
-	} else {
-		delete(resource.Annotations, hadMirrorAnnotation)
-	}
-	return r.Update(ctx, resource)
-}
-
 // reconcileMirrorFromAllRoutes lists all routes and drives the per-EPA mirror
 // EnvoyFilter reconciliation.
 func (r *CustomHTTPRouteReconciler) reconcileMirrorFromAllRoutes(ctx context.Context) error {
@@ -291,45 +228,61 @@ func (r *CustomHTTPRouteReconciler) reconcileMirrorFromAllRoutes(ctx context.Con
 	return r.reconcileMirrorFromRoutes(ctx, routeList)
 }
 
-// ensureLastTargetAnnotation sets the last-target annotation on the resource if not already correct.
-func (r *CustomHTTPRouteReconciler) ensureLastTargetAnnotation(
+// ensureAnnotations batch-updates all tracking annotations (last-target,
+// had-catch-all, had-mirror, had-cors) in a single API call. This replaces
+// the previous per-annotation Update calls that each triggered a new
+// reconcile via the controller watch, multiplying etcd writes.
+func (r *CustomHTTPRouteReconciler) ensureAnnotations(
 	ctx context.Context,
 	resource *v1alpha1.CustomHTTPRoute,
 	target string,
+	hasCatchAll, hasMirror, hasCORS bool,
 ) error {
-	if resource.Annotations != nil && resource.Annotations[lastTargetAnnotation] == target {
+	if annotationsUpToDate(resource.Annotations, target, hasCatchAll, hasMirror, hasCORS) {
 		return nil
 	}
+
 	if resource.Annotations == nil {
 		resource.Annotations = make(map[string]string)
 	}
 	resource.Annotations[lastTargetAnnotation] = target
+	setBoolAnnotation(resource.Annotations, hadCatchAllAnnotation, hasCatchAll)
+	setBoolAnnotation(resource.Annotations, hadMirrorAnnotation, hasMirror)
+	setBoolAnnotation(resource.Annotations, hadCORSAnnotation, hasCORS)
+
 	return r.Update(ctx, resource)
 }
 
-// ensureHadCatchAllAnnotation sets or removes the had-catch-all annotation to track catchAllRoute presence.
-func (r *CustomHTTPRouteReconciler) ensureHadCatchAllAnnotation(
-	ctx context.Context,
-	resource *v1alpha1.CustomHTTPRoute,
-	hasCatchAll bool,
-) error {
-	currentValue := resource.Annotations[hadCatchAllAnnotation]
-	desiredValue := ""
-	if hasCatchAll {
-		desiredValue = "true"
+// annotationsUpToDate returns true when all tracking annotations already
+// reflect the desired state, so no Update call is needed.
+func annotationsUpToDate(ann map[string]string, target string, hasCatchAll, hasMirror, hasCORS bool) bool {
+	if ann == nil {
+		return false
 	}
-	if currentValue == desiredValue {
-		return nil
+	if ann[lastTargetAnnotation] != target {
+		return false
 	}
-	if resource.Annotations == nil {
-		resource.Annotations = make(map[string]string)
+	return boolAnnotationCurrent(ann, hadCatchAllAnnotation, hasCatchAll) &&
+		boolAnnotationCurrent(ann, hadMirrorAnnotation, hasMirror) &&
+		boolAnnotationCurrent(ann, hadCORSAnnotation, hasCORS)
+}
+
+// boolAnnotationCurrent checks if a boolean annotation matches the desired state.
+func boolAnnotationCurrent(ann map[string]string, key string, desired bool) bool {
+	current, exists := ann[key]
+	if desired {
+		return exists && current == annotationValueTrue
 	}
-	if hasCatchAll {
-		resource.Annotations[hadCatchAllAnnotation] = annotationValueTrue
+	return !exists || current == ""
+}
+
+// setBoolAnnotation sets or removes a boolean tracking annotation.
+func setBoolAnnotation(ann map[string]string, key string, value bool) {
+	if value {
+		ann[key] = annotationValueTrue
 	} else {
-		delete(resource.Annotations, hadCatchAllAnnotation)
+		delete(ann, key)
 	}
-	return r.Update(ctx, resource)
 }
 
 // reconcileCatchAllFromAllRoutes lists all routes and reconciles catch-all EnvoyFilters.
@@ -409,6 +362,13 @@ func (r *CustomHTTPRouteReconciler) rebuildConfigMapsForTarget(ctx context.Conte
 	// Delete stale ConfigMaps for this target
 	if err := r.deleteStaleConfigMapsForTarget(ctx, target, activeNames); err != nil {
 		return err
+	}
+
+	// When all routes for this target have been removed, purge the
+	// in-memory cooldown and hash-cache entries so they don't accumulate
+	// as targets are created and deleted over the lifetime of the process.
+	if len(targetRoutes) == 0 {
+		r.clearTargetState(target)
 	}
 
 	return nil
@@ -714,26 +674,50 @@ func stableBucketCount(minBuckets int) int {
 // Used only inside splitHostRoutes; routing priority is re-established by
 // the extproc loader after merge.
 func sortRoutesByIdentity(rs []routes.Route) {
-	sort.SliceStable(rs, func(i, j int) bool {
-		a, b := rs[i], rs[j]
-		if a.Path != b.Path {
-			return a.Path < b.Path
-		}
-		if a.Type != b.Type {
-			return a.Type < b.Type
-		}
-		if a.Method != b.Method {
-			return a.Method < b.Method
-		}
-		if a.Backend != b.Backend {
-			return a.Backend < b.Backend
-		}
-		// Final tiebreaker: the marshalled byte form is fully deterministic
-		// once Path/Type/Method/Backend match.
-		ad, _ := json.Marshal(a)
-		bd, _ := json.Marshal(b)
-		return string(ad) < string(bd)
-	})
+	// Pre-compute identity keys once (O(n)) so the sort comparator does not
+	// re-marshal routes on every comparison (which would be O(n log n)
+	// allocations in the worst case, creating significant GC pressure for
+	// large buckets).
+	keys := make([]string, len(rs))
+	for i := range rs {
+		k, _ := json.Marshal(rs[i])
+		keys[i] = string(k)
+	}
+
+	sort.Stable(routesByIdentity{routes: rs, keys: keys})
+}
+
+// routesByIdentity implements sort.Interface, keeping the pre-computed
+// identity keys in sync with the routes slice during swaps. Using
+// sort.SliceStable would desync the keys array because it only swaps
+// elements in the target slice.
+type routesByIdentity struct {
+	routes []routes.Route
+	keys   []string
+}
+
+func (r routesByIdentity) Len() int { return len(r.routes) }
+func (r routesByIdentity) Swap(i, j int) {
+	r.routes[i], r.routes[j] = r.routes[j], r.routes[i]
+	r.keys[i], r.keys[j] = r.keys[j], r.keys[i]
+}
+func (r routesByIdentity) Less(i, j int) bool {
+	a, b := r.routes[i], r.routes[j]
+	if a.Path != b.Path {
+		return a.Path < b.Path
+	}
+	if a.Type != b.Type {
+		return a.Type < b.Type
+	}
+	if a.Method != b.Method {
+		return a.Method < b.Method
+	}
+	if a.Backend != b.Backend {
+		return a.Backend < b.Backend
+	}
+	// Final tiebreaker: the pre-computed marshalled byte form is fully
+	// deterministic once Path/Type/Method/Backend match.
+	return r.keys[i] < r.keys[j]
 }
 
 // routeBucket maps a route to a partition index. The hash input combines the
@@ -793,10 +777,22 @@ func (r *CustomHTTPRouteReconciler) upsertConfigMaps(
 // upsertSingleConfigMap creates or updates a single ConfigMap with retry-on-conflict.
 // Multiple CustomHTTPRoute reconciliations run concurrently and all update the same
 // ConfigMaps, so conflicts are expected. We retry with a fresh Get on each attempt.
+//
+// An in-memory hash cache (partitionHashes) is checked first: when the
+// computed partition data hash matches the last successfully written value,
+// the entire Get+Compare+Update cycle is skipped, avoiding any etcd
+// interaction for unchanged partitions.
 func (r *CustomHTTPRouteReconciler) upsertSingleConfigMap(
 	ctx context.Context,
 	partition ConfigMapPartition,
 ) error {
+	// Fast-path: skip the entire Get+Compare cycle when the partition
+	// content has not changed since the last successful write.
+	dataHash := fnvHash(partition.Data)
+	if r.partitionHashHit(partition.Name, dataHash) {
+		return nil
+	}
+
 	configMapKey := types.NamespacedName{
 		Name:      partition.Name,
 		Namespace: r.ConfigMapNamespace,
@@ -822,7 +818,7 @@ func (r *CustomHTTPRouteReconciler) upsertSingleConfigMap(
 		Jitter:   0.2,
 	}
 
-	return retry.OnError(backoff, func(err error) bool {
+	err := retry.OnError(backoff, func(err error) bool {
 		return errors.IsConflict(err) || errors.IsAlreadyExists(err)
 	}, func() error {
 		existingCM := &corev1.ConfigMap{}
@@ -858,6 +854,11 @@ func (r *CustomHTTPRouteReconciler) upsertSingleConfigMap(
 		}
 		return r.Update(ctx, existingCM)
 	})
+
+	if err == nil {
+		r.setPartitionHash(partition.Name, dataHash)
+	}
+	return err
 }
 
 // deleteStaleConfigMapsForTarget removes ConfigMaps for a specific target that are no longer needed
@@ -888,6 +889,7 @@ func (r *CustomHTTPRouteReconciler) deleteStaleConfigMapsForTarget(
 			if err := r.Delete(ctx, cm); err != nil && !errors.IsNotFound(err) {
 				return fmt.Errorf("failed to delete stale ConfigMap %s: %w", cm.Name, err)
 			}
+			r.clearPartitionHash(cm.Name)
 		}
 	}
 
@@ -905,4 +907,37 @@ func mapsEqual(a, b map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// fnvHash returns the FNV-32a hash of a string.
+func fnvHash(s string) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(s))
+	return h.Sum32()
+}
+
+// partitionHashHit returns true if the cached hash for the given ConfigMap
+// name matches the provided hash, meaning the content is unchanged.
+func (r *CustomHTTPRouteReconciler) partitionHashHit(name string, hash uint32) bool {
+	r.partitionHashesMu.Lock()
+	defer r.partitionHashesMu.Unlock()
+	cached, ok := r.partitionHashes[name]
+	return ok && cached == hash
+}
+
+// setPartitionHash stores the content hash for a ConfigMap partition.
+func (r *CustomHTTPRouteReconciler) setPartitionHash(name string, hash uint32) {
+	r.partitionHashesMu.Lock()
+	defer r.partitionHashesMu.Unlock()
+	if r.partitionHashes == nil {
+		r.partitionHashes = make(map[string]uint32)
+	}
+	r.partitionHashes[name] = hash
+}
+
+// clearPartitionHash removes the cached hash for a ConfigMap partition.
+func (r *CustomHTTPRouteReconciler) clearPartitionHash(name string) {
+	r.partitionHashesMu.Lock()
+	defer r.partitionHashesMu.Unlock()
+	delete(r.partitionHashes, name)
 }
