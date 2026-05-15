@@ -60,7 +60,7 @@ flowchart LR
 
 ## Upgrade notes
 
-### 0.7.x → 0.8.0
+### 0.7.0 → 0.7.1
 
 - `ExternalProcessorAttachment.spec.retryPolicy` is now richer. In addition to
   `numRetries`, you can configure `retryOn`, `retriableStatusCodes`,
@@ -72,7 +72,7 @@ flowchart LR
   matching the previous hardcoded behaviour).
 - When `spec.retryPolicy` is omitted entirely, the generated EnvoyFilters no
   longer contain a `retry_policy` block at all. Envoy treats this identically
-  to `num_retries: 0`, so there is no dataplane behaviour change versus 0.7.x.
+  to `num_retries: 0`, so there is no dataplane behaviour change versus 0.7.0.
 
 ### 0.6.x → 0.7.0 (recap — breaking change)
 
