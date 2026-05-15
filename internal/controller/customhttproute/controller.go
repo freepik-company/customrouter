@@ -46,7 +46,22 @@ const targetRefIndexField = ".spec.targetRef.name"
 // ConfigMap rebuilds for the same target. It bounds the API/etcd write rate
 // that the controller can generate when many CustomHTTPRoutes sharing a
 // target are enqueued together (typically at controller cache resync).
-const DefaultRebuildCooldown = 2 * time.Second
+//
+// 5 s strikes a balance between (a) absorbing post-resync bursts where dozens
+// to hundreds of CRs sharing a single target re-enqueue together, and
+// (b) keeping perceived convergence latency below the threshold at which
+// operators notice the lag on routine edits.
+const DefaultRebuildCooldown = 5 * time.Second
+
+// DefaultUpsertParallelism is the number of ConfigMap partition upserts
+// dispatched concurrently within a single rebuild. Each upsert holds at most
+// one in-flight Get+Compare+Update against the API server; raising this
+// shortens wall-clock rebuild time linearly until the API server's QPS limit
+// or per-namespace etcd write throughput becomes the bottleneck. The default
+// is matched to the operator's default client QPS so a single rebuild does
+// not saturate the entire QPS budget for other controllers sharing the
+// process.
+const DefaultUpsertParallelism = 10
 
 // DefaultStateGCInterval is the period between sweeps of the in-memory state
 // (lastRebuildAt, partitionHashes). Sweeps drop entries for targets that no
@@ -72,6 +87,11 @@ type CustomHTTPRouteReconciler struct {
 	// the periodic GC entirely (useful in tests).
 	StateGCInterval time.Duration
 
+	// UpsertParallelism caps how many ConfigMap partition upserts run in
+	// parallel within a single rebuild. When zero, DefaultUpsertParallelism
+	// is used. A value of 1 forces sequential behaviour (matches pre-0.7.2).
+	UpsertParallelism int
+
 	// lastRebuildAt records the last successful rebuild time per target name.
 	// Read/written under rebuildMu.
 	lastRebuildAt map[string]time.Time
@@ -93,6 +113,19 @@ func (r *CustomHTTPRouteReconciler) effectiveRebuildCooldown() time.Duration {
 		return DefaultRebuildCooldown
 	}
 	return r.RebuildCooldown
+}
+
+// effectiveUpsertParallelism returns the upsert concurrency to apply. Zero
+// falls back to DefaultUpsertParallelism. Negative or 1 forces sequential
+// behaviour.
+func (r *CustomHTTPRouteReconciler) effectiveUpsertParallelism() int {
+	if r.UpsertParallelism == 0 {
+		return DefaultUpsertParallelism
+	}
+	if r.UpsertParallelism < 1 {
+		return 1
+	}
+	return r.UpsertParallelism
 }
 
 // rebuildWait reports the remaining cooldown for the given target. The bool
@@ -390,6 +423,10 @@ func (r *CustomHTTPRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	maxConcurrent := r.MaxConcurrentReconciles
 	if maxConcurrent <= 0 {
 		maxConcurrent = 1
+	}
+
+	if err := r.addPartitionHashesPersistRunnable(mgr); err != nil {
+		return fmt.Errorf("register partition hashes persist runnable: %w", err)
 	}
 
 	if err := mgr.Add(manager.RunnableFunc(r.runStateGC)); err != nil {

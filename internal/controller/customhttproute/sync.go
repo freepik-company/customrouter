@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -828,19 +829,50 @@ func parsePartitionName(name string) (target string, index int, ok bool) {
 	return rest[:dash], idx, true
 }
 
-// upsertConfigMaps creates or updates all ConfigMap partitions for a target
+// upsertConfigMaps creates or updates all ConfigMap partitions for a target.
+//
+// Partitions are dispatched concurrently with a bound of
+// effectiveUpsertParallelism(); each worker performs an independent
+// Get+Compare+Update against the API server. For large targets (e.g. >100
+// partitions) the wall-clock saving is roughly linear in the worker count
+// until the client QPS/Burst limit becomes the bottleneck — see the
+// --client-qps / --client-burst flags.
+//
+// Behaviour on errors:
+//   - As soon as one worker returns a non-nil error, the shared context is
+//     cancelled and remaining workers abort fast (errgroup.WithContext
+//     semantics). The first error is returned to the caller; later errors
+//     from cancelled workers are dropped, matching the pre-parallel
+//     fail-fast behaviour of the previous sequential loop.
+//   - partitionHashes is only updated by upsertSingleConfigMap when its
+//     own write succeeds, so a partial failure leaves the in-memory cache
+//     in a state where the next reconcile will retry exactly the partitions
+//     that failed (and skip the rest via the hash fast-path).
 func (r *CustomHTTPRouteReconciler) upsertConfigMaps(
 	ctx context.Context,
 	partitions []ConfigMapPartition,
 ) error {
-	// Create or update each partition
-	for _, partition := range partitions {
-		if err := r.upsertSingleConfigMap(ctx, partition); err != nil {
-			return err
+	parallelism := r.effectiveUpsertParallelism()
+	if parallelism <= 1 || len(partitions) <= 1 {
+		// Sequential fall-back: identical to the pre-parallel code path.
+		// Cheap to keep so tests and small targets stay deterministic.
+		for _, partition := range partitions {
+			if err := r.upsertSingleConfigMap(ctx, partition); err != nil {
+				return err
+			}
 		}
+		return nil
 	}
 
-	return nil
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(parallelism)
+	for i := range partitions {
+		partition := partitions[i]
+		g.Go(func() error {
+			return r.upsertSingleConfigMap(gctx, partition)
+		})
+	}
+	return g.Wait()
 }
 
 // upsertSingleConfigMap creates or updates a single ConfigMap with retry-on-conflict.
