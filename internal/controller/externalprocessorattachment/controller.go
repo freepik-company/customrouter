@@ -76,7 +76,15 @@ func (r *ExternalProcessorAttachmentReconciler) Reconcile(ctx context.Context, r
 			patch := client.MergeFrom(attachment.DeepCopy())
 			controllerutil.RemoveFinalizer(attachment, controller.ResourceFinalizer)
 			if err = r.Patch(ctx, attachment, patch); err != nil {
-				logger.Error(err, "Failed to remove finalizer", "name", req.Name)
+				// The owning namespace is often deleted before the CR's last
+				// reconcile lands, so the finalizer-removal Patch races against
+				// cascading namespace deletion. In that case the apiserver returns
+				// NotFound and the resource is already effectively gone.
+				if client.IgnoreNotFound(err) == nil {
+					logger.V(1).Info("Resource or namespace already gone, skipping finalizer removal", "name", req.Name)
+				} else {
+					logger.Error(err, "Failed to remove finalizer", "name", req.Name)
+				}
 			}
 		}
 		return ctrl.Result{}, nil

@@ -286,7 +286,16 @@ func (r *CustomHTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 				return nil
 			})
 			if err != nil {
-				logger.Error(err, "Failed to remove finalizer", "name", req.Name)
+				// The owning namespace is often deleted before the CR's last
+				// reconcile lands, so the finalizer-removal Update races against
+				// cascading namespace deletion. In that case the apiserver returns
+				// NotFound (either for the CR or for its namespace) and the
+				// resource is already effectively gone — nothing left to clean up.
+				if client.IgnoreNotFound(err) == nil {
+					logger.V(1).Info("Resource or namespace already gone, skipping finalizer removal", "name", req.Name)
+				} else {
+					logger.Error(err, "Failed to remove finalizer", "name", req.Name)
+				}
 			}
 		}
 		return ctrl.Result{}, nil
