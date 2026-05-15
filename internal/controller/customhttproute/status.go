@@ -104,19 +104,25 @@ func (r *CustomHTTPRouteReconciler) UpdateConditionCatchAllProgrammed(
 func (r *CustomHTTPRouteReconciler) ComputeCatchAllProgrammedStatus(
 	ctx context.Context,
 	route *v1alpha1.CustomHTTPRoute,
+	routeList *v1alpha1.CustomHTTPRouteList,
+	epaList *v1alpha1.ExternalProcessorAttachmentList,
 ) (ef.CatchAllProgrammedStatus, error) {
 	if route.Spec.CatchAllRoute == nil {
 		return ef.CatchAllProgrammedStatus{Reason: controller.ConditionReasonCatchAllNotConfigured}, nil
 	}
 
-	routeList := &v1alpha1.CustomHTTPRouteList{}
-	if err := r.List(ctx, routeList); err != nil {
-		return ef.CatchAllProgrammedStatus{}, fmt.Errorf("failed to list CustomHTTPRoutes: %w", err)
+	if routeList == nil {
+		routeList = &v1alpha1.CustomHTTPRouteList{}
+		if err := r.List(ctx, routeList); err != nil {
+			return ef.CatchAllProgrammedStatus{}, fmt.Errorf("failed to list CustomHTTPRoutes: %w", err)
+		}
 	}
 
-	epaList := &v1alpha1.ExternalProcessorAttachmentList{}
-	if err := r.List(ctx, epaList); err != nil {
-		return ef.CatchAllProgrammedStatus{}, fmt.Errorf("failed to list ExternalProcessorAttachments: %w", err)
+	if epaList == nil {
+		epaList = &v1alpha1.ExternalProcessorAttachmentList{}
+		if err := r.List(ctx, epaList); err != nil {
+			return ef.CatchAllProgrammedStatus{}, fmt.Errorf("failed to list ExternalProcessorAttachments: %w", err)
+		}
 	}
 
 	return ef.EvaluateCatchAllProgrammed(route, routeList, epaList), nil

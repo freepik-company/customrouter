@@ -275,7 +275,7 @@ func (r *CustomHTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	// 3. Check if the resource instance is marked to be deleted
 	if !objectManifest.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(objectManifest, controller.ResourceFinalizer) {
-			result, err = r.ReconcileObject(ctx, watch.Deleted, objectManifest)
+			result, _, _, err = r.ReconcileObject(ctx, watch.Deleted, objectManifest)
 			if err != nil {
 				logger.Error(err, "Failed to reconcile deletion", "name", req.Name)
 				return result, err
@@ -335,7 +335,7 @@ func (r *CustomHTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}()
 
 	// 7. The resource already exists: manage the update
-	result, err = r.ReconcileObject(ctx, watch.Modified, objectManifest)
+	result, routeList, epaList, err := r.ReconcileObject(ctx, watch.Modified, objectManifest)
 	if err != nil {
 		r.UpdateConditionReconciled(objectManifest)
 		r.UpdateConditionConfigMapFailed(objectManifest, err.Error())
@@ -354,7 +354,7 @@ func (r *CustomHTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	r.UpdateConditionReconciled(objectManifest)
 	r.UpdateConditionConfigMapSynced(objectManifest)
 
-	catchAllStatus, catchAllErr := r.ComputeCatchAllProgrammedStatus(ctx, objectManifest)
+	catchAllStatus, catchAllErr := r.ComputeCatchAllProgrammedStatus(ctx, objectManifest, routeList, epaList)
 	if catchAllErr != nil {
 		logger.Error(catchAllErr, "Failed to compute CatchAllProgrammed status", "name", req.Name)
 	} else {

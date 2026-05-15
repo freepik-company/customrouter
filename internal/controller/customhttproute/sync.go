@@ -91,7 +91,7 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 	ctx context.Context,
 	eventType watch.EventType,
 	resourceManifest *v1alpha1.CustomHTTPRoute,
-) (ctrl.Result, error) {
+) (ctrl.Result, *v1alpha1.CustomHTTPRouteList, *v1alpha1.ExternalProcessorAttachmentList, error) {
 	logger := log.FromContext(ctx)
 	target := resourceManifest.Spec.TargetRef.Name
 
@@ -116,7 +116,7 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 			logger.V(1).Info("target rebuild in cooldown, requeueing",
 				"target", target,
 				"wait", remaining.String())
-			return ctrl.Result{RequeueAfter: remaining}, nil
+			return ctrl.Result{RequeueAfter: remaining}, nil, nil, nil
 		}
 	}
 
@@ -135,14 +135,14 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 			"previousTarget", previousTarget,
 			"newTarget", target)
 		if err := r.rebuildConfigMapsForTarget(ctx, previousTarget); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to rebuild ConfigMaps for previous target %s: %w", previousTarget, err)
+			return ctrl.Result{}, nil, nil, fmt.Errorf("failed to rebuild ConfigMaps for previous target %s: %w", previousTarget, err)
 		}
 		r.markRebuilt(previousTarget, time.Now())
 	}
 
 	// Rebuild ConfigMaps for the current target
 	if err := r.rebuildConfigMapsForTarget(ctx, target); err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, nil, nil, err
 	}
 	r.markRebuilt(target, time.Now())
 
@@ -160,29 +160,32 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 	needMirror := hasMirror || eventType == watch.Deleted || hadMirror
 	needCORS := hasCORS || eventType == watch.Deleted || hadCORS
 
+	var routeList *v1alpha1.CustomHTTPRouteList
+	var epaList *v1alpha1.ExternalProcessorAttachmentList
+
 	if needCatchAll || needMirror || needCORS {
-		routeList := &v1alpha1.CustomHTTPRouteList{}
+		routeList = &v1alpha1.CustomHTTPRouteList{}
 		if err := r.List(ctx, routeList); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to list CustomHTTPRoutes for envoyfilter reconciliation: %w", err)
+			return ctrl.Result{}, nil, nil, fmt.Errorf("failed to list CustomHTTPRoutes for envoyfilter reconciliation: %w", err)
 		}
-		epaList := &v1alpha1.ExternalProcessorAttachmentList{}
+		epaList = &v1alpha1.ExternalProcessorAttachmentList{}
 		if err := r.List(ctx, epaList); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to list ExternalProcessorAttachments for envoyfilter reconciliation: %w", err)
+			return ctrl.Result{}, nil, nil, fmt.Errorf("failed to list ExternalProcessorAttachments for envoyfilter reconciliation: %w", err)
 		}
 
 		if needCatchAll {
 			if err := r.reconcileCatchAllFromRoutes(ctx, routeList, epaList); err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to reconcile catch-all routes: %w", err)
+				return ctrl.Result{}, nil, nil, fmt.Errorf("failed to reconcile catch-all routes: %w", err)
 			}
 		}
 		if needMirror {
 			if err := r.reconcileMirrorFromRoutes(ctx, routeList, epaList); err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to reconcile mirror routes: %w", err)
+				return ctrl.Result{}, nil, nil, fmt.Errorf("failed to reconcile mirror routes: %w", err)
 			}
 		}
 		if needCORS {
 			if err := r.reconcileCORSFromRoutes(ctx, routeList, epaList); err != nil {
-				return ctrl.Result{}, fmt.Errorf("failed to reconcile cors routes: %w", err)
+				return ctrl.Result{}, nil, nil, fmt.Errorf("failed to reconcile cors routes: %w", err)
 			}
 		}
 	}
@@ -193,11 +196,11 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 	// additional reconcile cycles per route change.
 	if eventType != watch.Deleted {
 		if err := r.ensureAnnotations(ctx, resourceManifest, target, hasCatchAll, hasMirror, hasCORS); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to update tracking annotations: %w", err)
+			return ctrl.Result{}, nil, nil, fmt.Errorf("failed to update tracking annotations: %w", err)
 		}
 	}
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{}, routeList, epaList, nil
 }
 
 // routeHasCORSAction returns true if any rule in the route declares a cors action.
@@ -631,7 +634,17 @@ func (r *CustomHTTPRouteReconciler) splitHostRoutes(
 		if !overflow {
 			break
 		}
-		bucketCount *= 2
+		if attempt < maxRetries-1 {
+			bucketCount *= 2
+		}
+	}
+	if overflow {
+		return nil, startIndex, fmt.Errorf(
+			"unable to partition host %s within size limit after %d retries (bucketCount=%d)",
+			host,
+			maxRetries,
+			bucketCount,
+		)
 	}
 
 	// Sort each bucket so the JSON output is byte-stable across reconciles.
