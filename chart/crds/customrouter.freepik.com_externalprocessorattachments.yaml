@@ -106,6 +106,15 @@ spec:
                 description: externalProcessorRef identifies the external processor
                   service to use
                 properties:
+                  failureModeAllow:
+                    default: false
+                    description: |-
+                      failureModeAllow controls whether requests proceed when the external
+                      processor is unavailable. When true, requests bypass extproc routing on
+                      failure (graceful degradation: the data plane keeps serving traffic with
+                      whatever native Envoy/Istio routing is configured). When false, requests
+                      fail closed with a 5xx. Defaults to false.
+                    type: boolean
                   messageTimeout:
                     default: 5s
                     description: |-
@@ -168,7 +177,8 @@ spec:
               retryPolicy:
                 description: |-
                   retryPolicy configures the Envoy retry policy applied to all
-                  customrouter-managed routes. When not specified, no retries are performed.
+                  customrouter-managed routes. When not specified, no retries are performed
+                  and no retry_policy block is emitted in the generated EnvoyFilters.
                 properties:
                   numRetries:
                     default: 0
@@ -179,7 +189,41 @@ spec:
                     format: int64
                     minimum: 0
                     type: integer
+                  perTryTimeout:
+                    description: |-
+                      perTryTimeout is the timeout applied to each individual retry attempt.
+                      Must be a valid duration string (e.g., "5s", "500ms"). When omitted, no
+                      per_try_timeout is emitted and the route timeout applies to the whole
+                      request including all retries. Only used when numRetries > 0.
+                    pattern: ^[0-9]+(s|ms|m|h)$
+                    type: string
+                  retriableStatusCodes:
+                    description: |-
+                      retriableStatusCodes is the list of HTTP status codes that trigger a retry
+                      when "retriable-status-codes" is included in retryOn. Defaults to [503]
+                      when not specified. Only used when numRetries > 0.
+                    items:
+                      format: int32
+                      type: integer
+                    type: array
+                    x-kubernetes-list-type: set
+                  retryOn:
+                    description: |-
+                      retryOn is the Envoy retry_on policy list (comma-separated values, see
+                      https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/router_filter#x-envoy-retry-on).
+                      When not specified, defaults to
+                      "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes".
+                      Only used when numRetries > 0.
+                    type: string
                 type: object
+              routeTimeout:
+                default: 30s
+                description: |-
+                  routeTimeout is the per-request timeout applied to all customrouter-managed
+                  Envoy routes. Must be a valid duration string (e.g., "30s", "5s", "1m").
+                  Defaults to "30s" when not specified.
+                pattern: ^[0-9]+(s|ms|m|h)$
+                type: string
             required:
             - externalProcessorRef
             - gatewayRef

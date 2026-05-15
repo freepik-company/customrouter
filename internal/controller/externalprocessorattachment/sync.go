@@ -187,7 +187,7 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileExtProcEnvoyFilter(
 								},
 								"timeout": getTimeout(attachment),
 							},
-							"failure_mode_allow": false,
+							"failure_mode_allow": attachment.Spec.ExternalProcessorRef.FailureModeAllow,
 							"message_timeout":    getMessageTimeout(attachment),
 							"processing_mode": map[string]interface{}{
 								"request_header_mode":   "SEND",
@@ -255,15 +255,7 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileRoutesEnvoyFilter(
 								},
 							},
 						},
-						"route": map[string]interface{}{
-							"cluster_header": "x-customrouter-cluster",
-							"timeout":        "30s",
-							"retry_policy": map[string]interface{}{
-								"retry_on":               "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes",
-								"num_retries":            ef.GetNumRetries(attachment),
-								"retriable_status_codes": []interface{}{int64(503)},
-							},
-						},
+						"route": buildRoutesRouteAction(attachment),
 					},
 				},
 			},
@@ -275,6 +267,18 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileRoutesEnvoyFilter(
 	}
 
 	return ef.UpsertUnstructured(ctx, r.Client, envoyFilter)
+}
+
+// buildRoutesRouteAction builds the "route" stanza emitted into the routes EnvoyFilter,
+// applying the per-EPA timeout and (optionally) retry_policy. Kept here so the
+// inline spec stays readable.
+func buildRoutesRouteAction(attachment *v1alpha1.ExternalProcessorAttachment) map[string]interface{} {
+	routeAction := map[string]interface{}{
+		"cluster_header": "x-customrouter-cluster",
+		"timeout":        ef.GetRouteTimeout(attachment),
+	}
+	ef.ApplyRetryPolicy(routeAction, attachment)
+	return routeAction
 }
 
 // deleteEnvoyFilters deletes all EnvoyFilters owned by this attachment
