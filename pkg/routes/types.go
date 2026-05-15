@@ -222,13 +222,18 @@ func (rc *RoutesConfig) ToJSON() ([]byte, error) {
 	buf := acquireJSONBuffer()
 	defer releaseJSONBuffer(buf)
 
+	// Use the default encoder settings (HTML escaping ON) so the output is
+	// byte-identical to the previous json.Marshal-based implementation. The
+	// partitionHashes dedup in the controller depends on this stability:
+	// changing the escaping rules would force a one-time rewrite of every
+	// managed ConfigMap whose routes contain '&', '<' or '>' (e.g. query
+	// strings), defeating the etcd-pressure reduction this pool exists for.
 	enc := json.NewEncoder(buf)
-	enc.SetEscapeHTML(false)
 	if err := enc.Encode(rc); err != nil {
 		return nil, err
 	}
-	// json.Encoder.Encode appends a trailing newline; strip it to keep the
-	// output byte-identical to the previous json.Marshal-based implementation.
+	// json.Encoder.Encode appends a trailing newline; strip it to match
+	// json.Marshal's output exactly.
 	out := buf.Bytes()
 	if n := len(out); n > 0 && out[n-1] == '\n' {
 		out = out[:n-1]
