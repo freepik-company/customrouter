@@ -119,11 +119,11 @@ func TestGCStateOnceEvictsDeadTargets(t *testing.T) {
 		"dead":  time.Now(),
 	}
 	r.partitionHashes = map[string]uint32{
-		"customrouter-routes-alive-0":   1,
-		"customrouter-routes-alive-2":   2,
-		"customrouter-routes-dead-0":    3,
-		"customrouter-routes-dead-7":    4,
-		"unparseable-name":              5, // defensive eviction
+		"customrouter-routes-alive-0": 1,
+		"customrouter-routes-alive-2": 2,
+		"customrouter-routes-dead-0":  3,
+		"customrouter-routes-dead-7":  4,
+		"unparseable-name":            5, // defensive eviction
 	}
 	r.rebuildMu = sync.Mutex{}
 	r.partitionHashesMu = sync.Mutex{}
