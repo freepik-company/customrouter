@@ -58,6 +58,67 @@ flowchart LR
 - Istio v1.18+ (for gateway integration)
 - Go v1.25+ (for development)
 
+## Upgrade notes
+
+### 0.7.x → 0.8.0
+
+- `ExternalProcessorAttachment.spec.retryPolicy` is now richer. In addition to
+  `numRetries`, you can configure `retryOn`, `retriableStatusCodes`,
+  `perTryTimeout`. See "Retry policy" below.
+- New top-level `spec.routeTimeout` replaces the previously hardcoded `30s`
+  per-route timeout. Defaults to `30s` (no behaviour change unless you set it).
+- New `spec.externalProcessorRef.failureModeAllow` exposes Envoy's
+  `failure_mode_allow` for the ext_proc filter. Defaults to `false` (fail closed,
+  matching the previous hardcoded behaviour).
+- When `spec.retryPolicy` is omitted entirely, the generated EnvoyFilters no
+  longer contain a `retry_policy` block at all. Envoy treats this identically
+  to `num_retries: 0`, so there is no dataplane behaviour change versus 0.7.x.
+
+### 0.6.x → 0.7.0 (recap — breaking change)
+
+Versions prior to 0.7.0 emitted `num_retries: 2` hardcoded on every generated
+route (routes, catch-all, mirror, CORS). Starting in 0.7.0, the default is
+**no retries**. If you relied on the previous behaviour, set
+`spec.retryPolicy.numRetries: 2` (and optionally the rest of the retry policy
+fields, see below) on each `ExternalProcessorAttachment` before upgrading.
+
+### Retry policy
+
+```yaml
+apiVersion: customrouter.freepik.com/v1alpha1
+kind: ExternalProcessorAttachment
+metadata:
+  name: my-attachment
+spec:
+  gatewayRef:
+    selector:
+      istio: gateway-production
+  externalProcessorRef:
+    service:
+      name: customrouter-extproc
+      namespace: customrouter
+      port: 50051
+    # Optional: let traffic through when extproc is unavailable.
+    # Defaults to false (fail closed with 5xx).
+    failureModeAllow: false
+  # Optional: per-request timeout applied to all customrouter-managed routes.
+  # Defaults to 30s.
+  routeTimeout: 30s
+  # Optional: emit a retry_policy on every customrouter-managed route.
+  # Omit the whole retryPolicy field to disable retries entirely (no
+  # retry_policy block emitted at all).
+  retryPolicy:
+    numRetries: 2
+    # Defaults to: "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes"
+    retryOn: "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes"
+    # Defaults to: [503]
+    retriableStatusCodes:
+      - 503
+    # Optional: per-attempt timeout. When omitted, the routeTimeout applies
+    # to the whole request including all retry attempts.
+    perTryTimeout: 5s
+```
+
 ## Installation
 
 ### Using Helm (recommended)

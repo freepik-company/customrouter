@@ -152,9 +152,8 @@ func BuildMirrorEnvoyFilter(
 	selectorInterface := SelectorToInterface(epa.Spec.GatewayRef.Selector)
 
 	configPatches := make([]interface{}, 0, len(entries))
-	numRetries := GetNumRetries(epa)
 	for i := range entries {
-		configPatches = append(configPatches, buildMirrorPatch(&entries[i], numRetries))
+		configPatches = append(configPatches, buildMirrorPatch(epa, &entries[i]))
 	}
 
 	spec := map[string]interface{}{
@@ -176,7 +175,7 @@ func BuildMirrorEnvoyFilter(
 // mirror-enabled route immediately before the generic ExtProc route. The route
 // re-uses cluster_header so the primary backend is still ExtProc-selected;
 // Envoy attaches a request_mirror_policy pointing at the mirror cluster.
-func buildMirrorPatch(entry *MirrorEntry, numRetries int64) map[string]interface{} {
+func buildMirrorPatch(epa *v1alpha1.ExternalProcessorAttachment, entry *MirrorEntry) map[string]interface{} {
 	match := BuildRouteMatch(&entry.Route)
 
 	// Hostname-scope the mirror via :authority so the mirror route does not
@@ -198,16 +197,12 @@ func buildMirrorPatch(entry *MirrorEntry, numRetries int64) map[string]interface
 
 	routeAction := map[string]interface{}{
 		"cluster_header": "x-customrouter-cluster",
-		"timeout":        "30s",
-		"retry_policy": map[string]interface{}{
-			"retry_on":               "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes",
-			"num_retries":            numRetries,
-			"retriable_status_codes": []interface{}{int64(503)},
-		},
+		"timeout":        GetRouteTimeout(epa),
 		"request_mirror_policies": []interface{}{
 			buildMirrorPolicy(&entry.Mirror),
 		},
 	}
+	ApplyRetryPolicy(routeAction, epa)
 
 	return map[string]interface{}{
 		"applyTo": "HTTP_ROUTE",

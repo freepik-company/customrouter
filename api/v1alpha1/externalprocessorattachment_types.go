@@ -71,19 +71,55 @@ type ExternalProcessorRef struct {
 	// +kubebuilder:default="5s"
 	// +kubebuilder:validation:Pattern=`^[0-9]+(s|ms|m|h)$`
 	MessageTimeout string `json:"messageTimeout,omitempty"`
+
+	// failureModeAllow controls whether requests proceed when the external
+	// processor is unavailable. When true, requests bypass extproc routing on
+	// failure (graceful degradation: the data plane keeps serving traffic with
+	// whatever native Envoy/Istio routing is configured). When false, requests
+	// fail closed with a 5xx. Defaults to false.
+	// +optional
+	// +kubebuilder:default=false
+	FailureModeAllow bool `json:"failureModeAllow,omitempty"`
 }
 
 // RetryPolicyConfig defines the retry policy configuration applied to all
 // customrouter-managed Envoy routes (routes, catch-all virtual hosts, mirror
 // routes, and CORS routes).
+//
+// When the whole RetryPolicy field is omitted from an ExternalProcessorAttachment,
+// the generated EnvoyFilters do not emit any retry_policy block at all and Envoy
+// applies no retries.
 type RetryPolicyConfig struct {
-	// NumRetries is the number of retries Envoy will attempt on connection
+	// numRetries is the number of retries Envoy will attempt on connection
 	// failures or retriable status codes before returning an error to the client.
 	// Defaults to 0 (no retries) when not specified.
 	// +optional
 	// +kubebuilder:default=0
 	// +kubebuilder:validation:Minimum=0
 	NumRetries int64 `json:"numRetries,omitempty"`
+
+	// retryOn is the Envoy retry_on policy list (comma-separated values, see
+	// https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/router_filter#x-envoy-retry-on).
+	// When not specified, defaults to
+	// "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes".
+	// Only used when numRetries > 0.
+	// +optional
+	RetryOn string `json:"retryOn,omitempty"`
+
+	// retriableStatusCodes is the list of HTTP status codes that trigger a retry
+	// when "retriable-status-codes" is included in retryOn. Defaults to [503]
+	// when not specified. Only used when numRetries > 0.
+	// +optional
+	// +listType=set
+	RetriableStatusCodes []int32 `json:"retriableStatusCodes,omitempty"`
+
+	// perTryTimeout is the timeout applied to each individual retry attempt.
+	// Must be a valid duration string (e.g., "5s", "500ms"). When omitted, no
+	// per_try_timeout is emitted and the route timeout applies to the whole
+	// request including all retries. Only used when numRetries > 0.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^[0-9]+(s|ms|m|h)$`
+	PerTryTimeout string `json:"perTryTimeout,omitempty"`
 }
 
 // CatchAllRouteConfig defines the configuration for the catch-all route
@@ -119,9 +155,18 @@ type ExternalProcessorAttachmentSpec struct {
 	CatchAllRoute *CatchAllRouteConfig `json:"catchAllRoute,omitempty"`
 
 	// retryPolicy configures the Envoy retry policy applied to all
-	// customrouter-managed routes. When not specified, no retries are performed.
+	// customrouter-managed routes. When not specified, no retries are performed
+	// and no retry_policy block is emitted in the generated EnvoyFilters.
 	// +optional
 	RetryPolicy *RetryPolicyConfig `json:"retryPolicy,omitempty"`
+
+	// routeTimeout is the per-request timeout applied to all customrouter-managed
+	// Envoy routes. Must be a valid duration string (e.g., "30s", "5s", "1m").
+	// Defaults to "30s" when not specified.
+	// +optional
+	// +kubebuilder:default="30s"
+	// +kubebuilder:validation:Pattern=`^[0-9]+(s|ms|m|h)$`
+	RouteTimeout string `json:"routeTimeout,omitempty"`
 }
 
 // ExternalProcessorAttachmentStatus defines the observed state of ExternalProcessorAttachment.
