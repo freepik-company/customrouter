@@ -65,13 +65,88 @@ var GVK = schema.GroupVersionKind{
 	Kind:    "EnvoyFilter",
 }
 
-// GetNumRetries returns the configured numRetries from the EPA's retryPolicy,
-// defaulting to 0 when not specified.
-func GetNumRetries(epa *v1alpha1.ExternalProcessorAttachment) int64 {
-	if epa.Spec.RetryPolicy != nil {
-		return epa.Spec.RetryPolicy.NumRetries
+// DefaultRouteTimeout is the per-request timeout applied to customrouter-managed
+// routes when the EPA does not override it via spec.routeTimeout.
+const DefaultRouteTimeout = "30s"
+
+// defaultRetryOn is the retry_on policy list applied when the user enables retries
+// (numRetries > 0) without specifying retryOn explicitly. This matches the legacy
+// (pre-0.7.0) hardcoded value to keep upgrade behaviour predictable for users who
+// did rely on retries.
+const defaultRetryOn = "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes"
+
+// defaultRetriableStatusCodes is the retriable_status_codes list applied when the
+// user enables retries without specifying the codes explicitly. Matches the legacy
+// hardcoded behaviour.
+var defaultRetriableStatusCodes = []int32{503}
+
+// GetRouteTimeout returns the configured per-request route timeout, defaulting
+// to DefaultRouteTimeout when not specified.
+func GetRouteTimeout(epa *v1alpha1.ExternalProcessorAttachment) string {
+	if epa.Spec.RouteTimeout != "" {
+		return epa.Spec.RouteTimeout
 	}
-	return 0
+	return DefaultRouteTimeout
+}
+
+// BuildRetryPolicy returns the retry_policy map to embed in an Envoy route's
+// "route" section, or nil when no retry_policy block should be emitted.
+//
+// Returning nil when the user has not configured retries (RetryPolicy == nil)
+// keeps the generated EnvoyFilters clean — no leftover retry_on/retriable
+// fields in config dumps that would otherwise mislead operators auditing
+// retry behaviour. Envoy treats an absent retry_policy and one with
+// num_retries: 0 identically (no retries), so this is semantics-preserving.
+//
+// When RetryPolicy is non-nil but every field is zero-valued, an explicit
+// "num_retries: 0" policy is still emitted: the user has expressed an intent
+// to pin the value to zero, and surfacing it in the generated EnvoyFilter is
+// useful for auditing. Callers can omit the whole RetryPolicy field to get
+// the "no retry_policy block at all" behaviour.
+//
+// retryOn defaults to the legacy value
+// "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes"
+// when the field is empty; retriableStatusCodes defaults to [503]. These
+// defaults match the pre-0.7.0 hardcoded behaviour so that a user only needs
+// to set numRetries to opt back in to the historical retry profile.
+func BuildRetryPolicy(rp *v1alpha1.RetryPolicyConfig) map[string]interface{} {
+	if rp == nil {
+		return nil
+	}
+
+	retryOn := rp.RetryOn
+	if retryOn == "" {
+		retryOn = defaultRetryOn
+	}
+
+	codes := rp.RetriableStatusCodes
+	if len(codes) == 0 {
+		codes = defaultRetriableStatusCodes
+	}
+	codesInterface := make([]interface{}, 0, len(codes))
+	for _, c := range codes {
+		codesInterface = append(codesInterface, int64(c))
+	}
+
+	out := map[string]interface{}{
+		"retry_on":               retryOn,
+		"num_retries":            rp.NumRetries,
+		"retriable_status_codes": codesInterface,
+	}
+	if rp.PerTryTimeout != "" {
+		out["per_try_timeout"] = rp.PerTryTimeout
+	}
+	return out
+}
+
+// ApplyRetryPolicy sets the retry_policy key on routeAction in place when a
+// policy should be emitted, and leaves it absent otherwise. Centralised here
+// so all four call sites (routes, catch-all, mirror, CORS) cannot drift apart
+// on the "when to emit" decision.
+func ApplyRetryPolicy(routeAction map[string]interface{}, epa *v1alpha1.ExternalProcessorAttachment) {
+	if policy := BuildRetryPolicy(epa.Spec.RetryPolicy); policy != nil {
+		routeAction["retry_policy"] = policy
+	}
 }
 
 // CatchAllEntry represents a hostname with its default backend for catch-all routing.
@@ -271,9 +346,8 @@ func BuildCatchAllEnvoyFilter(
 	selectorInterface := SelectorToInterface(epa.Spec.GatewayRef.Selector)
 
 	configPatches := make([]interface{}, 0, len(entries))
-	numRetries := GetNumRetries(epa)
 	for _, entry := range entries {
-		for _, patch := range buildCatchAllPatches(entry, hostnamesWithHTTPRoute[entry.Hostname], numRetries) {
+		for _, patch := range buildCatchAllPatches(epa, entry, hostnamesWithHTTPRoute[entry.Hostname]) {
 			configPatches = append(configPatches, patch)
 		}
 	}
@@ -297,21 +371,28 @@ func BuildCatchAllEnvoyFilter(
 // the domain, one HTTP_ROUTE INSERT_FIRST per port in DefaultCatchAllPorts is returned
 // — Envoy would reject a second virtual host with the same domain, so the fallback is
 // injected into the existing one instead.
-func buildCatchAllPatches(entry CatchAllEntry, hostnameHasHTTPRoute bool, numRetries int64) []map[string]interface{} {
+func buildCatchAllPatches(epa *v1alpha1.ExternalProcessorAttachment, entry CatchAllEntry, hostnameHasHTTPRoute bool) []map[string]interface{} {
 	if !hostnameHasHTTPRoute {
-		return []map[string]interface{}{buildCatchAllVirtualHostPatch(entry, numRetries)}
+		return []map[string]interface{}{buildCatchAllVirtualHostPatch(epa, entry)}
 	}
 	patches := make([]map[string]interface{}, 0, len(DefaultCatchAllPorts))
 	for _, port := range DefaultCatchAllPorts {
-		patches = append(patches, buildCatchAllHTTPRoutePatch(entry, port))
+		patches = append(patches, buildCatchAllHTTPRoutePatch(epa, entry, port))
 	}
 	return patches
 }
 
 // buildCatchAllVirtualHostPatch builds the legacy VIRTUAL_HOST ADD patch, creating a
 // new virtual host with both the header-gated dynamic route and the default fallback.
-func buildCatchAllVirtualHostPatch(entry CatchAllEntry, numRetries int64) map[string]interface{} {
+func buildCatchAllVirtualHostPatch(epa *v1alpha1.ExternalProcessorAttachment, entry CatchAllEntry) map[string]interface{} {
 	clusterName := BuildClusterName(entry.BackendRef)
+	timeout := GetRouteTimeout(epa)
+
+	dynamicRoute := map[string]interface{}{
+		"cluster_header": "x-customrouter-cluster",
+		"timeout":        timeout,
+	}
+	ApplyRetryPolicy(dynamicRoute, epa)
 
 	return map[string]interface{}{
 		"applyTo": "VIRTUAL_HOST",
@@ -335,15 +416,7 @@ func buildCatchAllVirtualHostPatch(entry CatchAllEntry, numRetries int64) map[st
 								},
 							},
 						},
-						"route": map[string]interface{}{
-							"cluster_header": "x-customrouter-cluster",
-							"timeout":        "30s",
-							"retry_policy": map[string]interface{}{
-								"retry_on":               "connect-failure,refused-stream,unavailable,cancelled,retriable-status-codes",
-								"num_retries":            numRetries,
-								"retriable_status_codes": []interface{}{int64(503)},
-							},
-						},
+						"route": dynamicRoute,
 					},
 					map[string]interface{}{
 						"name": "default",
@@ -352,7 +425,7 @@ func buildCatchAllVirtualHostPatch(entry CatchAllEntry, numRetries int64) map[st
 						},
 						"route": map[string]interface{}{
 							"cluster": clusterName,
-							"timeout": "30s",
+							"timeout": timeout,
 						},
 					},
 				},
@@ -365,7 +438,7 @@ func buildCatchAllVirtualHostPatch(entry CatchAllEntry, numRetries int64) map[st
 // the virtual host "<hostname>:<port>" (owned by the HTTPRoute). The header-gated
 // dynamic route is already injected into every virtual host by the <epa>-routes
 // EnvoyFilter, so duplicating it here would be redundant.
-func buildCatchAllHTTPRoutePatch(entry CatchAllEntry, port int) map[string]interface{} {
+func buildCatchAllHTTPRoutePatch(epa *v1alpha1.ExternalProcessorAttachment, entry CatchAllEntry, port int) map[string]interface{} {
 	clusterName := BuildClusterName(entry.BackendRef)
 
 	return map[string]interface{}{
@@ -387,7 +460,7 @@ func buildCatchAllHTTPRoutePatch(entry CatchAllEntry, port int) map[string]inter
 				},
 				"route": map[string]interface{}{
 					"cluster": clusterName,
-					"timeout": "30s",
+					"timeout": GetRouteTimeout(epa),
 				},
 			},
 		},
