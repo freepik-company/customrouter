@@ -16,7 +16,7 @@ env:
 
 jobs:
   test:
-    runs-on: default
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -31,7 +31,7 @@ jobs:
 
   build-and-push:
     needs: test
-    runs-on: default
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -83,7 +83,7 @@ jobs:
 
   create-release:
     needs: build-and-push
-    runs-on: default
+    runs-on: ubuntu-latest
     if: github.event_name == 'push'
     permissions:
       contents: write
