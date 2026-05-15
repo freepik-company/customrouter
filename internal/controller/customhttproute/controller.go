@@ -27,12 +27,15 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -43,10 +46,28 @@ import (
 const targetRefIndexField = ".spec.targetRef.name"
 
 // DefaultRebuildCooldown is the minimum interval enforced between successful
-// ConfigMap rebuilds for the same target. It bounds the API/etcd write rate
-// that the controller can generate when many CustomHTTPRoutes sharing a
-// target are enqueued together (typically at controller cache resync).
+// ConfigMap rebuilds for the same target.
+//
+// 2 s sits below the human latency-perception threshold for routing edits
+// (a developer editing a CustomHTTPRoute will not perceive the delay), and
+// above the typical burst window of real edits — so back-to-back changes
+// from a single helm/kubectl apply still coalesce into one rebuild. The
+// previous 5 s was needed to absorb status-only updates that Istio
+// pilot-discovery rewrites onto HTTPRoutes; that source is now filtered at
+// the watch layer via httpRoutePredicate, so the cooldown only has to
+// coalesce real spec edits, of which there are very few per second even
+// in busy sandboxes.
 const DefaultRebuildCooldown = 2 * time.Second
+
+// DefaultUpsertParallelism is the number of ConfigMap partition upserts
+// dispatched concurrently within a single rebuild. Each upsert holds at most
+// one in-flight Get+Compare+Update against the API server; raising this
+// shortens wall-clock rebuild time linearly until the API server's QPS limit
+// or per-namespace etcd write throughput becomes the bottleneck. The default
+// is matched to the operator's default client QPS so a single rebuild does
+// not saturate the entire QPS budget for other controllers sharing the
+// process.
+const DefaultUpsertParallelism = 10
 
 // DefaultStateGCInterval is the period between sweeps of the in-memory state
 // (lastRebuildAt, partitionHashes). Sweeps drop entries for targets that no
@@ -72,6 +93,11 @@ type CustomHTTPRouteReconciler struct {
 	// the periodic GC entirely (useful in tests).
 	StateGCInterval time.Duration
 
+	// UpsertParallelism caps how many ConfigMap partition upserts run in
+	// parallel within a single rebuild. When zero, DefaultUpsertParallelism
+	// is used. A value of 1 forces sequential behaviour (matches pre-0.7.2).
+	UpsertParallelism int
+
 	// lastRebuildAt records the last successful rebuild time per target name.
 	// Read/written under rebuildMu.
 	lastRebuildAt map[string]time.Time
@@ -93,6 +119,19 @@ func (r *CustomHTTPRouteReconciler) effectiveRebuildCooldown() time.Duration {
 		return DefaultRebuildCooldown
 	}
 	return r.RebuildCooldown
+}
+
+// effectiveUpsertParallelism returns the upsert concurrency to apply. Zero
+// falls back to DefaultUpsertParallelism. Negative or 1 forces sequential
+// behaviour.
+func (r *CustomHTTPRouteReconciler) effectiveUpsertParallelism() int {
+	if r.UpsertParallelism == 0 {
+		return DefaultUpsertParallelism
+	}
+	if r.UpsertParallelism < 1 {
+		return 1
+	}
+	return r.UpsertParallelism
 }
 
 // rebuildWait reports the remaining cooldown for the given target. The bool
@@ -392,17 +431,95 @@ func (r *CustomHTTPRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		maxConcurrent = 1
 	}
 
+	if err := r.addPartitionHashesPersistRunnable(mgr); err != nil {
+		return fmt.Errorf("register partition hashes persist runnable: %w", err)
+	}
+
 	if err := mgr.Add(manager.RunnableFunc(r.runStateGC)); err != nil {
 		return fmt.Errorf("register state GC runnable: %w", err)
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&crv1alpha1.CustomHTTPRoute{}).
-		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(r.findRoutesForService)).
-		Watches(&gatewayv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(r.findRoutesForHTTPRoute)).
+		Watches(
+			&corev1.Service{},
+			handler.EnqueueRequestsFromMapFunc(r.findRoutesForService),
+			builder.WithPredicates(servicePredicate()),
+		).
+		Watches(
+			&gatewayv1.HTTPRoute{},
+			handler.EnqueueRequestsFromMapFunc(r.findRoutesForHTTPRoute),
+			builder.WithPredicates(httpRoutePredicate()),
+		).
 		WithOptions(ctrlcontroller.Options{MaxConcurrentReconciles: maxConcurrent}).
 		Named("customhttproute").
 		Complete(r)
+}
+
+// servicePredicate filters Service watch events so the controller only
+// receives the ones whose payload actually affects rendered output. The
+// operator only reads two Service spec fields (Type and ExternalName), so
+// every other update — annotation churn, port label adjustments, GKE/cloud
+// controller bookkeeping — is enqueue noise: it forces a reconcile that the
+// rebuild cooldown then has to absorb. Filtering at the watch level keeps
+// the work item count proportional to actual change.
+//
+// Create and Delete are always relevant (a new Service can be referenced by
+// a CR; a deleted one may invalidate existing rendering), so only Update is
+// filtered.
+func servicePredicate() predicate.Predicate {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldSvc, ok1 := e.ObjectOld.(*corev1.Service)
+			newSvc, ok2 := e.ObjectNew.(*corev1.Service)
+			if !ok1 || !ok2 {
+				// Safe fallback: if the type assertion fails for any
+				// reason (e.g. PartialObjectMetadata), enqueue and let
+				// the cooldown absorb it.
+				return true
+			}
+			return oldSvc.Spec.Type != newSvc.Spec.Type ||
+				oldSvc.Spec.ExternalName != newSvc.Spec.ExternalName
+		},
+	}
+}
+
+// httpRoutePredicate filters HTTPRoute watch events. The operator only
+// uses HTTPRoute.Spec.Hostnames (to decide whether the catch-all EnvoyFilter
+// must ADD a new virtual host or inject into an existing one). HTTPRoute
+// .status is rewritten constantly by Istio's pilot-discovery, which without
+// this predicate dominates the reconcile traffic in clusters with hundreds
+// of HTTPRoutes. Filtering on hostnames cuts those status-only events
+// before they ever reach a worker.
+func httpRoutePredicate() predicate.Predicate {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldHR, ok1 := e.ObjectOld.(*gatewayv1.HTTPRoute)
+			newHR, ok2 := e.ObjectNew.(*gatewayv1.HTTPRoute)
+			if !ok1 || !ok2 {
+				return true
+			}
+			return !hostnameSliceEqual(oldHR.Spec.Hostnames, newHR.Spec.Hostnames)
+		},
+	}
+}
+
+// hostnameSliceEqual reports whether two Hostname slices contain the same
+// hostnames in the same order. Gateway API HTTPRoute hostnames are
+// semantically a set, but order is stable across API server round-trips
+// for a given write so equality-by-position matches the actual mutation
+// pattern: a reorder requires an explicit edit, in which case the reconcile
+// is warranted anyway.
+func hostnameSliceEqual(a, b []gatewayv1.Hostname) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // findRoutesForService returns reconcile requests for all CustomHTTPRoutes that reference the given Service.

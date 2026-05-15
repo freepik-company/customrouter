@@ -73,6 +73,13 @@ func main() {
 	var webhookConfigName string
 	var webhookServiceName string
 	var webhookPort int
+	var clientQPS float64
+	var clientBurst int
+	var leaderLeaseDuration time.Duration
+	var leaderRenewDeadline time.Duration
+	var leaderRetryPeriod time.Duration
+	var rebuildCooldown time.Duration
+	var upsertParallelism int
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -102,6 +109,27 @@ func main() {
 	flag.StringVar(&webhookServiceName, "webhook-service-name", "",
 		"Name of the webhook Service for TLS certificate SAN (auto-cert mode)")
 	flag.IntVar(&webhookPort, "webhook-port", 9443, "Port for the webhook server to listen on")
+	flag.Float64Var(&clientQPS, "client-qps", 100,
+		"Maximum QPS sustained against the Kubernetes API server by this controller. "+
+			"controller-runtime's default of 20 is too low for large catalogues where a "+
+			"single reconcile may write dozens of ConfigMap partitions.")
+	flag.IntVar(&clientBurst, "client-burst", 200,
+		"Burst capacity for QPS against the Kubernetes API server. Should be 2-3x client-qps.")
+	flag.DurationVar(&leaderLeaseDuration, "leader-lease-duration", 30*time.Second,
+		"Duration that non-leader candidates will wait to force acquire leadership. "+
+			"Raised from the controller-runtime default of 15s to survive transient API "+
+			"server slowness without dropping the lease and self-terminating.")
+	flag.DurationVar(&leaderRenewDeadline, "leader-renew-deadline", 20*time.Second,
+		"Duration that the acting leader will retry refreshing leadership before giving up.")
+	flag.DurationVar(&leaderRetryPeriod, "leader-retry-period", 4*time.Second,
+		"Period between leader election retries.")
+	flag.DurationVar(&rebuildCooldown, "rebuild-cooldown", 0,
+		"Minimum interval between successful ConfigMap rebuilds for the same target. "+
+			"When zero, the controller-internal default (see DefaultRebuildCooldown) is used. "+
+			"A negative value disables throttling (intended for tests).")
+	flag.IntVar(&upsertParallelism, "upsert-parallelism", 0,
+		"Maximum number of ConfigMap partition upserts dispatched concurrently within a single rebuild. "+
+			"When zero, the controller-internal default (see DefaultUpsertParallelism) is used.")
 	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
@@ -142,6 +170,16 @@ func main() {
 	// Auto-generate webhook TLS certificates when webhooks are enabled
 	// and no explicit cert path is provided (i.e., not using cert-manager).
 	cfg := ctrl.GetConfigOrDie()
+	// Override the default client-go QPS/Burst (5/10 in rest.Config; controller-runtime
+	// bumps these to 20/30). Large route catalogues issue many ConfigMap writes per
+	// reconcile and queue against these limits, manifesting as slow rebuilds and lost
+	// leader leases.
+	if clientQPS > 0 {
+		cfg.QPS = float32(clientQPS)
+	}
+	if clientBurst > 0 {
+		cfg.Burst = clientBurst
+	}
 	var webhookCaPEM []byte
 
 	if enableWebhooks && webhookCertPath == "" {
@@ -221,6 +259,12 @@ func main() {
 		metricsServerOptions.KeyName = metricsCertKey
 	}
 
+	// Leader election timings — pointer fields are only honoured by
+	// controller-runtime when non-nil; pass them through unconditionally so the
+	// flag defaults above are authoritative.
+	leaseDuration := leaderLeaseDuration
+	renewDeadline := leaderRenewDeadline
+	retryPeriod := leaderRetryPeriod
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
@@ -228,6 +272,9 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "495e98d5.customrouter.freepik.com",
+		LeaseDuration:          &leaseDuration,
+		RenewDeadline:          &renewDeadline,
+		RetryPeriod:            &retryPeriod,
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
@@ -250,6 +297,8 @@ func main() {
 		Scheme:                  mgr.GetScheme(),
 		ConfigMapNamespace:      routesConfigMapNamespace,
 		MaxConcurrentReconciles: maxConcurrentReconciles,
+		RebuildCooldown:         rebuildCooldown,
+		UpsertParallelism:       upsertParallelism,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "CustomHTTPRoute")
 		os.Exit(1)
