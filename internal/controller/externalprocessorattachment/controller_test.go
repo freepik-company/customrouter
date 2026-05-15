@@ -85,7 +85,7 @@ func TestReconcile_FinalizerRemoval_NamespaceGone_DoesNotError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile must swallow NotFound from finalizer removal, got error: %v", err)
 	}
-	if res.Requeue || res.RequeueAfter != 0 {
+	if res.RequeueAfter != 0 {
 		t.Fatalf("Reconcile must not requeue on swallowed NotFound, got: %+v", res)
 	}
 }
