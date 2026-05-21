@@ -208,6 +208,7 @@ func buildCORSPatch(epa *v1alpha1.ExternalProcessorAttachment, entry *CORSEntry)
 				"route": routeAction,
 				"typed_per_filter_config": map[string]interface{}{
 					corsFilterName: buildCORSPolicyTyped(&entry.Policy),
+					rbacFilterName: RBACPerRouteConfig()[rbacFilterName],
 				},
 			},
 		},

@@ -219,9 +219,10 @@ func buildMirrorPatch(epa *v1alpha1.ExternalProcessorAttachment, entry *MirrorEn
 		"patch": map[string]interface{}{
 			"operation": "INSERT_BEFORE",
 			"value": map[string]interface{}{
-				"name":  mirrorRouteName(entry),
-				"match": match,
-				"route": routeAction,
+				"name":                   mirrorRouteName(entry),
+				"match":                  match,
+				"route":                  routeAction,
+				"typed_per_filter_config": RBACPerRouteConfig(),
 			},
 		},
 	}
