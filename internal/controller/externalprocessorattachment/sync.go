@@ -255,7 +255,7 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileRoutesEnvoyFilter(
 								},
 							},
 						},
-						"route":                  buildRoutesRouteAction(attachment),
+						"route":                   buildRoutesRouteAction(attachment),
 						"typed_per_filter_config": ef.RBACPerRouteConfig(),
 					},
 				},

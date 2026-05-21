@@ -416,7 +416,7 @@ func buildCatchAllVirtualHostPatch(epa *v1alpha1.ExternalProcessorAttachment, en
 								},
 							},
 						},
-						"route":                  dynamicRoute,
+						"route":                   dynamicRoute,
 						"typed_per_filter_config": RBACPerRouteConfig(),
 					},
 					map[string]interface{}{
