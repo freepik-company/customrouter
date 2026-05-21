@@ -416,7 +416,8 @@ func buildCatchAllVirtualHostPatch(epa *v1alpha1.ExternalProcessorAttachment, en
 								},
 							},
 						},
-						"route": dynamicRoute,
+						"route":                  dynamicRoute,
+						"typed_per_filter_config": RBACPerRouteConfig(),
 					},
 					map[string]interface{}{
 						"name": "default",
@@ -427,6 +428,7 @@ func buildCatchAllVirtualHostPatch(epa *v1alpha1.ExternalProcessorAttachment, en
 							"cluster": clusterName,
 							"timeout": timeout,
 						},
+						"typed_per_filter_config": RBACPerRouteConfig(),
 					},
 				},
 			},
@@ -462,6 +464,7 @@ func buildCatchAllHTTPRoutePatch(epa *v1alpha1.ExternalProcessorAttachment, entr
 					"cluster": clusterName,
 					"timeout": GetRouteTimeout(epa),
 				},
+				"typed_per_filter_config": RBACPerRouteConfig(),
 			},
 		},
 	}
