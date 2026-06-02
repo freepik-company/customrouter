@@ -36,9 +36,11 @@ import (
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/freepik-company/customrouter/api/v1alpha1"
+	"github.com/freepik-company/customrouter/internal/controller"
 	"github.com/freepik-company/customrouter/pkg/routes"
 )
 
@@ -108,16 +110,18 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 			"target", target)
 	}
 
-	// Cooldown: cap rebuild rate per target. Skipped for deletions so that
-	// stale ConfigMaps and EnvoyFilters are cleaned up promptly when a CR
-	// goes away.
-	if eventType != watch.Deleted {
-		if remaining, throttled := r.rebuildWait(target, time.Now()); throttled {
-			logger.V(1).Info("target rebuild in cooldown, requeueing",
-				"target", target,
-				"wait", remaining.String())
-			return ctrl.Result{RequeueAfter: remaining}, nil, nil, nil
-		}
+	// Cooldown: cap rebuild rate per target. Applies to both Modified and
+	// Deleted events. For Deleted events the drain pattern at the end of
+	// this function removes finalizers from siblings of the same target
+	// after a single rebuild, so subsequent Deleted reconciles for the same
+	// target arrive either after the cooldown (finding the sibling already
+	// gone) or get short-circuited by the cooldown requeue — in both cases
+	// the redundant rebuild is avoided.
+	if remaining, throttled := r.rebuildWait(target, time.Now()); throttled {
+		logger.V(1).Info("target rebuild in cooldown, requeueing",
+			"target", target,
+			"wait", remaining.String())
+		return ctrl.Result{RequeueAfter: remaining}, nil, nil, nil
 	}
 
 	// Snapshot current annotation state BEFORE any modifications. These are
@@ -200,7 +204,72 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 		}
 	}
 
+	// Drain pattern: when a CR is being deleted, the rebuild above already
+	// reflects the absence of every sibling of the same target that is also
+	// in deletion (rebuildConfigMapsForTarget filters DeletionTimestamp).
+	// The only remaining work for those siblings is the bureaucratic
+	// finalizer removal. Doing it here avoids one full rebuild per sibling
+	// when many CRs of the same target are deleted together (e.g. namespace
+	// cascade), which would otherwise produce N redundant rebuilds.
+	if eventType == watch.Deleted {
+		r.drainSiblingsForDeletion(ctx, target, resourceManifest.UID)
+	}
+
 	return ctrl.Result{}, routeList, epaList, nil
+}
+
+// drainSiblingsForDeletion removes the controller's finalizer from every
+// other CustomHTTPRoute sharing the same target that is also marked for
+// deletion. The caller has just completed a rebuild whose output reflects
+// the absence of every such sibling, so no further reconcile work is
+// required for them. Best-effort: any individual failure is logged and the
+// sweep continues; the failed sibling will be retried by its own pending
+// reconcile.
+//
+// The current CR's finalizer is left untouched — Reconcile() removes it via
+// the existing UpdateWithRetry path after ReconcileObject returns.
+func (r *CustomHTTPRouteReconciler) drainSiblingsForDeletion(
+	ctx context.Context,
+	target string,
+	selfUID types.UID,
+) {
+	logger := log.FromContext(ctx)
+
+	var siblings v1alpha1.CustomHTTPRouteList
+	if err := r.List(ctx, &siblings, client.MatchingFields{targetRefIndexField: target}); err != nil {
+		logger.Error(err, "drain: list siblings failed", "target", target)
+		return
+	}
+
+	drained := 0
+	for i := range siblings.Items {
+		s := &siblings.Items[i]
+		if s.UID == selfUID {
+			continue
+		}
+		if s.DeletionTimestamp.IsZero() {
+			continue
+		}
+		if !controllerutil.ContainsFinalizer(s, controller.ResourceFinalizer) {
+			continue
+		}
+
+		patch := client.MergeFrom(s.DeepCopy())
+		controllerutil.RemoveFinalizer(s, controller.ResourceFinalizer)
+		if err := r.Patch(ctx, s, patch); err != nil {
+			if !errors.IsNotFound(err) {
+				logger.Error(err, "drain: patch sibling failed (will retry via own reconcile)",
+					"sibling", client.ObjectKeyFromObject(s).String())
+			}
+			continue
+		}
+		drained++
+	}
+
+	if drained > 0 {
+		logger.Info("drain: removed finalizer from sibling CRs in deletion",
+			"target", target, "drained", drained)
+	}
 }
 
 // routeHasCORSAction returns true if any rule in the route declares a cors action.
