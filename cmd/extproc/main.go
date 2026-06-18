@@ -52,6 +52,10 @@ func main() {
 		"Request header used to index/partition routes for faster lookup "+
 			"(empty = disabled, full scan). Set e.g. to 'env' in sandbox environments "+
 			"where one extproc serves many route sets keyed by that header.")
+	flag.DurationVar(&config.RoutesReloadDebounce, "routes-reload-debounce", config.RoutesReloadDebounce,
+		"Debounce window for coalescing ConfigMap change events before rebuilding "+
+			"the route table (0 = rebuild on every event). Caps full rebuilds at one "+
+			"per window under churn.")
 	flag.StringVar(&config.MetricsAddr, "metrics-addr", config.MetricsAddr,
 		"Address to expose Prometheus metrics on (empty to disable)")
 

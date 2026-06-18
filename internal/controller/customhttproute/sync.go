@@ -306,6 +306,22 @@ func (r *CustomHTTPRouteReconciler) rebuildConfigMapsForTarget(ctx context.Conte
 		}
 	}
 
+	// Sort the routes deterministically by (namespace, name). The cache's
+	// field-indexer List returns items in a non-deterministic order (it
+	// iterates an internal map), so without this the per-host merge order of
+	// equal-priority routes changes between reconciles. That makes the
+	// serialized ConfigMap bytes differ even when the logical route set is
+	// unchanged, defeating the content-hash dedup in upsertSingleConfigMap and
+	// rewriting ConfigMaps on every reconcile — churn that forces every extproc
+	// replica to reload the full route table. Stable input here yields stable
+	// output (ExpandRoutes and SortRoutes are deterministic on ordered input).
+	sort.Slice(targetRoutes, func(i, j int) bool {
+		if targetRoutes[i].Namespace != targetRoutes[j].Namespace {
+			return targetRoutes[i].Namespace < targetRoutes[j].Namespace
+		}
+		return targetRoutes[i].Name < targetRoutes[j].Name
+	})
+
 	// Track active ConfigMap names for this target
 	activeNames := make(map[string]bool)
 
