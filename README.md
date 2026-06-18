@@ -60,6 +60,20 @@ flowchart LR
 
 ## Upgrade notes
 
+### 0.7.2 → 0.7.3
+
+- Performance: the extproc no longer rebuilds its full route table on every
+  ConfigMap change. Change events are coalesced and the table is rebuilt at
+  most once per `--routes-reload-debounce` window (default `2s`). This bounds
+  CPU when many route ConfigMaps churn rapidly (large sandbox environments).
+  Set it to `0` to restore the previous rebuild-on-every-event behaviour.
+- The controller now serializes route ConfigMaps deterministically (routes are
+  ordered by their source CustomHTTPRoute's namespace/name before expansion).
+  This makes the content-hash dedup effective, so an unchanged route set no
+  longer produces spurious ConfigMap rewrites. No action required; no behaviour
+  change to routing (only the relative order of equal-priority routes is now
+  stable, which also makes first-match deterministic).
+
 ### 0.7.1 → 0.7.2
 
 - New optional extproc flag `--route-partition-header`. When set (e.g. to `env`),
