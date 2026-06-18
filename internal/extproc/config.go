@@ -73,6 +73,15 @@ type ServerConfig struct {
 	// MetricsAddr is the address to expose Prometheus metrics on (e.g. ":9090").
 	// Empty string disables the metrics endpoint.
 	MetricsAddr string
+
+	// RoutePartitionHeader, when non-empty, enables a header-based fast-path
+	// index for route lookup: requests carrying this header are matched only
+	// against the routes that share its value, instead of scanning every route
+	// for the host. Intended for environments where a single extproc serves many
+	// isolated route sets disambiguated by a header (e.g. sandbox/preview envs
+	// keyed by "env"). Empty (default) keeps the full-scan behavior, so it is a
+	// no-op unless explicitly set.
+	RoutePartitionHeader string
 }
 
 // DefaultServerConfig returns a ServerConfig with production-ready defaults

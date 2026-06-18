@@ -48,6 +48,10 @@ func main() {
 	flag.BoolVar(&config.AccessLogEnabled, "access-log", config.AccessLogEnabled, "Enable access logging")
 	flag.StringVar(&config.RoutesNamespace, "routes-configmap-namespace", config.RoutesNamespace,
 		"Namespace to read route ConfigMaps from (empty = all namespaces)")
+	flag.StringVar(&config.RoutePartitionHeader, "route-partition-header", config.RoutePartitionHeader,
+		"Request header used to index/partition routes for faster lookup "+
+			"(empty = disabled, full scan). Set e.g. to 'env' in sandbox environments "+
+			"where one extproc serves many route sets keyed by that header.")
 	flag.StringVar(&config.MetricsAddr, "metrics-addr", config.MetricsAddr,
 		"Address to expose Prometheus metrics on (empty to disable)")
 

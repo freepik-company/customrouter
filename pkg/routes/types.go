@@ -158,6 +158,19 @@ type RequestMatch struct {
 type RoutesConfig struct {
 	Version int                `json:"version"`
 	Hosts   map[string][]Route `json:"hosts"`
+
+	// partitionHeader is the lowercased request-header name used to bucket
+	// routes for the fast-path lookup in FindRoute. Empty disables
+	// partitioning entirely (full ordered scan). Unexported, so it is never
+	// serialized to the ConfigMap and only matters inside the extproc.
+	partitionHeader string
+
+	// partitions indexes, per host, the candidate routes for each value of
+	// partitionHeader. Each candidate slice is a subset of Hosts[host] in the
+	// same sorted order, so scanning it yields the exact same first-match
+	// result as a full scan — just over far fewer routes. Built by
+	// BuildPartitionIndex; nil when partitioning is disabled.
+	partitions map[string]map[string][]*Route
 }
 
 // RouteType constants
@@ -279,6 +292,134 @@ func (rc *RoutesConfig) CompileRegexes() error {
 					q.compiledRegex = re
 				}
 			}
+		}
+	}
+	return nil
+}
+
+// BuildPartitionIndex (re)builds the per-host fast-path index keyed by the
+// value of the given request header. It must be called after the routes have
+// been sorted (SortRoutes) and regexes compiled, because the candidate slices
+// reference the routes in their final position and sorted order.
+//
+// An empty header disables partitioning: the index is cleared and FindRoute
+// falls back to the full ordered scan (the historical, unchanged behavior).
+// This keeps the optimization strictly opt-in — environments that do not set
+// the partition header are completely unaffected.
+//
+// Correctness: a request carrying header==v can only ever match routes that
+// either require that exact header value (a "partitioned" route) or place no
+// exact constraint on that header (an "unpartitioned" route — including routes
+// that match the header via regex). Each bucket is therefore the union of
+// those two sets, preserved in global sorted order, so scanning a bucket is
+// equivalent to scanning the full host list with all non-matching buckets
+// removed.
+func (rc *RoutesConfig) BuildPartitionIndex(header string) {
+	header = strings.ToLower(strings.TrimSpace(header))
+	rc.partitionHeader = header
+	rc.partitions = nil
+	if header == "" {
+		return
+	}
+
+	parts := make(map[string]map[string][]*Route, len(rc.Hosts))
+	for host := range rc.Hosts {
+		hostRoutes := rc.Hosts[host]
+
+		byVal := make(map[string][]*Route)
+		var unpartitioned []*Route
+		for i := range hostRoutes {
+			if v, ok := routePartitionValue(&hostRoutes[i], header); ok {
+				byVal[v] = append(byVal[v], &hostRoutes[i])
+			} else {
+				unpartitioned = append(unpartitioned, &hostRoutes[i])
+			}
+		}
+
+		// No route on this host constrains the partition header: a full scan is
+		// already optimal, so leave the host out of the index entirely.
+		if len(byVal) == 0 {
+			continue
+		}
+
+		// When env-agnostic routes exist they could match a request for any
+		// header value, so each bucket must include them, interleaved in the
+		// original sorted order. Re-scan once per value to preserve ordering.
+		if len(unpartitioned) > 0 {
+			for v := range byVal {
+				merged := make([]*Route, 0, len(byVal[v])+len(unpartitioned))
+				for i := range hostRoutes {
+					rv, ok := routePartitionValue(&hostRoutes[i], header)
+					if (ok && rv == v) || !ok {
+						merged = append(merged, &hostRoutes[i])
+					}
+				}
+				byVal[v] = merged
+			}
+		}
+
+		parts[host] = byVal
+	}
+	rc.partitions = parts
+}
+
+// routePartitionValue returns the exact value a route requires for the given
+// (lowercased) header, and whether the route is eligible for partitioning.
+// A route is partitionable only when it constrains the header with exactly one
+// exact-match criterion. Routes with no such header, a regex match on it, or
+// multiple criteria on it are treated as unpartitioned (they must be considered
+// for every header value).
+func routePartitionValue(r *Route, header string) (string, bool) {
+	value := ""
+	count := 0
+	for i := range r.Headers {
+		if !strings.EqualFold(r.Headers[i].Name, header) {
+			continue
+		}
+		if r.Headers[i].Type == HeaderMatchRegex {
+			return "", false
+		}
+		value = r.Headers[i].Value
+		count++
+	}
+	if count == 1 {
+		return value, true
+	}
+	return "", false
+}
+
+// FindRoute returns the first route matching req for the given normalized host
+// (port already stripped), or nil. When a partition index is present and the
+// request carries the partition header, only that value's candidate subset is
+// scanned; the result is identical to the full scan, just faster. Otherwise it
+// falls back to scanning every route for the host in sorted order.
+func (rc *RoutesConfig) FindRoute(host string, req RequestMatch) *Route {
+	hostRoutes, ok := rc.Hosts[host]
+	if !ok {
+		return nil
+	}
+
+	if rc.partitionHeader != "" && rc.partitions != nil {
+		if v := req.Headers[rc.partitionHeader]; v != "" {
+			if hostPart, ok := rc.partitions[host]; ok {
+				if candidates, ok := hostPart[v]; ok {
+					// The candidate set is the complete set of routes that can
+					// possibly match this header value, so a miss here is a real
+					// no-match — no need to fall back to the full scan.
+					for _, r := range candidates {
+						if r.Match(req) {
+							return r
+						}
+					}
+					return nil
+				}
+			}
+		}
+	}
+
+	for i := range hostRoutes {
+		if hostRoutes[i].Match(req) {
+			return &hostRoutes[i]
 		}
 	}
 	return nil
