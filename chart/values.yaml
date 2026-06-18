@@ -222,6 +222,10 @@ externalProcessors:
       # only against routes sharing its value instead of scanning every route
       # for the host. Leave unset/empty to keep the default full-scan behavior.
       # - --route-partition-header=env
+      # Coalesce ConfigMap change events: rebuild the route table at most once
+      # per this window instead of once per event. Protects CPU when many
+      # ConfigMaps churn rapidly (large sandbox environments). Default 2s.
+      # - --routes-reload-debounce=2s
       - --grpc-max-recv-msg-size=4194304
       - --grpc-max-send-msg-size=4194304
       - --grpc-max-concurrent-streams=1000

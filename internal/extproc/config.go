@@ -82,6 +82,13 @@ type ServerConfig struct {
 	// keyed by "env"). Empty (default) keeps the full-scan behavior, so it is a
 	// no-op unless explicitly set.
 	RoutePartitionHeader string
+
+	// RoutesReloadDebounce coalesces ConfigMap change events: after a change,
+	// the loader waits this long (absorbing further changes) before rebuilding
+	// the route table once, capping full rebuilds at one per window under churn.
+	// This protects CPU when many ConfigMaps change rapidly (e.g. large
+	// sandbox environments). Zero rebuilds on every event.
+	RoutesReloadDebounce time.Duration
 }
 
 // DefaultServerConfig returns a ServerConfig with production-ready defaults
@@ -99,5 +106,6 @@ func DefaultServerConfig() *ServerConfig {
 		MaxConnectionAgeGrace: 10 * time.Second, // Grace period for in-flight requests
 		AccessLogEnabled:      true,
 		MetricsAddr:           ":9090",
+		RoutesReloadDebounce:  2 * time.Second,
 	}
 }
