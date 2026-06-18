@@ -60,6 +60,18 @@ flowchart LR
 
 ## Upgrade notes
 
+### 0.7.1 → 0.7.2
+
+- New optional extproc flag `--route-partition-header`. When set (e.g. to `env`),
+  routes are indexed per host by that request header's value, so a request is
+  matched only against the routes sharing its value instead of scanning every
+  route for the host. Intended for environments where a single external
+  processor serves many isolated route sets disambiguated by a header (e.g.
+  sandbox/preview environments keyed by `env`).
+- Disabled by default (empty value) — route lookup behaviour is unchanged unless
+  you opt in. The fast path is provably equivalent to the full scan, so it only
+  affects performance, not which route wins.
+
 ### 0.7.0 → 0.7.1
 
 - `ExternalProcessorAttachment.spec.retryPolicy` is now richer. In addition to
