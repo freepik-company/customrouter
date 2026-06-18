@@ -21,6 +21,9 @@ import (
 	"testing"
 )
 
+// testHost is the shared hostname used across the partition tests.
+const testHost = "example.com"
+
 // envHeader builds a single exact env header matcher.
 func envHeader(value string) []RouteHeaderMatch {
 	return []RouteHeaderMatch{{Name: "env", Value: value, Type: HeaderMatchExact}}
@@ -96,9 +99,10 @@ func TestRoutePartitionValue(t *testing.T) {
 // env-agnostic routes to exercise the unpartitioned-merge path.
 func buildSandboxConfig(t *testing.T, withPartition bool) *RoutesConfig {
 	t.Helper()
-	host := "magnific.com"
-	var hostRoutes []Route
-	for _, env := range []string{"sbx-a", "sbx-b", "sbx-c"} {
+	host := testHost
+	envs := []string{"sbx-a", "sbx-b", "sbx-c"}
+	hostRoutes := make([]Route, 0, len(envs)*3+2)
+	for _, env := range envs {
 		hostRoutes = append(hostRoutes,
 			Route{Path: "/images", Type: RouteTypeExact, Backend: env + "-images", Priority: 1000, Headers: envHeader(env)},
 			Route{Path: "/static", Type: RouteTypePrefix, Backend: env + "-static", Priority: 1000, Headers: envHeader(env)},
@@ -123,7 +127,7 @@ func buildSandboxConfig(t *testing.T, withPartition bool) *RoutesConfig {
 }
 
 func TestFindRoutePartitionEquivalence(t *testing.T) {
-	host := "magnific.com"
+	host := testHost
 	full := buildSandboxConfig(t, false)
 	part := buildSandboxConfig(t, true)
 
@@ -160,18 +164,26 @@ func TestFindRoutePartitionEquivalence(t *testing.T) {
 // TestFindRoutePartitionRandomizedEquivalence fuzzes a larger interleaved route
 // set to make sure the index never changes which route wins.
 func TestFindRoutePartitionRandomizedEquivalence(t *testing.T) {
-	host := "h"
-	var hostRoutes []Route
+	host := testHost
+	hostRoutes := make([]Route, 0, 60)
 	for i := 0; i < 50; i++ {
 		env := fmt.Sprintf("e%d", i%7)
 		prio := int32(1000 + (i*7)%500)
-		hostRoutes = append(hostRoutes,
-			Route{Path: fmt.Sprintf("/p%d", i%11), Type: RouteTypePrefix, Backend: fmt.Sprintf("b%d", i), Priority: prio, Headers: envHeader(env)},
-		)
+		path := fmt.Sprintf("/p%d", i%11)
+		hostRoutes = append(hostRoutes, Route{
+			Path:     path,
+			Type:     RouteTypePrefix,
+			Backend:  fmt.Sprintf("b%d", i),
+			Priority: prio,
+			Headers:  envHeader(env),
+		})
 		if i%5 == 0 {
-			hostRoutes = append(hostRoutes,
-				Route{Path: fmt.Sprintf("/p%d", i%11), Type: RouteTypePrefix, Backend: fmt.Sprintf("shared%d", i), Priority: prio},
-			)
+			hostRoutes = append(hostRoutes, Route{
+				Path:     path,
+				Type:     RouteTypePrefix,
+				Backend:  fmt.Sprintf("shared%d", i),
+				Priority: prio,
+			})
 		}
 	}
 	full := &RoutesConfig{Version: 1, Hosts: map[string][]Route{host: append([]Route(nil), hostRoutes...)}}
@@ -215,8 +227,8 @@ func TestBuildPartitionIndexDisabledByDefault(t *testing.T) {
 // host, every route gated by its own "env" header, with a low-priority catch-all
 // per sandbox (the worst case — static-asset requests fall through to it).
 func buildLargeSandboxConfig(sandboxes, pathsPerSandbox int, partition bool) (*RoutesConfig, string) {
-	host := "magnific.com"
-	var hostRoutes []Route
+	host := testHost
+	hostRoutes := make([]Route, 0, sandboxes*(pathsPerSandbox+1))
 	for s := 0; s < sandboxes; s++ {
 		env := fmt.Sprintf("sbx-%d", s)
 		for p := 0; p < pathsPerSandbox; p++ {
