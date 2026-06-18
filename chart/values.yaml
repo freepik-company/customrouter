@@ -216,6 +216,12 @@ externalProcessors:
       - --target-name=default
       - --routes-configmap-namespace=default
       - --access-log=true
+      # Header-based route partitioning. When one extproc serves many isolated
+      # route sets keyed by a header (e.g. sandbox/preview environments tagged
+      # with "env"), this indexes routes by that header so a request is matched
+      # only against routes sharing its value instead of scanning every route
+      # for the host. Leave unset/empty to keep the default full-scan behavior.
+      # - --route-partition-header=env
       - --grpc-max-recv-msg-size=4194304
       - --grpc-max-send-msg-size=4194304
       - --grpc-max-concurrent-streams=1000

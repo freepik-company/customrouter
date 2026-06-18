@@ -45,9 +45,10 @@ const (
 
 // K8sLoader loads and watches route configurations from Kubernetes ConfigMaps
 type K8sLoader struct {
-	client     kubernetes.Interface
-	targetName string
-	namespace  string
+	client          kubernetes.Interface
+	targetName      string
+	namespace       string
+	partitionHeader string
 
 	config   *RoutesConfig
 	mu       sync.RWMutex
@@ -66,15 +67,21 @@ type K8sLoaderConfig struct {
 	// Namespace restricts ConfigMap loading to a specific namespace.
 	// Empty string means all namespaces (backward compatible).
 	Namespace string
+
+	// PartitionHeader, when non-empty, enables the header-based fast-path index
+	// in FindRoute (see RoutesConfig.BuildPartitionIndex). Empty disables it,
+	// leaving the historical full-scan behavior untouched.
+	PartitionHeader string
 }
 
 // NewK8sLoader creates a new Kubernetes ConfigMap loader
 func NewK8sLoader(client kubernetes.Interface, config K8sLoaderConfig) *K8sLoader {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &K8sLoader{
-		client:     client,
-		targetName: config.TargetName,
-		namespace:  config.Namespace,
+		client:          client,
+		targetName:      config.TargetName,
+		namespace:       config.Namespace,
+		partitionHeader: config.PartitionHeader,
 		config: &RoutesConfig{
 			Version: 1,
 			Hosts:   make(map[string][]Route),
@@ -161,6 +168,9 @@ func (l *K8sLoader) buildConfig() (*RoutesConfig, error) {
 		return nil, fmt.Errorf("failed to compile regexes: %w", err)
 	}
 
+	// Build the header-based fast-path index (no-op when partitionHeader is empty).
+	mergedConfig.BuildPartitionIndex(l.partitionHeader)
+
 	return mergedConfig, nil
 }
 
@@ -181,19 +191,7 @@ func (l *K8sLoader) FindRoute(host string, req RequestMatch) *Route {
 		host = host[:idx]
 	}
 
-	routes, ok := l.config.Hosts[host]
-	if !ok {
-		return nil
-	}
-
-	// Routes are already sorted by priority, so first match wins
-	for i := range routes {
-		if routes[i].Match(req) {
-			return &routes[i]
-		}
-	}
-
-	return nil
+	return l.config.FindRoute(host, req)
 }
 
 // Watch starts watching ConfigMaps for changes
