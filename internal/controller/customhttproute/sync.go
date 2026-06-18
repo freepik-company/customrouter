@@ -134,17 +134,17 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 			"name", resourceManifest.Name,
 			"previousTarget", previousTarget,
 			"newTarget", target)
-		if err := r.rebuildConfigMapsForTarget(ctx, previousTarget); err != nil {
+		if err := r.coalescedRebuildForTarget(ctx, previousTarget); err != nil {
 			return ctrl.Result{}, nil, nil, fmt.Errorf("failed to rebuild ConfigMaps for previous target %s: %w", previousTarget, err)
 		}
-		r.markRebuilt(previousTarget, time.Now())
 	}
 
-	// Rebuild ConfigMaps for the current target
-	if err := r.rebuildConfigMapsForTarget(ctx, target); err != nil {
+	// Rebuild ConfigMaps for the current target (single-flight coalesced so a
+	// resync burst over many routes sharing this target cannot run several full
+	// rebuilds concurrently and multiply operator memory).
+	if err := r.coalescedRebuildForTarget(ctx, target); err != nil {
 		return ctrl.Result{}, nil, nil, err
 	}
-	r.markRebuilt(target, time.Now())
 
 	// Reconcile catch-all / mirror / CORS EnvoyFilters when any axis is
 	// active or was previously active for this route. To avoid listing

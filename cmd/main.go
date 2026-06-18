@@ -69,6 +69,7 @@ func main() {
 	var enableHTTP2 bool
 	var routesConfigMapNamespace string
 	var maxConcurrentReconciles int
+	var rebuildCooldown time.Duration
 	var enableWebhooks bool
 	var webhookConfigName string
 	var webhookServiceName string
@@ -95,6 +96,10 @@ func main() {
 		"The namespace where route ConfigMaps will be stored")
 	flag.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", 5,
 		"Maximum number of concurrent reconciliations for CustomHTTPRoute controller")
+	flag.DurationVar(&rebuildCooldown, "rebuild-cooldown", customhttproute.DefaultRebuildCooldown,
+		"Minimum interval between ConfigMap rebuilds for the same target. Higher values reduce "+
+			"rebuild frequency (CPU/memory) under churn at the cost of slower route propagation. "+
+			"0 uses the default; negative disables throttling.")
 	flag.BoolVar(&enableWebhooks, "enable-webhooks", false,
 		"Enable validating admission webhooks for hostname conflict detection")
 	flag.StringVar(&webhookConfigName, "webhook-config-name", "",
@@ -250,6 +255,7 @@ func main() {
 		Scheme:                  mgr.GetScheme(),
 		ConfigMapNamespace:      routesConfigMapNamespace,
 		MaxConcurrentReconciles: maxConcurrentReconciles,
+		RebuildCooldown:         rebuildCooldown,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "CustomHTTPRoute")
 		os.Exit(1)

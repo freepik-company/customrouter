@@ -83,6 +83,19 @@ type CustomHTTPRouteReconciler struct {
 	// computed partition content has not changed since the last reconcile.
 	partitionHashes   map[string]uint32
 	partitionHashesMu sync.Mutex
+
+	// rebuildInProgress / rebuildPending implement per-target single-flight
+	// coalescing of ConfigMap rebuilds. With MaxConcurrentReconciles>1 and many
+	// CustomHTTPRoutes sharing one target, a burst of reconciles (notably the
+	// cache resync that follows a controller restart) would otherwise run
+	// several full route-table rebuilds for the SAME target concurrently — each
+	// expands the entire route set, so N concurrent rebuilds multiply peak
+	// memory N-fold and can OOM the operator. With coalescing only one rebuild
+	// per target runs at a time; reconciles arriving while it runs set the
+	// pending flag, which triggers exactly one trailing rebuild so their changes
+	// are still captured. Guarded by rebuildMu (shared with lastRebuildAt).
+	rebuildInProgress map[string]bool
+	rebuildPending    map[string]bool
 }
 
 // effectiveRebuildCooldown returns the cooldown to apply. A zero value falls
@@ -126,6 +139,77 @@ func (r *CustomHTTPRouteReconciler) markRebuilt(target string, when time.Time) {
 	r.lastRebuildAt[target] = when
 }
 
+// tryBeginRebuild returns true when the caller becomes the single-flight owner
+// of rebuilds for target and must perform one now. It returns false when a
+// rebuild for target is already running; in that case it records a pending
+// request so the in-flight owner performs one trailing rebuild that observes
+// the caller's change.
+func (r *CustomHTTPRouteReconciler) tryBeginRebuild(target string) bool {
+	r.rebuildMu.Lock()
+	defer r.rebuildMu.Unlock()
+	if r.rebuildInProgress[target] {
+		if r.rebuildPending == nil {
+			r.rebuildPending = make(map[string]bool)
+		}
+		r.rebuildPending[target] = true
+		return false
+	}
+	if r.rebuildInProgress == nil {
+		r.rebuildInProgress = make(map[string]bool)
+	}
+	r.rebuildInProgress[target] = true
+	return true
+}
+
+// finishOrContinueRebuild is called by the single-flight owner after a rebuild.
+// It returns true when another reconcile requested a rebuild while this one ran
+// (the owner should loop and rebuild once more, retaining ownership). It returns
+// false when there is nothing pending, releasing ownership.
+func (r *CustomHTTPRouteReconciler) finishOrContinueRebuild(target string) bool {
+	r.rebuildMu.Lock()
+	defer r.rebuildMu.Unlock()
+	if r.rebuildPending[target] {
+		r.rebuildPending[target] = false
+		return true
+	}
+	delete(r.rebuildInProgress, target)
+	return false
+}
+
+// releaseRebuild unconditionally drops single-flight ownership for target. Used
+// on the error path so a failed rebuild does not wedge the target permanently;
+// the failing reconcile is requeued by controller-runtime and will retry.
+func (r *CustomHTTPRouteReconciler) releaseRebuild(target string) {
+	r.rebuildMu.Lock()
+	delete(r.rebuildInProgress, target)
+	delete(r.rebuildPending, target)
+	r.rebuildMu.Unlock()
+}
+
+// coalescedRebuildForTarget rebuilds a target's ConfigMaps under per-target
+// single-flight coalescing. At most one rebuild per target runs at a time, so
+// concurrent reconciles (e.g. a resync burst over many CustomHTTPRoutes sharing
+// one target) cannot multiply peak memory by running several full rebuilds at
+// once. Reconciles that arrive mid-rebuild are folded into a single trailing
+// rebuild instead of each triggering their own.
+func (r *CustomHTTPRouteReconciler) coalescedRebuildForTarget(ctx context.Context, target string) error {
+	if !r.tryBeginRebuild(target) {
+		// Another reconcile owns the rebuild and will observe our change on its
+		// trailing pass; nothing more to do for the ConfigMap rebuild here.
+		return nil
+	}
+	for {
+		if err := r.rebuildConfigMapsForTarget(ctx, target); err != nil {
+			r.releaseRebuild(target)
+			return err
+		}
+		r.markRebuilt(target, time.Now())
+		if !r.finishOrContinueRebuild(target) {
+			return nil
+		}
+	}
+}
+
 // clearTargetState removes all in-memory state associated with a target that
 // no longer has any active CustomHTTPRoutes. This prevents lastRebuildAt and
 // partitionHashes from growing without bound as targets are created and
@@ -133,6 +217,8 @@ func (r *CustomHTTPRouteReconciler) markRebuilt(target string, when time.Time) {
 func (r *CustomHTTPRouteReconciler) clearTargetState(target string) {
 	r.rebuildMu.Lock()
 	delete(r.lastRebuildAt, target)
+	delete(r.rebuildInProgress, target)
+	delete(r.rebuildPending, target)
 	r.rebuildMu.Unlock()
 
 	// Use parsePartitionName to identify entries that genuinely belong to

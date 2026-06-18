@@ -64,6 +64,12 @@ operator:
   args:
     - --leader-elect
     - --health-probe-bind-address=:8081
+    # Minimum interval between ConfigMap rebuilds for the same target. Raising
+    # it reduces rebuild frequency (CPU/memory) when many CustomHTTPRoutes share
+    # a target and churn rapidly (large sandbox environments), at the cost of
+    # slightly slower route propagation. Rebuilds are also single-flight
+    # coalesced per target, so a resync burst never runs concurrent rebuilds.
+    # - --rebuild-cooldown=5s
 
   # -- Node selector
   nodeSelector: {}
