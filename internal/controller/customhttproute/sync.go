@@ -128,7 +128,12 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 			"name", resourceManifest.Name,
 			"previousTarget", previousTarget,
 			"newTarget", target)
-		requeueAfter, err := r.rebuildTarget(ctx, previousTarget, eventType == watch.Deleted)
+		// Treat the old-target cleanup like a deletion: skip the cooldown so the
+		// moved route is dropped from the former target promptly (a targetRef
+		// change should not leave it stale there for up to a cooldown), while
+		// still going through rebuildTarget so it honours the per-target lock and
+		// never runs concurrently with another rebuild of that target.
+		requeueAfter, err := r.rebuildTarget(ctx, previousTarget, true)
 		if err != nil {
 			return ctrl.Result{}, nil, nil, fmt.Errorf("failed to rebuild ConfigMaps for previous target %s: %w", previousTarget, err)
 		}
