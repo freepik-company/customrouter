@@ -106,6 +106,12 @@ func TestRebuildTargetDefers(t *testing.T) {
 	if wait, err := r2.rebuildTarget(ctx, "default", false); err != nil || wait <= 0 {
 		t.Fatalf("rebuild while lock held should defer: wait=%v err=%v", wait, err)
 	}
+	// Deletions skip the cooldown but must still honour the lock, so a deletion
+	// rebuild also defers while the lock is held (the Reconcile deletion branch
+	// then keeps the finalizer and requeues so cleanup is not lost).
+	if wait, err := r2.rebuildTarget(ctx, "default", true); err != nil || wait <= 0 {
+		t.Fatalf("deletion rebuild while lock held should defer: wait=%v err=%v", wait, err)
+	}
 	r2.targetUnlock("default")
 }
 

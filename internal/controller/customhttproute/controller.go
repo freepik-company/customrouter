@@ -363,6 +363,15 @@ func (r *CustomHTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 				return result, err
 			}
 
+			// If the cleanup rebuild was deferred (the per-target rebuild lock was
+			// held by another in-flight rebuild), keep the finalizer and requeue.
+			// Removing it now would let the object disappear before its routes are
+			// dropped from the target's ConfigMaps, leaving stale entries.
+			if result.RequeueAfter > 0 {
+				logger.V(1).Info("deletion cleanup deferred, keeping finalizer and requeueing", "name", req.Name)
+				return result, nil
+			}
+
 			err = controller.UpdateWithRetry(ctx, r.Client, objectManifest, func(object client.Object) error {
 				controllerutil.RemoveFinalizer(object, controller.ResourceFinalizer)
 				return nil
