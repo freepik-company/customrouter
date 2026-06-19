@@ -60,6 +60,18 @@ flowchart LR
 
 ## Upgrade notes
 
+### 0.7.3 → 0.7.4
+
+- Operator memory: ConfigMap rebuilds are now single-flight per target. With
+  many CustomHTTPRoutes sharing one target and `--max-concurrent-reconciles>1`,
+  a reconcile burst (notably the cache resync after a restart) could previously
+  run several full route-table rebuilds for the same target concurrently,
+  multiplying peak memory and OOM-killing the operator. Now at most one rebuild
+  per target runs at a time and the cooldown is re-checked inside that lock.
+- New `--rebuild-cooldown` flag on the operator (default `2s`) to tune the
+  minimum interval between rebuilds of the same target. No action required; raise
+  it to further reduce rebuild frequency under heavy CustomHTTPRoute churn.
+
 ### 0.7.2 → 0.7.3
 
 - Performance: the extproc no longer rebuilds its full route table on every
