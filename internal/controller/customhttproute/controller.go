@@ -193,20 +193,24 @@ func (r *CustomHTTPRouteReconciler) releaseRebuild(target string) {
 // one target) cannot multiply peak memory by running several full rebuilds at
 // once. Reconciles that arrive mid-rebuild are folded into a single trailing
 // rebuild instead of each triggering their own.
-func (r *CustomHTTPRouteReconciler) coalescedRebuildForTarget(ctx context.Context, target string) error {
+//
+// performed reports whether this call actually ran the rebuild. It is false
+// when another reconcile already owned the rebuild: the caller's change is
+// guaranteed to be captured by the owner's (trailing) pass, but since this
+// reconcile did not itself complete a rebuild it must not yet mark the resource
+// as synced — it should requeue, mirroring the throttled path.
+func (r *CustomHTTPRouteReconciler) coalescedRebuildForTarget(ctx context.Context, target string) (performed bool, err error) {
 	if !r.tryBeginRebuild(target) {
-		// Another reconcile owns the rebuild and will observe our change on its
-		// trailing pass; nothing more to do for the ConfigMap rebuild here.
-		return nil
+		return false, nil
 	}
 	for {
 		if err := r.rebuildConfigMapsForTarget(ctx, target); err != nil {
 			r.releaseRebuild(target)
-			return err
+			return true, err
 		}
 		r.markRebuilt(target, time.Now())
 		if !r.finishOrContinueRebuild(target) {
-			return nil
+			return true, nil
 		}
 	}
 }

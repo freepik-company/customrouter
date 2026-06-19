@@ -134,16 +134,35 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 			"name", resourceManifest.Name,
 			"previousTarget", previousTarget,
 			"newTarget", target)
-		if err := r.coalescedRebuildForTarget(ctx, previousTarget); err != nil {
+		// Rebuild the previous target synchronously (not coalesced): the moved
+		// route must be dropped from the old target's ConfigMaps before we add
+		// it to the new target below, otherwise it could briefly appear on both.
+		// Target changes are rare, so this does not affect the resync-storm
+		// memory protection the coalescing provides for the current target.
+		if err := r.rebuildConfigMapsForTarget(ctx, previousTarget); err != nil {
 			return ctrl.Result{}, nil, nil, fmt.Errorf("failed to rebuild ConfigMaps for previous target %s: %w", previousTarget, err)
 		}
+		r.markRebuilt(previousTarget, time.Now())
 	}
 
 	// Rebuild ConfigMaps for the current target (single-flight coalesced so a
 	// resync burst over many routes sharing this target cannot run several full
 	// rebuilds concurrently and multiply operator memory).
-	if err := r.coalescedRebuildForTarget(ctx, target); err != nil {
+	performed, err := r.coalescedRebuildForTarget(ctx, target)
+	if err != nil {
 		return ctrl.Result{}, nil, nil, err
+	}
+	if !performed {
+		// Another reconcile owns this target's rebuild and will capture our
+		// change on its trailing pass. Requeue instead of falling through to the
+		// status update, so ObservedGeneration/ConfigMapSynced are only set once
+		// a rebuild this reconcile completes — same contract as the throttled
+		// path above.
+		requeue := r.effectiveRebuildCooldown()
+		if requeue <= 0 {
+			requeue = time.Second
+		}
+		return ctrl.Result{RequeueAfter: requeue}, nil, nil, nil
 	}
 
 	// Reconcile catch-all / mirror / CORS EnvoyFilters when any axis is

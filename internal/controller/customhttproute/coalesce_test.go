@@ -69,6 +69,44 @@ func TestRebuildSingleFlightPrimitives(t *testing.T) {
 	}
 }
 
+// TestCoalescedRebuildReportsPerformed locks the contract the reconcile relies
+// on: the call returns performed=true when it ran the rebuild and false when it
+// delegated to an in-flight owner (so the reconcile knows whether it may mark
+// the resource synced or must requeue).
+func TestCoalescedRebuildReportsPerformed(t *testing.T) {
+	route := &v1alpha1.CustomHTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "ns", UID: "uid"},
+		Spec: v1alpha1.CustomHTTPRouteSpec{
+			Hostnames: []string{"a.example.com"},
+			TargetRef: v1alpha1.TargetRef{Name: "default"},
+			Rules: []v1alpha1.Rule{{
+				BackendRefs: []v1alpha1.BackendRef{{Name: "svc", Namespace: "ns", Port: 80}},
+				Matches:     []v1alpha1.PathMatch{{Path: "/a", Type: "Exact"}},
+			}},
+		},
+	}
+	r := newReconciler(route)
+	ctx := context.Background()
+
+	performed, err := r.coalescedRebuildForTarget(ctx, "default")
+	if err != nil || !performed {
+		t.Fatalf("owner call should perform the rebuild: performed=%v err=%v", performed, err)
+	}
+
+	// With another reconcile holding ownership, the call must delegate.
+	if !r.tryBeginRebuild("default") {
+		t.Fatal("setup: expected to take ownership")
+	}
+	performed, err = r.coalescedRebuildForTarget(ctx, "default")
+	if err != nil {
+		t.Fatalf("delegated call should not error: %v", err)
+	}
+	if performed {
+		t.Fatal("call should delegate (performed=false) while another owner is in flight")
+	}
+	r.releaseRebuild("default")
+}
+
 // TestClearTargetStateKeepsSingleFlightOwnership is the regression for the
 // empty-target path: clearTargetState runs inside rebuildConfigMapsForTarget
 // while coalescedRebuildForTarget still holds ownership, so it must NOT release
@@ -150,7 +188,7 @@ func TestCoalescedRebuildNoConcurrentRebuilds(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := r.coalescedRebuildForTarget(context.Background(), "default"); err != nil {
+			if _, err := r.coalescedRebuildForTarget(context.Background(), "default"); err != nil {
 				t.Errorf("coalescedRebuildForTarget: %v", err)
 			}
 		}()
