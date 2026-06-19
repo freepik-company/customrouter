@@ -60,6 +60,16 @@ flowchart LR
 
 ## Upgrade notes
 
+### 0.7.4 → 0.7.5
+
+- Bulk deletion: when many CustomHTTPRoutes sharing a target are deleted
+  together (e.g. a namespace cascade), the operator no longer triggers one full
+  ConfigMap rebuild per deleted route. After the first deletion rebuild (whose
+  output already reflects every terminating sibling), the controller strips its
+  own finalizer from the same-target siblings that are also being deleted, so
+  they are garbage-collected without each forcing another rebuild. Third-party
+  finalizers and live routes are left untouched. No action required.
+
 ### 0.7.3 → 0.7.4
 
 - Operator memory: ConfigMap rebuilds are now single-flight per target. With
