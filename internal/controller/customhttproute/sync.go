@@ -110,20 +110,6 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 			"target", target)
 	}
 
-	// Cooldown: cap rebuild rate per target. Applies to both Modified and
-	// Deleted events. For Deleted events the drain pattern at the end of
-	// this function removes finalizers from siblings of the same target
-	// after a single rebuild, so subsequent Deleted reconciles for the same
-	// target arrive either after the cooldown (finding the sibling already
-	// gone) or get short-circuited by the cooldown requeue — in both cases
-	// the redundant rebuild is avoided.
-	if remaining, throttled := r.rebuildWait(target, time.Now()); throttled {
-		logger.V(1).Info("target rebuild in cooldown, requeueing",
-			"target", target,
-			"wait", remaining.String())
-		return ctrl.Result{RequeueAfter: remaining}, nil, nil, nil
-	}
-
 	// Snapshot current annotation state BEFORE any modifications. These are
 	// used below to detect whether catch-all / mirror / CORS axes were
 	// previously active and therefore need reconciliation even when the
@@ -132,23 +118,45 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 	hadMirror := resourceManifest.Annotations[hadMirrorAnnotation] == annotationValueTrue
 	hadCORS := resourceManifest.Annotations[hadCORSAnnotation] == annotationValueTrue
 
-	// If the target changed, also rebuild the old target to clean up its stale ConfigMaps
+	// If the target changed, clean up the old target first. It goes through the
+	// same single-flight + cooldown path as the current target (rebuildTarget),
+	// so it can neither run concurrently with another rebuild of that target nor
+	// bypass the rate limit. The moved route is dropped from the old target here
+	// before it is added to the new target below; if the old target is busy or
+	// in cooldown we requeue without touching the new target, so the route is
+	// never briefly present on both.
 	if previousTarget, ok := resourceManifest.Annotations[lastTargetAnnotation]; ok && previousTarget != target {
 		logger.Info("Target changed, also rebuilding previous target",
 			"name", resourceManifest.Name,
 			"previousTarget", previousTarget,
 			"newTarget", target)
-		if err := r.rebuildConfigMapsForTarget(ctx, previousTarget); err != nil {
+		// Treat the old-target cleanup like a deletion: skip the cooldown so the
+		// moved route is dropped from the former target promptly (a targetRef
+		// change should not leave it stale there for up to a cooldown), while
+		// still going through rebuildTarget so it honours the per-target lock and
+		// never runs concurrently with another rebuild of that target.
+		requeueAfter, err := r.rebuildTarget(ctx, previousTarget, true)
+		if err != nil {
 			return ctrl.Result{}, nil, nil, fmt.Errorf("failed to rebuild ConfigMaps for previous target %s: %w", previousTarget, err)
 		}
-		r.markRebuilt(previousTarget, time.Now())
+		if requeueAfter > 0 {
+			return ctrl.Result{RequeueAfter: requeueAfter}, nil, nil, nil
+		}
 	}
 
-	// Rebuild ConfigMaps for the current target
-	if err := r.rebuildConfigMapsForTarget(ctx, target); err != nil {
+	// Rebuild ConfigMaps for the current target. rebuildTarget bounds memory
+	// (one rebuild per target at a time) and rate-limits via the cooldown; a
+	// non-zero wait means the rebuild was deferred (busy or in cooldown), so we
+	// requeue without marking the resource synced — the change is captured by a
+	// later reconcile's rebuild, which re-lists the full current route set.
+	requeueAfter, err := r.rebuildTarget(ctx, target, eventType == watch.Deleted)
+	if err != nil {
 		return ctrl.Result{}, nil, nil, err
 	}
-	r.markRebuilt(target, time.Now())
+	if requeueAfter > 0 {
+		logger.V(1).Info("target rebuild deferred, requeueing", "target", target, "wait", requeueAfter.String())
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil, nil, nil
+	}
 
 	// Reconcile catch-all / mirror / CORS EnvoyFilters when any axis is
 	// active or was previously active for this route. To avoid listing
@@ -374,6 +382,22 @@ func (r *CustomHTTPRouteReconciler) rebuildConfigMapsForTarget(ctx context.Conte
 			targetRoutes = append(targetRoutes, route)
 		}
 	}
+
+	// Sort the routes deterministically by (namespace, name). The cache's
+	// field-indexer List returns items in a non-deterministic order (it
+	// iterates an internal map), so without this the per-host merge order of
+	// equal-priority routes changes between reconciles. That makes the
+	// serialized ConfigMap bytes differ even when the logical route set is
+	// unchanged, defeating the content-hash dedup in upsertSingleConfigMap and
+	// rewriting ConfigMaps on every reconcile — churn that forces every extproc
+	// replica to reload the full route table. Stable input here yields stable
+	// output (ExpandRoutes and SortRoutes are deterministic on ordered input).
+	sort.Slice(targetRoutes, func(i, j int) bool {
+		if targetRoutes[i].Namespace != targetRoutes[j].Namespace {
+			return targetRoutes[i].Namespace < targetRoutes[j].Namespace
+		}
+		return targetRoutes[i].Name < targetRoutes[j].Name
+	})
 
 	// Track active ConfigMap names for this target
 	activeNames := make(map[string]bool)

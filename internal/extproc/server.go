@@ -57,8 +57,10 @@ func NewServer(config *ServerConfig, logger *zap.Logger) (*Server, error) {
 	}
 
 	loader := routes.NewK8sLoader(config.K8sClient, routes.K8sLoaderConfig{
-		TargetName: config.TargetName,
-		Namespace:  config.RoutesNamespace,
+		TargetName:      config.TargetName,
+		Namespace:       config.RoutesNamespace,
+		PartitionHeader: config.RoutePartitionHeader,
+		ReloadDebounce:  config.RoutesReloadDebounce,
 	})
 
 	// Initial load
@@ -128,6 +130,8 @@ func (s *Server) Start(ctx context.Context) error {
 		zap.String("addr", s.config.Addr),
 		zap.String("target_name", s.config.TargetName),
 		zap.String("routes_namespace", s.config.RoutesNamespace),
+		zap.String("route_partition_header", s.config.RoutePartitionHeader),
+		zap.Duration("routes_reload_debounce", s.config.RoutesReloadDebounce),
 		zap.Int("max_recv_msg_size", s.config.MaxRecvMsgSize),
 		zap.Int("max_send_msg_size", s.config.MaxSendMsgSize),
 		zap.Uint32("max_concurrent_streams", s.config.MaxConcurrentStreams),

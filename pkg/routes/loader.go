@@ -34,6 +34,10 @@ type Loader struct {
 	mu        sync.RWMutex
 	watcher   *fsnotify.Watcher
 	onChange  func(*RoutesConfig)
+
+	// PartitionHeader, when non-empty, enables the header-based fast-path index
+	// in FindRoute (see RoutesConfig.BuildPartitionIndex). Set it before Load.
+	PartitionHeader string
 }
 
 // NewLoader creates a new routes loader
@@ -106,6 +110,9 @@ func (l *Loader) Load() error {
 		return fmt.Errorf("failed to compile regexes: %w", err)
 	}
 
+	// Build the header-based fast-path index (no-op when PartitionHeader is empty).
+	mergedConfig.BuildPartitionIndex(l.PartitionHeader)
+
 	l.config = mergedConfig
 	return nil
 }
@@ -127,19 +134,7 @@ func (l *Loader) FindRoute(host string, req RequestMatch) *Route {
 		host = host[:idx]
 	}
 
-	routes, ok := l.config.Hosts[host]
-	if !ok {
-		return nil
-	}
-
-	// Routes are already sorted by priority, so first match wins
-	for i := range routes {
-		if routes[i].Match(req) {
-			return &routes[i]
-		}
-	}
-
-	return nil
+	return l.config.FindRoute(host, req)
 }
 
 // Watch starts watching the routes directory for changes

@@ -45,13 +45,21 @@ const (
 
 // K8sLoader loads and watches route configurations from Kubernetes ConfigMaps
 type K8sLoader struct {
-	client     kubernetes.Interface
-	targetName string
-	namespace  string
+	client          kubernetes.Interface
+	targetName      string
+	namespace       string
+	partitionHeader string
+	reloadDebounce  time.Duration
 
 	config   *RoutesConfig
 	mu       sync.RWMutex
 	onChange func(*RoutesConfig)
+
+	// dirty signals the reload loop that at least one ConfigMap changed since
+	// the last rebuild. It is buffered with capacity 1 and written
+	// non-blockingly, so a burst of watch events collapses into a single
+	// pending rebuild instead of one rebuild per event.
+	dirty chan struct{}
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -66,19 +74,34 @@ type K8sLoaderConfig struct {
 	// Namespace restricts ConfigMap loading to a specific namespace.
 	// Empty string means all namespaces (backward compatible).
 	Namespace string
+
+	// PartitionHeader, when non-empty, enables the header-based fast-path index
+	// in FindRoute (see RoutesConfig.BuildPartitionIndex). Empty disables it,
+	// leaving the historical full-scan behavior untouched.
+	PartitionHeader string
+
+	// ReloadDebounce coalesces ConfigMap change events: after a change, the
+	// loader waits this long (absorbing further changes) before rebuilding the
+	// route table once. This caps full rebuilds at one per window under churn
+	// instead of one per ConfigMap write. Zero rebuilds on every event (legacy
+	// behaviour), though bursts still collapse via the buffered signal channel.
+	ReloadDebounce time.Duration
 }
 
 // NewK8sLoader creates a new Kubernetes ConfigMap loader
 func NewK8sLoader(client kubernetes.Interface, config K8sLoaderConfig) *K8sLoader {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &K8sLoader{
-		client:     client,
-		targetName: config.TargetName,
-		namespace:  config.Namespace,
+		client:          client,
+		targetName:      config.TargetName,
+		namespace:       config.Namespace,
+		partitionHeader: config.PartitionHeader,
+		reloadDebounce:  config.ReloadDebounce,
 		config: &RoutesConfig{
 			Version: 1,
 			Hosts:   make(map[string][]Route),
 		},
+		dirty:  make(chan struct{}, 1),
 		ctx:    ctx,
 		cancel: cancel,
 	}
@@ -161,6 +184,9 @@ func (l *K8sLoader) buildConfig() (*RoutesConfig, error) {
 		return nil, fmt.Errorf("failed to compile regexes: %w", err)
 	}
 
+	// Build the header-based fast-path index (no-op when partitionHeader is empty).
+	mergedConfig.BuildPartitionIndex(l.partitionHeader)
+
 	return mergedConfig, nil
 }
 
@@ -181,28 +207,63 @@ func (l *K8sLoader) FindRoute(host string, req RequestMatch) *Route {
 		host = host[:idx]
 	}
 
-	routes, ok := l.config.Hosts[host]
-	if !ok {
-		return nil
-	}
-
-	// Routes are already sorted by priority, so first match wins
-	for i := range routes {
-		if routes[i].Match(req) {
-			return &routes[i]
-		}
-	}
-
-	return nil
+	return l.config.FindRoute(host, req)
 }
 
 // Watch starts watching ConfigMaps for changes
 func (l *K8sLoader) Watch(onChange func(*RoutesConfig)) error {
 	l.onChange = onChange
 
+	go l.reloadLoop()
 	go l.watchLoop()
 
 	return nil
+}
+
+// signalReload marks the config dirty without blocking. Multiple events between
+// rebuilds collapse into the single buffered slot.
+func (l *K8sLoader) signalReload() {
+	select {
+	case l.dirty <- struct{}{}:
+	default:
+	}
+}
+
+// reloadLoop performs the actual rebuilds, decoupled from the watch event rate.
+// On the first dirty signal it (optionally) waits out the debounce window,
+// absorbing any further signals, then rebuilds the route table exactly once.
+// Under continuous ConfigMap churn this caps rebuilds at one per debounce
+// window instead of one per event — the rebuild walks the entire route set, so
+// this is the difference between idle and a pegged CPU on large configs.
+func (l *K8sLoader) reloadLoop() {
+	for {
+		select {
+		case <-l.ctx.Done():
+			return
+		case <-l.dirty:
+		}
+
+		if l.reloadDebounce > 0 {
+			timer := time.NewTimer(l.reloadDebounce)
+		absorb:
+			for {
+				select {
+				case <-l.ctx.Done():
+					timer.Stop()
+					return
+				case <-l.dirty:
+					// Keep absorbing within the same window; the timer is not
+					// reset, so a steady stream still rebuilds once per window.
+				case <-timer.C:
+					break absorb
+				}
+			}
+		}
+
+		if err := l.Load(); err == nil && l.onChange != nil {
+			l.onChange(l.GetConfig())
+		}
+	}
 }
 
 func (l *K8sLoader) watchLoop() {
@@ -250,10 +311,9 @@ func (l *K8sLoader) handleWatchEvents(watcher watch.Interface) {
 
 			switch event.Type {
 			case watch.Added, watch.Modified, watch.Deleted:
-				// Reload all ConfigMaps for this target
-				if err := l.Load(); err == nil && l.onChange != nil {
-					l.onChange(l.config)
-				}
+				// Hand off to the debounced reload loop instead of rebuilding
+				// inline on every event.
+				l.signalReload()
 
 			case watch.Error:
 				// Watch error, need to restart

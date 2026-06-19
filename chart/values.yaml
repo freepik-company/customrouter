@@ -64,6 +64,12 @@ operator:
   args:
     - --leader-elect
     - --health-probe-bind-address=:8081
+    # Minimum interval between ConfigMap rebuilds for the same target. Raising
+    # it reduces rebuild frequency (CPU/memory) when many CustomHTTPRoutes share
+    # a target and churn rapidly (large sandbox environments), at the cost of
+    # slightly slower route propagation. Rebuilds are also single-flight
+    # coalesced per target, so a resync burst never runs concurrent rebuilds.
+    # - --rebuild-cooldown=5s
 
   # -- Node selector
   nodeSelector: {}
@@ -216,6 +222,16 @@ externalProcessors:
       - --target-name=default
       - --routes-configmap-namespace=default
       - --access-log=true
+      # Header-based route partitioning. When one extproc serves many isolated
+      # route sets keyed by a header (e.g. sandbox/preview environments tagged
+      # with "env"), this indexes routes by that header so a request is matched
+      # only against routes sharing its value instead of scanning every route
+      # for the host. Leave unset/empty to keep the default full-scan behavior.
+      # - --route-partition-header=env
+      # Coalesce ConfigMap change events: rebuild the route table at most once
+      # per this window instead of once per event. Protects CPU when many
+      # ConfigMaps churn rapidly (large sandbox environments). Default 2s.
+      # - --routes-reload-debounce=2s
       - --grpc-max-recv-msg-size=4194304
       - --grpc-max-send-msg-size=4194304
       - --grpc-max-concurrent-streams=1000
