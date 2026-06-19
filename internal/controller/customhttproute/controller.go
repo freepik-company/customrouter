@@ -84,18 +84,14 @@ type CustomHTTPRouteReconciler struct {
 	partitionHashes   map[string]uint32
 	partitionHashesMu sync.Mutex
 
-	// rebuildInProgress / rebuildPending implement per-target single-flight
-	// coalescing of ConfigMap rebuilds. With MaxConcurrentReconciles>1 and many
-	// CustomHTTPRoutes sharing one target, a burst of reconciles (notably the
-	// cache resync that follows a controller restart) would otherwise run
-	// several full route-table rebuilds for the SAME target concurrently — each
-	// expands the entire route set, so N concurrent rebuilds multiply peak
-	// memory N-fold and can OOM the operator. With coalescing only one rebuild
-	// per target runs at a time; reconciles arriving while it runs set the
-	// pending flag, which triggers exactly one trailing rebuild so their changes
-	// are still captured. Guarded by rebuildMu (shared with lastRebuildAt).
-	rebuildInProgress map[string]bool
-	rebuildPending    map[string]bool
+	// rebuilding holds the set of targets with a rebuild currently running, used
+	// as a per-target single-flight lock (see targetTryLock). With
+	// MaxConcurrentReconciles>1 and many CustomHTTPRoutes sharing one target, a
+	// reconcile burst (notably the cache resync after a controller restart)
+	// would otherwise run several full route-table rebuilds for the SAME target
+	// concurrently — each expands the entire route set, so N concurrent rebuilds
+	// multiply peak memory N-fold and can OOM the operator. Guarded by rebuildMu.
+	rebuilding map[string]bool
 }
 
 // effectiveRebuildCooldown returns the cooldown to apply. A zero value falls
@@ -139,80 +135,72 @@ func (r *CustomHTTPRouteReconciler) markRebuilt(target string, when time.Time) {
 	r.lastRebuildAt[target] = when
 }
 
-// tryBeginRebuild returns true when the caller becomes the single-flight owner
-// of rebuilds for target and must perform one now. It returns false when a
-// rebuild for target is already running; in that case it records a pending
-// request so the in-flight owner performs one trailing rebuild that observes
-// the caller's change.
-func (r *CustomHTTPRouteReconciler) tryBeginRebuild(target string) bool {
+// targetTryLock acquires the exclusive per-target rebuild slot. It returns
+// false when a rebuild for target is already running. This is what bounds peak
+// memory: with MaxConcurrentReconciles>1 and many routes sharing one target, a
+// reconcile burst would otherwise run several full rebuilds of the same target
+// at once, multiplying memory N-fold (the OOM this guards against).
+func (r *CustomHTTPRouteReconciler) targetTryLock(target string) bool {
 	r.rebuildMu.Lock()
 	defer r.rebuildMu.Unlock()
-	if r.rebuildInProgress[target] {
-		if r.rebuildPending == nil {
-			r.rebuildPending = make(map[string]bool)
-		}
-		r.rebuildPending[target] = true
+	if r.rebuilding[target] {
 		return false
 	}
-	if r.rebuildInProgress == nil {
-		r.rebuildInProgress = make(map[string]bool)
+	if r.rebuilding == nil {
+		r.rebuilding = make(map[string]bool)
 	}
-	r.rebuildInProgress[target] = true
+	r.rebuilding[target] = true
 	return true
 }
 
-// finishOrContinueRebuild is called by the single-flight owner after a rebuild.
-// It returns true when another reconcile requested a rebuild while this one ran
-// (the owner should loop and rebuild once more, retaining ownership). It returns
-// false when there is nothing pending, releasing ownership.
-func (r *CustomHTTPRouteReconciler) finishOrContinueRebuild(target string) bool {
+// targetUnlock releases the per-target rebuild slot.
+func (r *CustomHTTPRouteReconciler) targetUnlock(target string) {
 	r.rebuildMu.Lock()
-	defer r.rebuildMu.Unlock()
-	if r.rebuildPending[target] {
-		r.rebuildPending[target] = false
-		return true
-	}
-	delete(r.rebuildInProgress, target)
-	delete(r.rebuildPending, target)
-	return false
-}
-
-// releaseRebuild unconditionally drops single-flight ownership for target. Used
-// on the error path so a failed rebuild does not wedge the target permanently;
-// the failing reconcile is requeued by controller-runtime and will retry.
-func (r *CustomHTTPRouteReconciler) releaseRebuild(target string) {
-	r.rebuildMu.Lock()
-	delete(r.rebuildInProgress, target)
-	delete(r.rebuildPending, target)
+	delete(r.rebuilding, target)
 	r.rebuildMu.Unlock()
 }
 
-// coalescedRebuildForTarget rebuilds a target's ConfigMaps under per-target
-// single-flight coalescing. At most one rebuild per target runs at a time, so
-// concurrent reconciles (e.g. a resync burst over many CustomHTTPRoutes sharing
-// one target) cannot multiply peak memory by running several full rebuilds at
-// once. Reconciles that arrive mid-rebuild are folded into a single trailing
-// rebuild instead of each triggering their own.
+// requeueDelay returns a positive duration to requeue after when a rebuild is
+// deferred (cooldown active or another rebuild in flight).
+func (r *CustomHTTPRouteReconciler) requeueDelay() time.Duration {
+	d := r.effectiveRebuildCooldown()
+	if d <= 0 {
+		return time.Second
+	}
+	return d
+}
+
+// rebuildTarget rebuilds a target's ConfigMaps with two guarantees:
+//   - single-flight: only one rebuild per target runs at a time (bounds memory);
+//   - rate-limited: the cooldown is re-checked INSIDE the lock so a just-finished
+//     rebuild's markRebuilt is visible, making "check cooldown + rebuild" atomic
+//     per target (the old throttle checked then rebuilt without the lock, so
+//     concurrent reconciles all passed the check and rebuilt together).
 //
-// performed reports whether this call actually ran the rebuild. It is false
-// when another reconcile already owned the rebuild: the caller's change is
-// guaranteed to be captured by the owner's (trailing) pass, but since this
-// reconcile did not itself complete a rebuild it must not yet mark the resource
-// as synced — it should requeue, mirroring the throttled path.
-func (r *CustomHTTPRouteReconciler) coalescedRebuildForTarget(ctx context.Context, target string) (performed bool, err error) {
-	if !r.tryBeginRebuild(target) {
-		return false, nil
+// It returns a non-zero requeueAfter when the rebuild was deferred (lock held by
+// another rebuild, or still in cooldown). The caller must then requeue WITHOUT
+// marking the resource synced; the change is picked up by a later reconcile's
+// rebuild, which re-lists the full current state of every route for the target —
+// so a single rebuild always captures the whole set, no trailing pass needed.
+func (r *CustomHTTPRouteReconciler) rebuildTarget(ctx context.Context, target string, deletion bool) (time.Duration, error) {
+	if !r.targetTryLock(target) {
+		return r.requeueDelay(), nil
 	}
-	for {
-		if err := r.rebuildConfigMapsForTarget(ctx, target); err != nil {
-			r.releaseRebuild(target)
-			return true, err
-		}
-		r.markRebuilt(target, time.Now())
-		if !r.finishOrContinueRebuild(target) {
-			return true, nil
+	defer r.targetUnlock(target)
+
+	// Cooldown is skipped for deletions so stale ConfigMaps/EnvoyFilters are
+	// cleaned up promptly when a route goes away.
+	if !deletion {
+		if remaining, throttled := r.rebuildWait(target, time.Now()); throttled {
+			return remaining, nil
 		}
 	}
+
+	if err := r.rebuildConfigMapsForTarget(ctx, target); err != nil {
+		return 0, err
+	}
+	r.markRebuilt(target, time.Now())
+	return 0, nil
 }
 
 // clearTargetState removes all in-memory state associated with a target that
@@ -220,13 +208,11 @@ func (r *CustomHTTPRouteReconciler) coalescedRebuildForTarget(ctx context.Contex
 // partitionHashes from growing without bound as targets are created and
 // deleted over the lifetime of the controller.
 func (r *CustomHTTPRouteReconciler) clearTargetState(target string) {
-	// NOTE: do NOT touch rebuildInProgress/rebuildPending here. clearTargetState
-	// is called from inside rebuildConfigMapsForTarget (the empty-target path),
-	// which itself runs while coalescedRebuildForTarget holds single-flight
-	// ownership. Clearing the ownership flags mid-rebuild would let a concurrent
-	// reconcile start a parallel rebuild, defeating coalescing. Those maps are
-	// self-cleaning: finishOrContinueRebuild / releaseRebuild drop their entries
-	// when the rebuild loop ends.
+	// NOTE: do NOT touch r.rebuilding here. clearTargetState is called from
+	// inside rebuildConfigMapsForTarget (the empty-target path), which runs while
+	// rebuildTarget holds the per-target lock. Releasing it here would let a
+	// concurrent reconcile start a parallel rebuild. The lock is released by
+	// rebuildTarget's deferred targetUnlock, so there is nothing to clean up.
 	r.rebuildMu.Lock()
 	delete(r.lastRebuildAt, target)
 	r.rebuildMu.Unlock()

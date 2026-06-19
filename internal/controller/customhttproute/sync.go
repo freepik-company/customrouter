@@ -108,18 +108,6 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 			"target", target)
 	}
 
-	// Cooldown: cap rebuild rate per target. Skipped for deletions so that
-	// stale ConfigMaps and EnvoyFilters are cleaned up promptly when a CR
-	// goes away.
-	if eventType != watch.Deleted {
-		if remaining, throttled := r.rebuildWait(target, time.Now()); throttled {
-			logger.V(1).Info("target rebuild in cooldown, requeueing",
-				"target", target,
-				"wait", remaining.String())
-			return ctrl.Result{RequeueAfter: remaining}, nil, nil, nil
-		}
-	}
-
 	// Snapshot current annotation state BEFORE any modifications. These are
 	// used below to detect whether catch-all / mirror / CORS axes were
 	// previously active and therefore need reconciliation even when the
@@ -128,41 +116,39 @@ func (r *CustomHTTPRouteReconciler) ReconcileObject(
 	hadMirror := resourceManifest.Annotations[hadMirrorAnnotation] == annotationValueTrue
 	hadCORS := resourceManifest.Annotations[hadCORSAnnotation] == annotationValueTrue
 
-	// If the target changed, also rebuild the old target to clean up its stale ConfigMaps
+	// If the target changed, clean up the old target first. It goes through the
+	// same single-flight + cooldown path as the current target (rebuildTarget),
+	// so it can neither run concurrently with another rebuild of that target nor
+	// bypass the rate limit. The moved route is dropped from the old target here
+	// before it is added to the new target below; if the old target is busy or
+	// in cooldown we requeue without touching the new target, so the route is
+	// never briefly present on both.
 	if previousTarget, ok := resourceManifest.Annotations[lastTargetAnnotation]; ok && previousTarget != target {
 		logger.Info("Target changed, also rebuilding previous target",
 			"name", resourceManifest.Name,
 			"previousTarget", previousTarget,
 			"newTarget", target)
-		// Rebuild the previous target synchronously (not coalesced): the moved
-		// route must be dropped from the old target's ConfigMaps before we add
-		// it to the new target below, otherwise it could briefly appear on both.
-		// Target changes are rare, so this does not affect the resync-storm
-		// memory protection the coalescing provides for the current target.
-		if err := r.rebuildConfigMapsForTarget(ctx, previousTarget); err != nil {
+		requeueAfter, err := r.rebuildTarget(ctx, previousTarget, eventType == watch.Deleted)
+		if err != nil {
 			return ctrl.Result{}, nil, nil, fmt.Errorf("failed to rebuild ConfigMaps for previous target %s: %w", previousTarget, err)
 		}
-		r.markRebuilt(previousTarget, time.Now())
+		if requeueAfter > 0 {
+			return ctrl.Result{RequeueAfter: requeueAfter}, nil, nil, nil
+		}
 	}
 
-	// Rebuild ConfigMaps for the current target (single-flight coalesced so a
-	// resync burst over many routes sharing this target cannot run several full
-	// rebuilds concurrently and multiply operator memory).
-	performed, err := r.coalescedRebuildForTarget(ctx, target)
+	// Rebuild ConfigMaps for the current target. rebuildTarget bounds memory
+	// (one rebuild per target at a time) and rate-limits via the cooldown; a
+	// non-zero wait means the rebuild was deferred (busy or in cooldown), so we
+	// requeue without marking the resource synced — the change is captured by a
+	// later reconcile's rebuild, which re-lists the full current route set.
+	requeueAfter, err := r.rebuildTarget(ctx, target, eventType == watch.Deleted)
 	if err != nil {
 		return ctrl.Result{}, nil, nil, err
 	}
-	if !performed {
-		// Another reconcile owns this target's rebuild and will capture our
-		// change on its trailing pass. Requeue instead of falling through to the
-		// status update, so ObservedGeneration/ConfigMapSynced are only set once
-		// a rebuild this reconcile completes — same contract as the throttled
-		// path above.
-		requeue := r.effectiveRebuildCooldown()
-		if requeue <= 0 {
-			requeue = time.Second
-		}
-		return ctrl.Result{RequeueAfter: requeue}, nil, nil, nil
+	if requeueAfter > 0 {
+		logger.V(1).Info("target rebuild deferred, requeueing", "target", target, "wait", requeueAfter.String())
+		return ctrl.Result{RequeueAfter: requeueAfter}, nil, nil, nil
 	}
 
 	// Reconcile catch-all / mirror / CORS EnvoyFilters when any axis is
