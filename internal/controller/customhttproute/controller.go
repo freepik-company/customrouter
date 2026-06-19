@@ -173,6 +173,7 @@ func (r *CustomHTTPRouteReconciler) finishOrContinueRebuild(target string) bool 
 		return true
 	}
 	delete(r.rebuildInProgress, target)
+	delete(r.rebuildPending, target)
 	return false
 }
 
@@ -215,10 +216,15 @@ func (r *CustomHTTPRouteReconciler) coalescedRebuildForTarget(ctx context.Contex
 // partitionHashes from growing without bound as targets are created and
 // deleted over the lifetime of the controller.
 func (r *CustomHTTPRouteReconciler) clearTargetState(target string) {
+	// NOTE: do NOT touch rebuildInProgress/rebuildPending here. clearTargetState
+	// is called from inside rebuildConfigMapsForTarget (the empty-target path),
+	// which itself runs while coalescedRebuildForTarget holds single-flight
+	// ownership. Clearing the ownership flags mid-rebuild would let a concurrent
+	// reconcile start a parallel rebuild, defeating coalescing. Those maps are
+	// self-cleaning: finishOrContinueRebuild / releaseRebuild drop their entries
+	// when the rebuild loop ends.
 	r.rebuildMu.Lock()
 	delete(r.lastRebuildAt, target)
-	delete(r.rebuildInProgress, target)
-	delete(r.rebuildPending, target)
 	r.rebuildMu.Unlock()
 
 	// Use parsePartitionName to identify entries that genuinely belong to

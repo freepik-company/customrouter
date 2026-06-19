@@ -69,6 +69,38 @@ func TestRebuildSingleFlightPrimitives(t *testing.T) {
 	}
 }
 
+// TestClearTargetStateKeepsSingleFlightOwnership is the regression for the
+// empty-target path: clearTargetState runs inside rebuildConfigMapsForTarget
+// while coalescedRebuildForTarget still holds ownership, so it must NOT release
+// the single-flight flags (doing so would let a concurrent reconcile start a
+// parallel rebuild).
+func TestClearTargetStateKeepsSingleFlightOwnership(t *testing.T) {
+	r := &CustomHTTPRouteReconciler{}
+
+	if !r.tryBeginRebuild("t") {
+		t.Fatal("setup: should take ownership")
+	}
+	// Simulate the empty-target cleanup running mid-rebuild.
+	r.clearTargetState("t")
+	// Ownership must still be held: a concurrent reconcile must not be able to
+	// begin a parallel rebuild (this call returns false and records pending).
+	if r.tryBeginRebuild("t") {
+		t.Fatal("clearTargetState must not release single-flight ownership mid-rebuild")
+	}
+	// That blocked attempt set pending, so the owner loops once...
+	if !r.finishOrContinueRebuild("t") {
+		t.Fatal("expected pending (from the blocked begin) → continue")
+	}
+	// ...then releases cleanly.
+	if r.finishOrContinueRebuild("t") {
+		t.Fatal("expected no pending → release")
+	}
+	if !r.tryBeginRebuild("t") {
+		t.Fatal("after the owner finished, ownership should be available again")
+	}
+	r.releaseRebuild("t")
+}
+
 // TestCoalescedRebuildNoConcurrentRebuilds runs many concurrent
 // coalescedRebuildForTarget calls for the same target and asserts the actual
 // rebuild work never runs concurrently (which would multiply operator memory).
