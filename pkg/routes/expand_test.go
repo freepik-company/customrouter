@@ -1622,6 +1622,134 @@ func TestPreservePrefixRedirect(t *testing.T) {
 	}
 }
 
+func TestPreservePrefixRedirectWithReplacePrefixMatch(t *testing.T) {
+	cr := &v1alpha1.CustomHTTPRoute{
+		Spec: v1alpha1.CustomHTTPRouteSpec{
+			TargetRef: v1alpha1.TargetRef{Name: "default"},
+			Hostnames: []string{"example.com"},
+			PathPrefixes: &v1alpha1.PathPrefixes{
+				Values: []string{"es", "fr"},
+				Policy: v1alpha1.PathPrefixPolicyOptional,
+			},
+			Rules: []v1alpha1.Rule{
+				{
+					Matches: []v1alpha1.PathMatch{
+						{Path: "/old-blog", Type: v1alpha1.MatchTypePathPrefix},
+					},
+					Actions: []v1alpha1.Action{
+						{
+							Type: v1alpha1.ActionTypeRedirect,
+							Redirect: &v1alpha1.RedirectConfig{
+								Path:               "/new-blog",
+								StatusCode:         302,
+								PreservePrefix:     boolPtr(true),
+								ReplacePrefixMatch: boolPtr(true),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := ExpandRoutes(cr, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	routes := result["example.com"]
+
+	// 2 prefixed + 1 unprefixed = 3
+	if len(routes) != 3 {
+		t.Fatalf("expected 3 routes, got %d", len(routes))
+	}
+
+	expected := map[string]string{
+		"/old-blog":    "/new-blog",
+		"/es/old-blog": "/es/new-blog",
+		"/fr/old-blog": "/fr/new-blog",
+	}
+
+	for _, r := range routes {
+		wantRedirect, ok := expected[r.Path]
+		if !ok {
+			t.Errorf("unexpected route path: %s", r.Path)
+			continue
+		}
+		action := r.Actions[0]
+		if action.RedirectPath != wantRedirect {
+			t.Errorf("path %s: expected redirect %q, got %q",
+				r.Path, wantRedirect, action.RedirectPath)
+		}
+		if action.RedirectReplacePrefixMatch == nil || !*action.RedirectReplacePrefixMatch {
+			t.Errorf("path %s: expected RedirectReplacePrefixMatch=true, got %v",
+				r.Path, action.RedirectReplacePrefixMatch)
+		}
+	}
+}
+
+func TestPreservePrefixRedirectWithReplacePrefixMatchFalse(t *testing.T) {
+	cr := &v1alpha1.CustomHTTPRoute{
+		Spec: v1alpha1.CustomHTTPRouteSpec{
+			TargetRef: v1alpha1.TargetRef{Name: "default"},
+			Hostnames: []string{"example.com"},
+			PathPrefixes: &v1alpha1.PathPrefixes{
+				Values: []string{"es"},
+				Policy: v1alpha1.PathPrefixPolicyOptional,
+			},
+			Rules: []v1alpha1.Rule{
+				{
+					Matches: []v1alpha1.PathMatch{
+						{Path: "/old-blog", Type: v1alpha1.MatchTypePathPrefix},
+					},
+					Actions: []v1alpha1.Action{
+						{
+							Type: v1alpha1.ActionTypeRedirect,
+							Redirect: &v1alpha1.RedirectConfig{
+								Path:               "/new-blog",
+								StatusCode:         302,
+								PreservePrefix:     boolPtr(true),
+								ReplacePrefixMatch: boolPtr(false),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := ExpandRoutes(cr, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	routes := result["example.com"]
+
+	if len(routes) != 2 {
+		t.Fatalf("expected 2 routes, got %d", len(routes))
+	}
+
+	expected := map[string]string{
+		"/old-blog":    "/new-blog",
+		"/es/old-blog": "/es/new-blog",
+	}
+
+	for _, r := range routes {
+		wantRedirect, ok := expected[r.Path]
+		if !ok {
+			t.Errorf("unexpected route path: %s", r.Path)
+			continue
+		}
+		action := r.Actions[0]
+		if action.RedirectPath != wantRedirect {
+			t.Errorf("path %s: expected redirect %q, got %q",
+				r.Path, wantRedirect, action.RedirectPath)
+		}
+		if action.RedirectReplacePrefixMatch == nil || *action.RedirectReplacePrefixMatch {
+			t.Errorf("path %s: expected RedirectReplacePrefixMatch=false, got %v",
+				r.Path, action.RedirectReplacePrefixMatch)
+		}
+	}
+}
+
 func TestPreservePrefixFalseBackwardCompat(t *testing.T) {
 	cr := &v1alpha1.CustomHTTPRoute{
 		Spec: v1alpha1.CustomHTTPRouteSpec{
