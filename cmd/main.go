@@ -20,6 +20,8 @@ import (
 	"context"
 	"crypto/tls"
 	"flag"
+	"net/http"
+	_ "net/http/pprof" // registers /debug/pprof/* on http.DefaultServeMux when --pprof-bind-address is set
 	"os"
 	"time"
 
@@ -74,6 +76,7 @@ func main() {
 	var webhookConfigName string
 	var webhookServiceName string
 	var webhookPort int
+	var pprofAddr string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -107,11 +110,34 @@ func main() {
 	flag.StringVar(&webhookServiceName, "webhook-service-name", "",
 		"Name of the webhook Service for TLS certificate SAN (auto-cert mode)")
 	flag.IntVar(&webhookPort, "webhook-port", 9443, "Port for the webhook server to listen on")
+	flag.StringVar(&pprofAddr, "pprof-bind-address", "0",
+		"The address the pprof endpoint binds to (e.g. 127.0.0.1:6060). "+
+			"Use 0 to disable. Bind to localhost only and access via kubectl port-forward; "+
+			"never expose pprof publicly.")
 	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	// pprof: started early so the heap is observable even if the manager
+	// itself crashes during informer sync. The blank import of net/http/pprof
+	// registers handlers on http.DefaultServeMux, which this server uses
+	// because Handler is nil. Bind to localhost in production and reach it
+	// via `kubectl port-forward`; exposing pprof publicly is a DoS + info
+	// leak risk.
+	if pprofAddr != "" && pprofAddr != "0" {
+		setupLog.Info("starting pprof HTTP server", "address", pprofAddr)
+		pprofServer := &http.Server{
+			Addr:              pprofAddr,
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		go func() {
+			if err := pprofServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				setupLog.Error(err, "pprof HTTP server terminated")
+			}
+		}()
+	}
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
