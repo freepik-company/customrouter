@@ -60,6 +60,16 @@ flowchart LR
 
 ## Upgrade notes
 
+### 0.7.5 → 0.7.6
+
+- Chart: the extproc HPA default `maxReplicas` goes from 10 to 20. Only
+  affects installs that enable the HPA without setting `maxReplicas`.
+- Chart: new optional `externalProcessors.<name>.lifecycle` and
+  `externalProcessors.<name>.terminationGracePeriodSeconds`. A `preStop` sleep
+  keeps the extproc serving until the gateway drops its endpoint, avoiding the
+  burst of 500s a fail-closed ext_proc produces on every scale-down. Empty by
+  default: no change unless set.
+
 ### 0.7.4 → 0.7.5
 
 - Bulk deletion: when many CustomHTTPRoutes sharing a target are deleted
