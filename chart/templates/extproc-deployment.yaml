@@ -40,6 +40,9 @@ spec:
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with $config.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ . }}
+      {{- end }}
       containers:
         - name: external-processor
           image: "{{ $config.image.repository }}:{{ $config.image.tag | default (printf "v%s" $.Chart.AppVersion) }}"
@@ -67,6 +70,10 @@ spec:
           {{- end }}
           {{- with $config.readinessProbe }}
           readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $config.lifecycle }}
+          lifecycle:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           {{- with $config.resources }}

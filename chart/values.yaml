@@ -324,6 +324,19 @@ externalProcessors:
       initialDelaySeconds: 5
       periodSeconds: 5
 
+    # -- Container lifecycle hooks. The gRPC server stops listening as soon as
+    # it gets SIGTERM, while the gateway's Envoy keeps the endpoint until EDS
+    # converges; with a fail-closed ext_proc that window becomes 500s. A
+    # preStop sleep keeps the pod serving until the endpoint is gone, e.g.:
+    #   preStop:
+    #     sleep:
+    #       seconds: 15
+    lifecycle: {}
+
+    # -- Pod terminationGracePeriodSeconds (Kubernetes default 30 if unset).
+    # Must cover the preStop sleep plus the gRPC GracefulStop drain.
+    terminationGracePeriodSeconds: null
+
     # -- Pod Disruption Budget configuration
     pdb:
       # -- Enable PDB
