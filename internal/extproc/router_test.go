@@ -311,6 +311,56 @@ func TestBuildForwardResponse_OriginalPathHeader(t *testing.T) {
 	}
 }
 
+// TestBuildForwardResponse_InternalHeadersOverwrite locks in that the ExtProc
+// sets its internal routing headers with OVERWRITE_IF_EXISTS_OR_ADD. If this
+// regresses to the default APPEND, a client-supplied x-customrouter-cluster
+// survives and selects the upstream cluster itself (anonymous cross-cluster
+// routing / SSRF to any internal service, incl. the Envoy admin interface).
+func TestBuildForwardResponse_InternalHeadersOverwrite(t *testing.T) {
+	logger := zap.NewNop()
+	p := NewProcessor(nil, logger, false)
+
+	route := &routes.Route{
+		Path:    "/",
+		Type:    routes.RouteTypePrefix,
+		Backend: "backend.ns.svc.cluster.local:80",
+	}
+	vars := &requestVars{path: "/ready", host: "example.com", pathSegments: splitPath("/ready")}
+	reqCtx := &requestContext{authority: "example.com"}
+
+	resp, _, err := p.buildForwardResponse(route, vars, reqCtx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	wantValues := map[string]string{
+		"x-customrouter-cluster":      "outbound|80||backend.ns.svc.cluster.local",
+		"x-original-authority":        "example.com",
+		"x-customrouter-matched-path": "/",
+		"x-customrouter-matched-type": string(routes.RouteTypePrefix),
+	}
+	seen := map[string]bool{}
+	for _, h := range resp.GetRequestHeaders().GetResponse().GetHeaderMutation().GetSetHeaders() {
+		key := h.GetHeader().GetKey()
+		want, tracked := wantValues[key]
+		if !tracked {
+			continue
+		}
+		seen[key] = true
+		if h.GetAppendAction() != corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD {
+			t.Errorf("%s: expected OVERWRITE_IF_EXISTS_OR_ADD, got %v", key, h.GetAppendAction())
+		}
+		if got := string(h.GetHeader().GetRawValue()); got != want {
+			t.Errorf("%s = %q, want %q", key, got, want)
+		}
+	}
+	for key := range wantValues {
+		if !seen[key] {
+			t.Errorf("internal header %q was not set on the forward response", key)
+		}
+	}
+}
+
 func TestProcessResponseHeaders(t *testing.T) {
 	logger := zap.NewNop()
 	p := NewProcessor(nil, logger, false)
