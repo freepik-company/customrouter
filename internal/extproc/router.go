@@ -275,30 +275,40 @@ func (p *Processor) buildForwardResponse(route *routes.Route, vars *requestVars,
 	host, port := route.ParseBackend()
 	clusterName := fmt.Sprintf("outbound|%s||%s", port, host)
 
+	// These are internal, trusted routing headers. x-customrouter-cluster in
+	// particular feeds Envoy's cluster_header route action, so the ExtProc must be
+	// its sole authority. OVERWRITE_IF_EXISTS_OR_ADD replaces any value already on
+	// the request: without it the default is APPEND_IF_EXISTS_OR_ADD, which lets a
+	// client-supplied x-customrouter-cluster survive as the first value and pick
+	// the upstream cluster itself (anonymous cross-cluster routing).
 	setHeaders := []*corev3.HeaderValueOption{
 		{
 			Header: &corev3.HeaderValue{
 				Key:      "x-customrouter-cluster",
 				RawValue: []byte(clusterName),
 			},
+			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 		},
 		{
 			Header: &corev3.HeaderValue{
 				Key:      "x-original-authority",
 				RawValue: []byte(reqCtx.authority),
 			},
+			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 		},
 		{
 			Header: &corev3.HeaderValue{
 				Key:      "x-customrouter-matched-path",
 				RawValue: []byte(route.Path),
 			},
+			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 		},
 		{
 			Header: &corev3.HeaderValue{
 				Key:      "x-customrouter-matched-type",
 				RawValue: []byte(route.Type),
 			},
+			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 		},
 	}
 
