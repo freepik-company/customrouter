@@ -168,7 +168,7 @@ func (r *ExternalProcessorAttachmentReconciler) findEPAsWithVirtualHosts(ctx con
 	if err := r.List(ctx, epaList); err != nil {
 		return nil
 	}
-	var requests []reconcile.Request
+	requests := make([]reconcile.Request, 0, len(epaList.Items))
 	for i := range epaList.Items {
 		epa := &epaList.Items[i]
 		if epa.Spec.VirtualHosts == nil || epa.Spec.VirtualHosts.Mode != crv1alpha1.VirtualHostsModeAuto {
