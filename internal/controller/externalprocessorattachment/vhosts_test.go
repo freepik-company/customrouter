@@ -21,6 +21,7 @@ import (
 	"reflect"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -40,6 +41,9 @@ func vhostScheme(t *testing.T) *runtime.Scheme {
 	scheme := runtime.NewScheme()
 	if err := crv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("AddToScheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("corev1 AddToScheme: %v", err)
 	}
 	if err := gatewayv1.Install(scheme); err != nil {
 		t.Fatalf("gateway Install: %v", err)
@@ -114,14 +118,40 @@ func TestReconcile_VirtualHosts_Auto(t *testing.T) {
 		Mode:             crv1alpha1.VirtualHostsModeAuto,
 		ExcludeHostnames: []string{"manual.example.com"},
 	})
-	httpRoute := &gatewayv1.HTTPRoute{
+	gwNamespace := gatewayv1.Namespace("istio")
+	addressType := gatewayv1.HostnameAddressType
+	gw := &gatewayv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "stable", Namespace: "istio"},
+		Spec: gatewayv1.GatewaySpec{
+			GatewayClassName: "istio",
+			Addresses:        []gatewayv1.GatewaySpecAddress{{Type: &addressType, Value: "gw.istio.svc.cluster.local"}},
+			Listeners:        []gatewayv1.Listener{{Name: "proxy", Port: 80, Protocol: gatewayv1.HTTPProtocolType}},
+		},
+	}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "istio"},
+		Spec:       corev1.ServiceSpec{Selector: map[string]string{"istio": "gateway"}},
+	}
+	// Owned by this EPA's gateway: auth.example.com already has a virtual host.
+	ownRoute := &gatewayv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{Name: "console", Namespace: "keycloak"},
-		Spec:       gatewayv1.HTTPRouteSpec{Hostnames: []gatewayv1.Hostname{"auth.example.com"}},
+		Spec: gatewayv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{{Name: "stable", Namespace: &gwNamespace}}},
+			Hostnames:       []gatewayv1.Hostname{"auth.example.com"},
+		},
+	}
+	// Another gateway's HTTPRoute must not take id.example.com away.
+	foreignRoute := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "elsewhere", Namespace: "app"},
+		Spec: gatewayv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{{Name: "internal", Namespace: &gwNamespace}}},
+			Hostnames:       []gatewayv1.Hostname{"id.example.com"},
+		},
 	}
 	cl, got := reconcileEPA(t, epa,
 		testRoute("oidc", "id.example.com", "auth.example.com"),
 		testRoute("other", "id.example.com", "manual.example.com"),
-		httpRoute,
+		gw, svc, ownRoute, foreignRoute,
 	)
 
 	if !vhostsFilterExists(t, cl, epa) {

@@ -23,7 +23,6 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/freepik-company/customrouter/api/v1alpha1"
 )
@@ -76,7 +75,8 @@ func coveredBy(patterns []string, hostname string) bool {
 
 // PlanVirtualHosts decides, for every hostname declared by a live CustomHTTPRoute,
 // whether the attachment gives it a virtual host. A hostname is skipped when another
-// owner already has its domain: a catchAllRoute hostname, an HTTPRoute (whose virtual
+// owner already has its domain: a catchAllRoute hostname, an HTTPRoute of this
+// attachment's gateway (httpRouteHostnames, see ClaimedHTTPRouteHostnames; its virtual
 // host already carries the dynamic route of the "-routes" EnvoyFilter) or the explicit
 // exclusion list. Two virtual hosts with the same domain would invalidate the gateway's
 // route configuration, so the plan errs on the side of skipping.
@@ -84,21 +84,13 @@ func PlanVirtualHosts(
 	epa *v1alpha1.ExternalProcessorAttachment,
 	routeList *v1alpha1.CustomHTTPRouteList,
 	catchAllHostnames []string,
-	httpRouteList *gatewayv1.HTTPRouteList,
+	httpRouteHostnames []string,
 ) VirtualHostsPlan {
 	plan := VirtualHostsPlan{Skipped: map[string]string{}}
 	if !VirtualHostsEnabled(epa) || routeList == nil {
 		return plan
 	}
 
-	var httpRouteHostnames []string
-	if httpRouteList != nil {
-		for i := range httpRouteList.Items {
-			for _, h := range httpRouteList.Items[i].Spec.Hostnames {
-				httpRouteHostnames = append(httpRouteHostnames, string(h))
-			}
-		}
-	}
 	excluded := epa.Spec.VirtualHosts.ExcludeHostnames
 
 	seen := map[string]struct{}{}

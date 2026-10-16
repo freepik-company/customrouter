@@ -22,7 +22,6 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/freepik-company/customrouter/api/v1alpha1"
 )
@@ -76,11 +75,9 @@ func TestPlanVirtualHosts_DedupesAndSkipsOtherOwners(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "gone", Namespace: "app", DeletionTimestamp: &deleting, Finalizers: []string{"f"}},
 		Spec:       v1alpha1.CustomHTTPRouteSpec{Hostnames: []string{"gone.example.com"}},
 	})
-	httpRoutes := &gatewayv1.HTTPRouteList{Items: []gatewayv1.HTTPRoute{{
-		Spec: gatewayv1.HTTPRouteSpec{Hostnames: []gatewayv1.Hostname{"console.example.com", "*.wild.example.com"}},
-	}}}
+	claimed := []string{"console.example.com", "*.wild.example.com"}
 
-	plan := PlanVirtualHosts(epa, routes, []string{"catch.example.com"}, httpRoutes)
+	plan := PlanVirtualHosts(epa, routes, []string{"catch.example.com"}, claimed)
 
 	if want := []string{"auth.example.com", "id.example.com"}; !reflect.DeepEqual(plan.Managed, want) {
 		t.Fatalf("managed = %v, want %v", plan.Managed, want)

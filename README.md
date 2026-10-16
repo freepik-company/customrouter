@@ -557,6 +557,7 @@ Connects an external processor to Istio gateway pods by generating EnvoyFilters.
 | `virtualHosts.mode` | `Disabled` (default) or `Auto`: generate a virtual host for each CustomHTTPRoute hostname that has no other owner |
 | `virtualHosts.defaultStatusCode` | Direct response for requests no CustomHTTPRoute matches on a managed hostname (default: 404) |
 | `virtualHosts.excludeHostnames` | Hostnames (exact or `*.` wildcard) that must never get a virtual host |
+| `virtualHosts.gateways` | Gateways (`namespace`, `name`) whose HTTPRoutes own hostnames on this attachment's workload; replaces the automatic resolution |
 
 ### Status Conditions
 
@@ -621,8 +622,17 @@ configuration, so a hostname is skipped (and reported in the `VirtualHostsProgra
 condition) when:
 
 - a `catchAllRoute` covers it (exact or `*.` wildcard) — reason `CatchAllRoute`;
-- an HTTPRoute declares it (exact or `*.` wildcard): its virtual host already has the
-  dynamic route — reason `HTTPRoute`;
+- an HTTPRoute attached to this attachment's gateway declares it (exact or `*.`
+  wildcard): its virtual host already has the dynamic route — reason `HTTPRoute`.
+  HTTPRoutes of other gateways do not count. A Gateway belongs to the attachment when
+  the Service behind it (its `Hostname` address `<svc>.<ns>.svc[.cluster.local]`, or
+  Istio's default `<gateway>-<gatewayClassName>`) selects pods matching
+  `gatewayRef.selector`; set `virtualHosts.gateways` to name them explicitly instead.
+  A Gateway whose Service cannot be found counts as this attachment's: a wrongly
+  skipped hostname costs a 404, a duplicate domain breaks the whole gateway.
+  An HTTPRoute without `hostnames` claims the hostname of the listener it attaches to;
+  on a listener without hostname it claims none (Istio serves it from a `*` virtual
+  host, and Envoy prefers an exact domain over `*`, so they do not collide);
 - it is in `excludeHostnames` — reason `Excluded`.
 
 The operator cannot see hand-written `VIRTUAL_HOST` EnvoyFilters. **Migrating** a

@@ -246,6 +246,31 @@ spec:
                       type: string
                     type: array
                     x-kubernetes-list-type: set
+                  gateways:
+                    description: |-
+                      gateways are the Gateway API Gateways whose HTTPRoutes own hostnames on this
+                      attachment's gateway workload. When empty they are resolved automatically: a
+                      Gateway belongs to this attachment when the Service behind it (its Hostname
+                      address "<svc>.<ns>.svc[.cluster.local]", or Istio's default
+                      "<gateway>-<gatewayClassName>") selects pods matching gatewayRef.selector.
+                      When set, it replaces the automatic resolution.
+                    items:
+                      description: GatewayReference names a Gateway API Gateway.
+                      properties:
+                        name:
+                          description: name of the Gateway.
+                          minLength: 1
+                          type: string
+                        namespace:
+                          description: namespace of the Gateway.
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      - namespace
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
                   mode:
                     default: Disabled
                     description: 'mode is Disabled (default: nothing is generated)

@@ -45,6 +45,8 @@ type ExternalProcessorAttachmentReconciler struct {
 // +kubebuilder:rbac:groups=customrouter.freepik.com,resources=customhttproutes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -133,6 +135,7 @@ func (r *ExternalProcessorAttachmentReconciler) SetupWithManager(mgr ctrl.Manage
 		For(&crv1alpha1.ExternalProcessorAttachment{}).
 		Watches(&gatewayv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(r.findEPAsForHTTPRoute)).
 		Watches(&crv1alpha1.CustomHTTPRoute{}, handler.EnqueueRequestsFromMapFunc(r.findEPAsWithVirtualHosts)).
+		Watches(&gatewayv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(r.findEPAsWithVirtualHosts)).
 		Named("externalprocessorattachment").
 		Complete(r)
 }
@@ -160,7 +163,9 @@ func (r *ExternalProcessorAttachmentReconciler) findEPAsForHTTPRoute(ctx context
 }
 
 // findEPAsWithVirtualHosts enqueues the EPAs in virtualHosts mode Auto when a
-// CustomHTTPRoute changes: its hostnames decide which virtual hosts they generate.
+// CustomHTTPRoute or a Gateway changes: route hostnames decide which virtual hosts they
+// generate, and Gateways (listeners, addresses) which HTTPRoutes already own a hostname.
+// HTTPRoute changes already enqueue every EPA (findEPAsForHTTPRoute).
 // EPAs without the feature do not depend on CustomHTTPRoutes here (their catch-all,
 // mirror and CORS filters are also driven by the CustomHTTPRoute controller).
 func (r *ExternalProcessorAttachmentReconciler) findEPAsWithVirtualHosts(ctx context.Context, _ client.Object) []reconcile.Request {

@@ -161,8 +161,9 @@ const (
 // A hostname is never given a virtual host when something else already owns its domain
 // (two virtual hosts with the same domain invalidate the gateway's route configuration):
 //   - it is covered by a catchAllRoute (exact or "*." wildcard),
-//   - an HTTPRoute declares it (exact or "*." wildcard): its virtual host already gets the
-//     dynamic route from the "<attachment>-routes" EnvoyFilter,
+//   - an HTTPRoute attached to this attachment's gateway declares it (exact or "*."
+//     wildcard): its virtual host already gets the dynamic route from the
+//     "<attachment>-routes" EnvoyFilter. HTTPRoutes of other gateways do not count,
 //   - it is listed in excludeHostnames (owners the operator cannot see, such as a
 //     hand-written VIRTUAL_HOST EnvoyFilter).
 type VirtualHostsConfig struct {
@@ -184,6 +185,28 @@ type VirtualHostsConfig struct {
 	// +optional
 	// +listType=set
 	ExcludeHostnames []string `json:"excludeHostnames,omitempty"`
+	// gateways are the Gateway API Gateways whose HTTPRoutes own hostnames on this
+	// attachment's gateway workload. When empty they are resolved automatically: a
+	// Gateway belongs to this attachment when the Service behind it (its Hostname
+	// address "<svc>.<ns>.svc[.cluster.local]", or Istio's default
+	// "<gateway>-<gatewayClassName>") selects pods matching gatewayRef.selector.
+	// When set, it replaces the automatic resolution.
+	// +optional
+	// +listType=atomic
+	Gateways []GatewayReference `json:"gateways,omitempty"`
+}
+
+// GatewayReference names a Gateway API Gateway.
+type GatewayReference struct {
+	// namespace of the Gateway.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	Namespace string `json:"namespace"`
+
+	// name of the Gateway.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
 }
 
 // ExternalProcessorAttachmentSpec defines the desired state of ExternalProcessorAttachment

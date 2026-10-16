@@ -20,6 +20,8 @@ import (
 	"context"
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -155,7 +157,20 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileVirtualHostsEnvoyFilter
 	catchAllHostnames []string,
 	httpRouteList *gatewayv1.HTTPRouteList,
 ) error {
-	plan := ef.PlanVirtualHosts(attachment, routeList, catchAllHostnames, httpRouteList)
+	var claimed []string
+	if ef.VirtualHostsEnabled(attachment) {
+		gatewayList := &gatewayv1.GatewayList{}
+		if err := r.List(ctx, gatewayList); err != nil {
+			return fmt.Errorf("failed to list Gateways: %w", err)
+		}
+		serviceList := &corev1.ServiceList{}
+		if err := r.List(ctx, serviceList); err != nil {
+			return fmt.Errorf("failed to list Services: %w", err)
+		}
+		owned := ef.OwnedGateways(attachment, gatewayList, serviceList)
+		claimed = ef.ClaimedHTTPRouteHostnames(httpRouteList, owned)
+	}
+	plan := ef.PlanVirtualHosts(attachment, routeList, catchAllHostnames, claimed)
 	attachment.Status.ManagedVirtualHosts = plan.Managed
 	r.updateConditionVirtualHosts(attachment, plan)
 
