@@ -111,7 +111,43 @@ func (p *Processor) Process(stream extprocv3.ExternalProcessor_ProcessServer) er
 		if p.accessLogEnabled && reqCtx != nil {
 			p.logAccess(reqCtx)
 		}
+
+		// Close our side as soon as there is nothing left to do. Envoy keeps
+		// the stream open for the whole HTTP request otherwise, so a WebSocket
+		// or SSE connection stays pinned to this pod for hours and is reset
+		// when the pod shuts down. A clean close is treated by Envoy as
+		// "processing complete" and the request carries on without us.
+		if streamDone(req, streamCtx) {
+			return nil
+		}
 	}
+}
+
+// streamDone reports whether the ext_proc stream has nothing left to process
+// after answering req. The response phase is only needed when the matched
+// route mutates response headers.
+func streamDone(req *extprocv3.ProcessingRequest, streamCtx *streamContext) bool {
+	switch req.Request.(type) {
+	case *extprocv3.ProcessingRequest_RequestHeaders:
+		return !hasResponseHeaderActions(streamCtx.matchedRoute)
+	case *extprocv3.ProcessingRequest_ResponseHeaders:
+		return true
+	default:
+		return false
+	}
+}
+
+func hasResponseHeaderActions(route *routes.Route) bool {
+	if route == nil {
+		return false
+	}
+	for _, action := range route.Actions {
+		switch action.Type {
+		case routes.ActionTypeResponseHeaderSet, routes.ActionTypeResponseHeaderAdd, routes.ActionTypeResponseHeaderRemove:
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Processor) logAccess(ctx *requestContext) {
