@@ -19,6 +19,8 @@ package externalprocessorattachment
 import (
 	"context"
 
+	corev1 "k8s.io/api/core/v1"
+
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -31,6 +33,7 @@ import (
 
 	crv1alpha1 "github.com/freepik-company/customrouter/api/v1alpha1"
 	"github.com/freepik-company/customrouter/internal/controller"
+	ef "github.com/freepik-company/customrouter/internal/controller/envoyfilter"
 )
 
 // ExternalProcessorAttachmentReconciler reconciles a ExternalProcessorAttachment object
@@ -45,6 +48,8 @@ type ExternalProcessorAttachmentReconciler struct {
 // +kubebuilder:rbac:groups=customrouter.freepik.com,resources=customhttproutes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -132,6 +137,9 @@ func (r *ExternalProcessorAttachmentReconciler) SetupWithManager(mgr ctrl.Manage
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&crv1alpha1.ExternalProcessorAttachment{}).
 		Watches(&gatewayv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(r.findEPAsForHTTPRoute)).
+		Watches(&crv1alpha1.CustomHTTPRoute{}, handler.EnqueueRequestsFromMapFunc(r.findEPAsWithVirtualHosts)).
+		Watches(&gatewayv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(r.findEPAsWithVirtualHosts)).
+		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(r.findEPAsForGatewayService)).
 		Named("externalprocessorattachment").
 		Complete(r)
 }
@@ -156,4 +164,43 @@ func (r *ExternalProcessorAttachmentReconciler) findEPAsForHTTPRoute(ctx context
 		})
 	}
 	return requests
+}
+
+// findEPAsWithVirtualHosts enqueues the EPAs in virtualHosts mode Auto when a
+// CustomHTTPRoute or a Gateway changes: route hostnames decide which virtual hosts they
+// generate, and Gateways (listeners, addresses) which HTTPRoutes already own a hostname.
+// HTTPRoute changes already enqueue every EPA (findEPAsForHTTPRoute).
+// EPAs without the feature do not depend on CustomHTTPRoutes here (their catch-all,
+// mirror and CORS filters are also driven by the CustomHTTPRoute controller).
+func (r *ExternalProcessorAttachmentReconciler) findEPAsWithVirtualHosts(ctx context.Context, _ client.Object) []reconcile.Request {
+	epaList := &crv1alpha1.ExternalProcessorAttachmentList{}
+	if err := r.List(ctx, epaList); err != nil {
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(epaList.Items))
+	for i := range epaList.Items {
+		epa := &epaList.Items[i]
+		if epa.Spec.VirtualHosts == nil || epa.Spec.VirtualHosts.Mode != crv1alpha1.VirtualHostsModeAuto {
+			continue
+		}
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: epa.Name, Namespace: epa.Namespace},
+		})
+	}
+	return requests
+}
+
+// findEPAsForGatewayService enqueues the EPAs in virtualHosts mode Auto when a Service
+// that may front a Gateway changes (one named by a Gateway address, or Istio's default
+// "<gateway>-<gatewayClassName>"): its selector decides whether that Gateway, and so its
+// HTTPRoutes' hostnames, belong to the EPA. Other Services are ignored.
+func (r *ExternalProcessorAttachmentReconciler) findEPAsForGatewayService(ctx context.Context, obj client.Object) []reconcile.Request {
+	gatewayList := &gatewayv1.GatewayList{}
+	if err := r.List(ctx, gatewayList); err != nil {
+		return nil
+	}
+	if !ef.IsGatewayService(gatewayList, types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}) {
+		return nil
+	}
+	return r.findEPAsWithVirtualHosts(ctx, obj)
 }

@@ -60,6 +60,13 @@ flowchart LR
 
 ## Upgrade notes
 
+### 0.7.7 → next
+
+- New optional `ExternalProcessorAttachment.spec.virtualHosts` (see
+  [Automatic virtual hosts](#automatic-virtual-hosts)). Off by default: nothing
+  changes until `mode: Auto` is set. Re-apply the CRDs (`chart/crds/`) before
+  upgrading the operator.
+
 ### 0.7.5 → 0.7.6
 
 - Chart: the extproc HPA default `maxReplicas` goes from 10 to 20. Only
@@ -547,6 +554,10 @@ Connects an external processor to Istio gateway pods by generating EnvoyFilters.
 | `externalProcessorRef.messageTimeout` | Message exchange timeout — valid duration string, e.g. `5s`, `500ms` (default: "5s") |
 | `catchAllRoute.hostnames` | Hostnames to generate catch-all routes for |
 | `catchAllRoute.backendRef` | Default backend for unmatched requests |
+| `virtualHosts.mode` | `Disabled` (default) or `Auto`: generate a virtual host for each CustomHTTPRoute hostname that has no other owner |
+| `virtualHosts.defaultStatusCode` | Direct response for requests no CustomHTTPRoute matches on a managed hostname (default: 404) |
+| `virtualHosts.excludeHostnames` | Hostnames (exact or `*.` wildcard) that must never get a virtual host |
+| `virtualHosts.gateways` | Gateways (`namespace`, `name`) whose HTTPRoutes own hostnames on this attachment's workload; replaces the automatic resolution |
 
 ### Status Conditions
 
@@ -558,6 +569,7 @@ Both CRDs report status via standard Kubernetes conditions. Each condition inclu
 | `CustomHTTPRoute` | `ConfigMapSynced` | Whether the ConfigMap was generated and synced |
 | `ExternalProcessorAttachment` | `Reconciled` | Whether the attachment was processed successfully |
 | `ExternalProcessorAttachment` | `EnvoyFilterSynced` | Whether the EnvoyFilters were generated and synced |
+| `ExternalProcessorAttachment` | `VirtualHostsProgrammed` | Only with `virtualHosts.mode: Auto`: how many virtual hosts are managed and which hostnames were skipped, and why (`status.managedVirtualHosts` lists them) |
 
 #### Catch-All Routes
 
@@ -581,6 +593,70 @@ When configured, the operator generates three EnvoyFilters:
 1. `<name>-extproc`: Inserts the ext_proc filter
 2. `<name>-routes`: Adds dynamic routing based on ext_proc headers
 3. `<name>-catchall`: Creates catch-all virtual hosts for the specified hostnames
+
+#### Automatic virtual hosts
+
+`<name>-routes` already injects the dynamic route into every virtual host of the
+gateway, so a CustomHTTPRoute works on any hostname an HTTPRoute (or a catch-all)
+serves. A hostname with **no** virtual host still gets Envoy's 404 (`NR`) before the
+external processor runs, and a catch-all is not always wanted there: everything the
+CustomHTTPRoutes do not match would go to its backend.
+
+With `virtualHosts.mode: Auto` the operator adds, in `<name>-vhosts`, one virtual host
+per hostname declared by a CustomHTTPRoute, with only the dynamic route and a direct
+response (`defaultStatusCode`, 404 by default) for everything else. An application
+then publishes a new hostname with its CustomHTTPRoute alone.
+
+```yaml
+spec:
+  virtualHosts:
+    mode: Auto
+    # Hosts served by a hand-written EnvoyFilter (or anything else the operator
+    # cannot see) until it is removed.
+    excludeHostnames:
+      - legacy.example.com
+```
+
+Two virtual hosts with the same domain invalidate the gateway's route
+configuration, so a hostname is skipped (and reported in the `VirtualHostsProgrammed`
+condition) when:
+
+- a `catchAllRoute` covers it (exact or `*.` wildcard) — reason `CatchAllRoute`;
+- an HTTPRoute attached to this attachment's gateway declares it (exact or `*.`
+  wildcard): its virtual host already has the dynamic route — reason `HTTPRoute`.
+  HTTPRoutes of other gateways do not count. A Gateway belongs to the attachment when
+  the Service behind it (its `Hostname` address `<svc>.<ns>.svc[.cluster.local]`, or
+  Istio's default `<gateway>-<gatewayClassName>`) selects pods matching
+  `gatewayRef.selector`; set `virtualHosts.gateways` to name them explicitly instead.
+  Gateways, HTTPRoutes and the Services that may front a Gateway are watched, so
+  ownership follows their changes. A Gateway whose Service cannot be found counts as this attachment's: a wrongly
+  skipped hostname costs a 404, a duplicate domain breaks the whole gateway.
+  An HTTPRoute with `hostnames` on a listener with a hostname claims their
+  intersection (Gateway API: the more specific one, so a route `*.example.com` on a
+  listener `foo.example.com` claims only `foo.example.com`); wildcards are suffix
+  matches over one or more labels, as in Gateway API and Envoy.
+  Only listeners an HTTPRoute can attach to count (protocol `HTTP`/`HTTPS` and, when
+  `allowedRoutes.kinds` is set, `HTTPRoute` among them).
+  An HTTPRoute without `hostnames` claims the hostname of the listener it attaches to;
+  on a listener without hostname it claims none (Istio serves it from a `*` virtual
+  host, and Envoy prefers an exact domain over `*`, so they do not collide);
+- it is in `excludeHostnames` — reason `Excluded`.
+
+While `mode: Auto` is set, the attachment controller is the only writer of both
+`<name>-catchall` and `<name>-vhosts` (the CustomHTTPRoute controller leaves that
+attachment's catch-all alone), and it writes them in an order that never has a domain
+in both: first it drops from `<name>-vhosts` what moves into the catch-all, then it
+writes `<name>-catchall`, then it adds to `<name>-vhosts` what came out of it.
+
+The operator cannot see hand-written `VIRTUAL_HOST` EnvoyFilters. **Migrating** a
+hostname from one to the automatic virtual host has to happen in the same rollout:
+set `mode: Auto` (or drop the hostname from `excludeHostnames`) and delete the
+hand-written EnvoyFilter together — not one before the other.
+
+Any CustomHTTPRoute can declare any hostname (namespaces do not own hostnames), so in
+`Auto` mode creating a CustomHTTPRoute for a hostname nobody serves yet makes the
+gateway answer for it. Restrict who can create CustomHTTPRoutes with RBAC, and keep
+in `excludeHostnames` anything that must not be claimed this way.
 
 ### Match Types
 

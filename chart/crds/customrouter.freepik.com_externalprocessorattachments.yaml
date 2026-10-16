@@ -224,6 +224,62 @@ spec:
                   Defaults to "30s" when not specified.
                 pattern: ^[0-9]+(s|ms|m|h)$
                 type: string
+              virtualHosts:
+                description: |-
+                  virtualHosts configures automatic virtual hosts for the hostnames declared by
+                  CustomHTTPRoutes. When not specified (or mode Disabled), none are generated.
+                properties:
+                  defaultStatusCode:
+                    default: 404
+                    description: |-
+                      defaultStatusCode is the status of the direct response for requests to a managed
+                      hostname that no CustomHTTPRoute matches. Defaults to 404.
+                    format: int32
+                    maximum: 599
+                    minimum: 200
+                    type: integer
+                  excludeHostnames:
+                    description: |-
+                      excludeHostnames are hostnames (exact or "*." wildcard) the operator must never
+                      give a virtual host, because another owner it cannot detect serves them.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
+                  gateways:
+                    description: |-
+                      gateways are the Gateway API Gateways whose HTTPRoutes own hostnames on this
+                      attachment's gateway workload. When empty they are resolved automatically: a
+                      Gateway belongs to this attachment when the Service behind it (its Hostname
+                      address "<svc>.<ns>.svc[.cluster.local]", or Istio's default
+                      "<gateway>-<gatewayClassName>") selects pods matching gatewayRef.selector.
+                      When set, it replaces the automatic resolution.
+                    items:
+                      description: GatewayReference names a Gateway API Gateway.
+                      properties:
+                        name:
+                          description: name of the Gateway.
+                          minLength: 1
+                          type: string
+                        namespace:
+                          description: namespace of the Gateway.
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      - namespace
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  mode:
+                    default: Disabled
+                    description: 'mode is Disabled (default: nothing is generated)
+                      or Auto.'
+                    enum:
+                    - Disabled
+                    - Auto
+                    type: string
+                type: object
             required:
             - externalProcessorRef
             - gatewayRef
@@ -292,6 +348,14 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              managedVirtualHosts:
+                description: |-
+                  managedVirtualHosts are the hostnames the operator currently gives a virtual host
+                  (virtualHosts mode Auto), sorted.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
               observedGeneration:
                 description: observedGeneration is the most recent generation observed
                   by the controller.

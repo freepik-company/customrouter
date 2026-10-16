@@ -17,16 +17,52 @@ limitations under the License.
 package externalprocessorattachment
 
 import (
+	"fmt"
+	"sort"
+	"strings"
+
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/freepik-company/customrouter/api/v1alpha1"
+	ef "github.com/freepik-company/customrouter/internal/controller/envoyfilter"
 )
 
 const (
 	// ConditionTypeReady indicates whether the EnvoyFilters were created successfully
 	ConditionTypeReady = "Ready"
+
+	// ConditionTypeVirtualHosts reports the automatic virtual hosts (spec.virtualHosts).
+	ConditionTypeVirtualHosts = "VirtualHostsProgrammed"
 )
+
+// updateConditionVirtualHosts records which CustomHTTPRoute hostnames got a virtual host
+// and which were skipped (and why), or removes the condition when the feature is off.
+func (r *ExternalProcessorAttachmentReconciler) updateConditionVirtualHosts(
+	attachment *v1alpha1.ExternalProcessorAttachment,
+	plan ef.VirtualHostsPlan,
+) {
+	if !ef.VirtualHostsEnabled(attachment) {
+		meta.RemoveStatusCondition(&attachment.Status.Conditions, ConditionTypeVirtualHosts)
+		return
+	}
+	skipped := make([]string, 0, len(plan.Skipped))
+	for hostname, reason := range plan.Skipped {
+		skipped = append(skipped, hostname+" ("+reason+")")
+	}
+	sort.Strings(skipped)
+	message := fmt.Sprintf("%d virtual hosts managed", len(plan.Managed))
+	if len(skipped) > 0 {
+		message += "; skipped: " + strings.Join(skipped, ", ")
+	}
+	meta.SetStatusCondition(&attachment.Status.Conditions, metav1.Condition{
+		Type:               ConditionTypeVirtualHosts,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: attachment.Generation,
+		Reason:             "VirtualHostsReconciled",
+		Message:            message,
+	})
+}
 
 // updateConditionReady sets the Ready condition to True
 func (r *ExternalProcessorAttachmentReconciler) updateConditionReady(attachment *v1alpha1.ExternalProcessorAttachment) {
