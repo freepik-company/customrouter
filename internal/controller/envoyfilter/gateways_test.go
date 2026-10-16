@@ -196,3 +196,28 @@ func TestIsGatewayService(t *testing.T) {
 		}
 	}
 }
+
+func TestClaimedHTTPRouteHostnames_OnlyHTTPRouteListeners(t *testing.T) {
+	tcp := listener("tcp", "tcp.example.com")
+	tcp.Protocol = gatewayv1.TCPProtocolType
+	tls := listener("tls", "tls.example.com")
+	tls.Protocol = gatewayv1.TLSProtocolType
+	grpcOnly := listener("grpc", "grpc.example.com")
+	grpcOnly.AllowedRoutes = &gatewayv1.AllowedRoutes{Kinds: []gatewayv1.RouteGroupKind{{Kind: "GRPCRoute"}}}
+	httpsAllowed := listener("https", "https.example.com")
+	httpsAllowed.Protocol = gatewayv1.HTTPSProtocolType
+	httpsAllowed.AllowedRoutes = &gatewayv1.AllowedRoutes{Kinds: []gatewayv1.RouteGroupKind{{Kind: "HTTPRoute"}}}
+
+	gw := gateway("stable", "", tcp, tls, grpcOnly, httpsAllowed)
+	owned := map[types.NamespacedName]*gatewayv1.Gateway{{Namespace: "istio", Name: "stable"}: &gw}
+	routes := &gatewayv1.HTTPRouteList{Items: []gatewayv1.HTTPRoute{
+		// No sectionName: only the HTTPS listener that allows HTTPRoute counts.
+		httpRoute("app", "all", nil, parent("istio", "stable", "")),
+		// sectionName to a TLS listener: attaches to nothing.
+		httpRoute("app", "tls", []string{"tls.example.com"}, parent("istio", "stable", "tls")),
+	}}
+	got := ClaimedHTTPRouteHostnames(routes, owned)
+	if want := []string{"https.example.com"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("claimed = %v, want %v", got, want)
+	}
+}

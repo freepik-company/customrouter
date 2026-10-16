@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -76,6 +77,22 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileEnvoyFilters(
 		}
 	}
 
+	plan, err := r.planVirtualHosts(ctx, attachment, routeList, catchAllHostnames, httpRouteList)
+	if err != nil {
+		return err
+	}
+
+	// Invariant: no domain is ever added both by "-catchall" and by "-vhosts", not
+	// even between two writes. The plan keeps them disjoint, and the writes go in
+	// this order: first drop from the live "-vhosts" what it must no longer serve
+	// (a hostname moving into the catch-all), then write "-catchall" (adding or
+	// dropping), and only then add the new "-vhosts" hostnames (a hostname coming
+	// out of the catch-all, already dropped from it). This controller is the only
+	// writer of both filters while virtual hosts are enabled.
+	if err := r.shrinkVirtualHosts(ctx, attachment, plan.Managed); err != nil {
+		return err
+	}
+
 	if len(mergedEntries) > 0 {
 		hostnamesWithHTTPRoute := ef.CollectHostnamesWithHTTPRoute(httpRouteList, catchAllHostnames)
 
@@ -96,8 +113,12 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileEnvoyFilters(
 		}
 	}
 
-	if err := r.reconcileVirtualHostsEnvoyFilter(ctx, attachment, routeList, catchAllHostnames, httpRouteList); err != nil {
+	if err := r.writeVirtualHosts(ctx, attachment, plan.Managed); err != nil {
 		return err
+	}
+	if ef.VirtualHostsEnabled(attachment) {
+		log.FromContext(ctx).Info("Virtual hosts EnvoyFilter reconciled",
+			"virtualHosts", len(plan.Managed), "skipped", len(plan.Skipped))
 	}
 
 	mirrorEntries := ef.CollectMirrorEntries(routeList)
@@ -148,24 +169,24 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileEnvoyFilters(
 	return nil
 }
 
-// reconcileVirtualHostsEnvoyFilter creates, updates or deletes the "-vhosts" EnvoyFilter
-// (spec.virtualHosts mode Auto) and records the managed hostnames in the status.
-func (r *ExternalProcessorAttachmentReconciler) reconcileVirtualHostsEnvoyFilter(
+// planVirtualHosts decides the automatic virtual hosts (spec.virtualHosts mode Auto)
+// and records them in the status.
+func (r *ExternalProcessorAttachmentReconciler) planVirtualHosts(
 	ctx context.Context,
 	attachment *v1alpha1.ExternalProcessorAttachment,
 	routeList *v1alpha1.CustomHTTPRouteList,
 	catchAllHostnames []string,
 	httpRouteList *gatewayv1.HTTPRouteList,
-) error {
+) (ef.VirtualHostsPlan, error) {
 	var claimed []string
 	if ef.VirtualHostsEnabled(attachment) {
 		gatewayList := &gatewayv1.GatewayList{}
 		if err := r.List(ctx, gatewayList); err != nil {
-			return fmt.Errorf("failed to list Gateways: %w", err)
+			return ef.VirtualHostsPlan{}, fmt.Errorf("failed to list Gateways: %w", err)
 		}
 		serviceList := &corev1.ServiceList{}
 		if err := r.List(ctx, serviceList); err != nil {
-			return fmt.Errorf("failed to list Services: %w", err)
+			return ef.VirtualHostsPlan{}, fmt.Errorf("failed to list Services: %w", err)
 		}
 		owned := ef.OwnedGateways(attachment, gatewayList, serviceList)
 		claimed = ef.ClaimedHTTPRouteHostnames(httpRouteList, owned)
@@ -173,8 +194,51 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileVirtualHostsEnvoyFilter
 	plan := ef.PlanVirtualHosts(attachment, routeList, catchAllHostnames, claimed)
 	attachment.Status.ManagedVirtualHosts = plan.Managed
 	r.updateConditionVirtualHosts(attachment, plan)
+	return plan, nil
+}
 
-	if len(plan.Managed) == 0 {
+// shrinkVirtualHosts drops from the live "-vhosts" EnvoyFilter every hostname not in
+// want, without adding any, so that the catch-all written next never meets a domain
+// still served here. Nothing is written when there is nothing to drop.
+func (r *ExternalProcessorAttachmentReconciler) shrinkVirtualHosts(
+	ctx context.Context,
+	attachment *v1alpha1.ExternalProcessorAttachment,
+	want []string,
+) error {
+	live := &unstructured.Unstructured{}
+	live.SetGroupVersionKind(ef.GVK)
+	key := types.NamespacedName{Name: attachment.Name + ef.VirtualHostsFilterSuffix, Namespace: attachment.Namespace}
+	if err := r.Get(ctx, key, live); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to get virtual hosts EnvoyFilter: %w", err)
+	}
+	wanted := make(map[string]struct{}, len(want))
+	for _, h := range want {
+		wanted[h] = struct{}{}
+	}
+	current := ef.VirtualHostsInEnvoyFilter(live)
+	keep := make([]string, 0, len(current))
+	for _, h := range current {
+		if _, ok := wanted[h]; ok {
+			keep = append(keep, h)
+		}
+	}
+	if len(keep) == len(current) {
+		return nil
+	}
+	return r.writeVirtualHosts(ctx, attachment, keep)
+}
+
+// writeVirtualHosts makes the "-vhosts" EnvoyFilter serve exactly hostnames (deleting
+// it when empty).
+func (r *ExternalProcessorAttachmentReconciler) writeVirtualHosts(
+	ctx context.Context,
+	attachment *v1alpha1.ExternalProcessorAttachment,
+	hostnames []string,
+) error {
+	if len(hostnames) == 0 {
 		key := types.NamespacedName{
 			Name:      attachment.Name + ef.VirtualHostsFilterSuffix,
 			Namespace: attachment.Namespace,
@@ -184,16 +248,13 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileVirtualHostsEnvoyFilter
 		}
 		return nil
 	}
-
-	envoyFilter, err := ef.BuildVirtualHostsEnvoyFilter(attachment, plan.Managed)
+	envoyFilter, err := ef.BuildVirtualHostsEnvoyFilter(attachment, hostnames)
 	if err != nil {
 		return fmt.Errorf("failed to build virtual hosts EnvoyFilter: %w", err)
 	}
 	if err := ef.UpsertUnstructured(ctx, r.Client, envoyFilter); err != nil {
 		return fmt.Errorf("failed to reconcile virtual hosts EnvoyFilter: %w", err)
 	}
-	log.FromContext(ctx).Info("Virtual hosts EnvoyFilter reconciled",
-		"virtualHosts", len(plan.Managed), "skipped", len(plan.Skipped))
 	return nil
 }
 

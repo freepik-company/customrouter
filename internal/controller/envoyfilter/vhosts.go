@@ -194,3 +194,19 @@ func BuildVirtualHostsEnvoyFilter(
 	}
 	return envoyFilter, nil
 }
+
+// VirtualHostsInEnvoyFilter returns the hostnames a "-vhosts" EnvoyFilter serves, in
+// patch order (one domain per VIRTUAL_HOST patch, as BuildVirtualHostsEnvoyFilter writes).
+func VirtualHostsInEnvoyFilter(envoyFilter *unstructured.Unstructured) []string {
+	patches, _, _ := unstructured.NestedSlice(envoyFilter.Object, "spec", "configPatches")
+	hostnames := make([]string, 0, len(patches))
+	for _, p := range patches {
+		patch, ok := p.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		domains, _, _ := unstructured.NestedStringSlice(patch, "patch", "value", "domains")
+		hostnames = append(hostnames, domains...)
+	}
+	return hostnames
+}

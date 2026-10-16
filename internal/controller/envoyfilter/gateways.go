@@ -194,26 +194,50 @@ func routeHostnamesOnGateway(hr *gatewayv1.HTTPRoute, gw *gatewayv1.Gateway, sec
 	}
 
 	var claimed []string
-	for _, l := range gw.Spec.Listeners {
+	for i := range gw.Spec.Listeners {
+		l := &gw.Spec.Listeners[i]
 		if section != nil && l.Name != *section {
+			continue
+		}
+		// An HTTPRoute only attaches to HTTP/HTTPS listeners that allow its kind; a
+		// sectionName pointing elsewhere (TCP, TLS…) attaches to nothing.
+		if !listenerAcceptsHTTPRoute(l) {
 			continue
 		}
 		if l.Hostname == nil || *l.Hostname == "" {
 			claimed = append(claimed, routeHostnames...)
 			continue
 		}
-		listener := string(*l.Hostname)
+		listenerHostname := string(*l.Hostname)
 		if len(routeHostnames) == 0 {
-			claimed = append(claimed, listener)
+			claimed = append(claimed, listenerHostname)
 			continue
 		}
 		for _, h := range routeHostnames {
-			if effective, ok := intersectHostnames(listener, h); ok {
+			if effective, ok := intersectHostnames(listenerHostname, h); ok {
 				claimed = append(claimed, effective)
 			}
 		}
 	}
 	return claimed
+}
+
+// listenerAcceptsHTTPRoute reports whether an HTTPRoute can attach to the listener:
+// protocol HTTP or HTTPS and, when allowedRoutes.kinds is set, HTTPRoute among them
+// (group defaulting to the Gateway API group).
+func listenerAcceptsHTTPRoute(l *gatewayv1.Listener) bool {
+	if l.Protocol != gatewayv1.HTTPProtocolType && l.Protocol != gatewayv1.HTTPSProtocolType {
+		return false
+	}
+	if l.AllowedRoutes == nil || len(l.AllowedRoutes.Kinds) == 0 {
+		return true
+	}
+	for _, k := range l.AllowedRoutes.Kinds {
+		if k.Kind == "HTTPRoute" && (k.Group == nil || *k.Group == gatewayv1.GroupName) {
+			return true
+		}
+	}
+	return false
 }
 
 // intersectHostnames is the hostname a route hostname and a listener hostname serve

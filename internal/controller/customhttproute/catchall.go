@@ -63,6 +63,14 @@ func (r *CustomHTTPRouteReconciler) reconcileCatchAllFromRoutes(
 	for i := range epaList.Items {
 		epa := &epaList.Items[i]
 
+		// With automatic virtual hosts the EPA controller is the only writer of this
+		// EPA's "-catchall" and "-vhosts" (it reconciles on every CustomHTTPRoute change
+		// in that mode): it orders the two writes so that no domain is ever added by
+		// both at once. Writing "-catchall" from here would bypass that order.
+		if ef.VirtualHostsEnabled(epa) {
+			continue
+		}
+
 		merged := ef.MergeCatchAllEntries(entries, epa)
 
 		if len(merged) == 0 {

@@ -30,6 +30,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	crv1alpha1 "github.com/freepik-company/customrouter/api/v1alpha1"
@@ -234,5 +235,126 @@ func TestReconcile_VirtualHosts_ServiceChangesOwnership(t *testing.T) {
 	}
 	if vhostsFilterExists(t, cl, epa) {
 		t.Fatal("once the Gateway is owned, auth.example.com belongs to its HTTPRoute: no automatic virtual host")
+	}
+}
+
+// virtualHostDomains returns the domains an EnvoyFilter adds with VIRTUAL_HOST ADD.
+func virtualHostDomains(obj *unstructured.Unstructured) []string {
+	patches, _, _ := unstructured.NestedSlice(obj.Object, "spec", "configPatches")
+	var out []string
+	for _, p := range patches {
+		patch := p.(map[string]interface{})
+		if patch["applyTo"] != "VIRTUAL_HOST" {
+			continue
+		}
+		domains, _, _ := unstructured.NestedStringSlice(patch, "patch", "value", "domains")
+		out = append(out, domains...)
+	}
+	return out
+}
+
+// TestReconcile_VirtualHosts_NeverOverlapCatchAll moves a hostname from the automatic
+// virtual hosts into the catch-all and back, and checks after every single write that
+// no domain is added by both "-vhosts" and "-catchall" at the same time.
+func TestReconcile_VirtualHosts_NeverOverlapCatchAll(t *testing.T) {
+	epa := testEPA(&crv1alpha1.VirtualHostsConfig{Mode: crv1alpha1.VirtualHostsModeAuto})
+	scheme := vhostScheme(t)
+
+	// Live VIRTUAL_HOST domains per EnvoyFilter, updated on every write.
+	state := map[string][]string{}
+	var writes []string
+	check := func(t *testing.T) {
+		t.Helper()
+		seen := map[string]string{}
+		for name, domains := range state {
+			for _, d := range domains {
+				if other, dup := seen[d]; dup && other != name {
+					t.Fatalf("domain %s added by both %s and %s after writes %v", d, other, name, writes)
+				}
+				seen[d] = name
+			}
+		}
+	}
+	record := func(obj client.Object, deleted bool) {
+		u, ok := obj.(*unstructured.Unstructured)
+		if !ok {
+			return
+		}
+		writes = append(writes, u.GetName())
+		if deleted {
+			delete(state, u.GetName())
+		} else {
+			state[u.GetName()] = virtualHostDomains(u)
+		}
+		check(t)
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(epa, testRoute("oidc", "id.example.com")).
+		WithStatusSubresource(&crv1alpha1.ExternalProcessorAttachment{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				record(obj, false)
+				return c.Create(ctx, obj, opts...)
+			},
+			Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				record(obj, false)
+				return c.Update(ctx, obj, opts...)
+			},
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				record(obj, true)
+				return c.Delete(ctx, obj, opts...)
+			},
+		}).
+		Build()
+	r := &ExternalProcessorAttachmentReconciler{Client: cl, Scheme: scheme}
+	key := types.NamespacedName{Name: epa.Name, Namespace: epa.Namespace}
+	reconcile := func() {
+		t.Helper()
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+	}
+	setCatchAll := func(hostnames ...string) {
+		t.Helper()
+		cur := &crv1alpha1.ExternalProcessorAttachment{}
+		if err := cl.Get(context.Background(), key, cur); err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		cur.Spec.CatchAllRoute = nil
+		if len(hostnames) > 0 {
+			cur.Spec.CatchAllRoute = &crv1alpha1.CatchAllRouteConfig{
+				Hostnames:  hostnames,
+				BackendRef: crv1alpha1.BackendRef{Name: "front", Namespace: "web", Port: 80},
+			}
+		}
+		if err := cl.Update(context.Background(), cur); err != nil {
+			t.Fatalf("Update EPA: %v", err)
+		}
+	}
+
+	reconcile()
+	if got := state[epa.Name+ef.VirtualHostsFilterSuffix]; !reflect.DeepEqual(got, []string{"id.example.com"}) {
+		t.Fatalf("start: -vhosts = %v", got)
+	}
+
+	// vhosts -> catch-all
+	setCatchAll("id.example.com")
+	reconcile()
+	if _, ok := state[epa.Name+ef.VirtualHostsFilterSuffix]; ok {
+		t.Fatalf("id.example.com must have left -vhosts: %v", state)
+	}
+	if got := state[epa.Name+ef.CatchAllFilterSuffix]; !reflect.DeepEqual(got, []string{"id.example.com"}) {
+		t.Fatalf("-catchall = %v", got)
+	}
+
+	// catch-all -> vhosts
+	setCatchAll()
+	reconcile()
+	if _, ok := state[epa.Name+ef.CatchAllFilterSuffix]; ok {
+		t.Fatalf("id.example.com must have left -catchall: %v", state)
+	}
+	if got := state[epa.Name+ef.VirtualHostsFilterSuffix]; !reflect.DeepEqual(got, []string{"id.example.com"}) {
+		t.Fatalf("end: -vhosts = %v", got)
 	}
 }

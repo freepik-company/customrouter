@@ -635,10 +635,18 @@ condition) when:
   intersection (Gateway API: the more specific one, so a route `*.example.com` on a
   listener `foo.example.com` claims only `foo.example.com`); wildcards are suffix
   matches over one or more labels, as in Gateway API and Envoy.
+  Only listeners an HTTPRoute can attach to count (protocol `HTTP`/`HTTPS` and, when
+  `allowedRoutes.kinds` is set, `HTTPRoute` among them).
   An HTTPRoute without `hostnames` claims the hostname of the listener it attaches to;
   on a listener without hostname it claims none (Istio serves it from a `*` virtual
   host, and Envoy prefers an exact domain over `*`, so they do not collide);
 - it is in `excludeHostnames` — reason `Excluded`.
+
+While `mode: Auto` is set, the attachment controller is the only writer of both
+`<name>-catchall` and `<name>-vhosts` (the CustomHTTPRoute controller leaves that
+attachment's catch-all alone), and it writes them in an order that never has a domain
+in both: first it drops from `<name>-vhosts` what moves into the catch-all, then it
+writes `<name>-catchall`, then it adds to `<name>-vhosts` what came out of it.
 
 The operator cannot see hand-written `VIRTUAL_HOST` EnvoyFilters. **Migrating** a
 hostname from one to the automatic virtual host has to happen in the same rollout:
