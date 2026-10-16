@@ -628,8 +628,13 @@ condition) when:
   the Service behind it (its `Hostname` address `<svc>.<ns>.svc[.cluster.local]`, or
   Istio's default `<gateway>-<gatewayClassName>`) selects pods matching
   `gatewayRef.selector`; set `virtualHosts.gateways` to name them explicitly instead.
-  A Gateway whose Service cannot be found counts as this attachment's: a wrongly
+  Gateways, HTTPRoutes and the Services that may front a Gateway are watched, so
+  ownership follows their changes. A Gateway whose Service cannot be found counts as this attachment's: a wrongly
   skipped hostname costs a 404, a duplicate domain breaks the whole gateway.
+  An HTTPRoute with `hostnames` on a listener with a hostname claims their
+  intersection (Gateway API: the more specific one, so a route `*.example.com` on a
+  listener `foo.example.com` claims only `foo.example.com`); wildcards are suffix
+  matches over one or more labels, as in Gateway API and Envoy.
   An HTTPRoute without `hostnames` claims the hostname of the listener it attaches to;
   on a listener without hostname it claims none (Istio serves it from a `*` virtual
   host, and Envoy prefers an exact domain over `*`, so they do not collide);

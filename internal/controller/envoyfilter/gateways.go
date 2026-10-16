@@ -89,6 +89,22 @@ func OwnedGateways(
 	return owned
 }
 
+// IsGatewayService reports whether the Service may front one of the Gateways (see
+// gatewayServices), so that a change to it can change Gateway ownership.
+func IsGatewayService(gatewayList *gatewayv1.GatewayList, service types.NamespacedName) bool {
+	if gatewayList == nil {
+		return false
+	}
+	for i := range gatewayList.Items {
+		for _, candidate := range gatewayServices(&gatewayList.Items[i]) {
+			if candidate == service {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // gatewayServices lists the Services that may front a Gateway: those named by its
 // Hostname addresses, or Istio's default Service when it has none.
 func gatewayServices(gw *gatewayv1.Gateway) []types.NamespacedName {
@@ -192,10 +208,26 @@ func routeHostnamesOnGateway(hr *gatewayv1.HTTPRoute, gw *gatewayv1.Gateway, sec
 			continue
 		}
 		for _, h := range routeHostnames {
-			if hostnameCovers(listener, h) || hostnameCovers(h, listener) {
-				claimed = append(claimed, h)
+			if effective, ok := intersectHostnames(listener, h); ok {
+				claimed = append(claimed, effective)
 			}
 		}
 	}
 	return claimed
+}
+
+// intersectHostnames is the hostname a route hostname and a listener hostname serve
+// together, per Gateway API v1 (HTTPRoute.spec.hostnames): the more specific of the
+// two when one covers the other, nothing otherwise. A listener "foo.example.com" with a
+// route "*.example.com" serves only "foo.example.com" (that is the virtual host domain
+// Istio programs), not the whole suffix.
+func intersectHostnames(listener, route string) (string, bool) {
+	switch {
+	case hostnameCovers(listener, route):
+		return route, true
+	case hostnameCovers(route, listener):
+		return listener, true
+	default:
+		return "", false
+	}
 }

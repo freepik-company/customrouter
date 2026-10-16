@@ -52,8 +52,11 @@ func VirtualHostsEnabled(epa *v1alpha1.ExternalProcessorAttachment) bool {
 	return epa.Spec.VirtualHosts != nil && epa.Spec.VirtualHosts.Mode == v1alpha1.VirtualHostsModeAuto
 }
 
-// hostnameCovers reports whether pattern (an exact hostname or a "*." wildcard, as in
-// Envoy virtual host domains) covers hostname.
+// hostnameCovers reports whether pattern (an exact hostname or a "*." wildcard) covers
+// hostname. A wildcard is a suffix match over one or more labels: "*.example.com" covers
+// "test.example.com" and "foo.test.example.com" but not "example.com". That is both the
+// Gateway API v1 Hostname semantics (Listener.hostname, HTTPRoute.spec.hostnames) and
+// how Envoy matches a "*.example.com" virtual host domain.
 func hostnameCovers(pattern, hostname string) bool {
 	if pattern == hostname {
 		return true

@@ -119,7 +119,9 @@ func TestOwnedGateways(t *testing.T) {
 }
 
 func TestClaimedHTTPRouteHostnames(t *testing.T) {
-	stable := gateway("stable", "", listener("proxy", ""), listener("auth", "auth.example.com"), listener("wild", "*.apps.example.com"))
+	stable := gateway("stable", "",
+		listener("proxy", ""), listener("auth", "auth.example.com"), listener("wild", "*.apps.example.com"),
+		listener("foo", "foo.example.com"))
 	owned := map[types.NamespacedName]*gatewayv1.Gateway{{Namespace: "istio", Name: "stable"}: &stable}
 
 	routes := &gatewayv1.HTTPRouteList{Items: []gatewayv1.HTTPRoute{
@@ -137,6 +139,11 @@ func TestClaimedHTTPRouteHostnames(t *testing.T) {
 		httpRoute("app", "catch", nil, parent("istio", "stable", "proxy")),
 		// Hostnames restricted to those the wildcard listener covers.
 		httpRoute("app", "apps", []string{"a.apps.example.com", "z.other.com"}, parent("istio", "stable", "wild")),
+		// Route wildcard on a precise listener: only the intersection (the listener's
+		// hostname), never the whole "*.example.com" suffix.
+		httpRoute("app", "narrow", []string{"*.example.com"}, parent("istio", "stable", "foo")),
+		// Route wildcard narrower than the listener wildcard: the route's.
+		httpRoute("app", "deeper", []string{"*.eu.apps.example.com"}, parent("istio", "stable", "wild")),
 		// Non-Gateway parent: ignored.
 		httpRoute("app", "svc", []string{"svc.example.com"}, gatewayv1.ParentReference{
 			Kind: ptr(gatewayv1.Kind("Service")), Name: "stable", Namespace: ptr(gatewayv1.Namespace("istio")),
@@ -145,8 +152,47 @@ func TestClaimedHTTPRouteHostnames(t *testing.T) {
 
 	got := ClaimedHTTPRouteHostnames(routes, owned)
 	sort.Strings(got)
-	want := []string{"a.apps.example.com", "auth.example.com", "console.example.com", "local.example.com"}
+	want := []string{"*.eu.apps.example.com", "a.apps.example.com", "auth.example.com", "console.example.com", "foo.example.com", "local.example.com"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("claimed = %v, want %v", got, want)
+	}
+}
+
+func TestIntersectHostnames(t *testing.T) {
+	cases := []struct {
+		listener, route, want string
+		ok                    bool
+	}{
+		{"foo.example.com", "*.example.com", "foo.example.com", true},
+		{"*.example.com", "foo.example.com", "foo.example.com", true},
+		{"*.example.com", "a.b.example.com", "a.b.example.com", true},
+		{"*.example.com", "*.a.example.com", "*.a.example.com", true},
+		{"*.a.example.com", "*.example.com", "*.a.example.com", true},
+		{"foo.example.com", "bar.example.com", "", false},
+		{"*.example.com", "example.com", "", false},
+		{"*.example.com", "test.example.net", "", false},
+	}
+	for _, c := range cases {
+		got, ok := intersectHostnames(c.listener, c.route)
+		if got != c.want || ok != c.ok {
+			t.Errorf("intersectHostnames(%q, %q) = %q, %v; want %q, %v", c.listener, c.route, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+func TestIsGatewayService(t *testing.T) {
+	gateways := &gatewayv1.GatewayList{Items: []gatewayv1.Gateway{
+		gateway("stable", "istio-gateway-stable-standalone.istio.svc.cluster.local", listener("proxy", "")),
+		gateway("internal", "", listener("http", "")),
+	}}
+	for svc, want := range map[types.NamespacedName]bool{
+		{Namespace: "istio", Name: "istio-gateway-stable-standalone"}: true,
+		{Namespace: "istio", Name: "internal-istio"}:                  true,
+		{Namespace: "istio", Name: "stable-istio"}:                    false, // has an address: default Service not used
+		{Namespace: "app", Name: "istio-gateway-stable-standalone"}:   false,
+	} {
+		if got := IsGatewayService(gateways, svc); got != want {
+			t.Errorf("IsGatewayService(%s) = %v, want %v", svc, got, want)
+		}
 	}
 }

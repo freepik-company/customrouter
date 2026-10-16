@@ -19,6 +19,8 @@ package externalprocessorattachment
 import (
 	"context"
 
+	corev1 "k8s.io/api/core/v1"
+
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -31,6 +33,7 @@ import (
 
 	crv1alpha1 "github.com/freepik-company/customrouter/api/v1alpha1"
 	"github.com/freepik-company/customrouter/internal/controller"
+	ef "github.com/freepik-company/customrouter/internal/controller/envoyfilter"
 )
 
 // ExternalProcessorAttachmentReconciler reconciles a ExternalProcessorAttachment object
@@ -136,6 +139,7 @@ func (r *ExternalProcessorAttachmentReconciler) SetupWithManager(mgr ctrl.Manage
 		Watches(&gatewayv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(r.findEPAsForHTTPRoute)).
 		Watches(&crv1alpha1.CustomHTTPRoute{}, handler.EnqueueRequestsFromMapFunc(r.findEPAsWithVirtualHosts)).
 		Watches(&gatewayv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(r.findEPAsWithVirtualHosts)).
+		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(r.findEPAsForGatewayService)).
 		Named("externalprocessorattachment").
 		Complete(r)
 }
@@ -184,4 +188,19 @@ func (r *ExternalProcessorAttachmentReconciler) findEPAsWithVirtualHosts(ctx con
 		})
 	}
 	return requests
+}
+
+// findEPAsForGatewayService enqueues the EPAs in virtualHosts mode Auto when a Service
+// that may front a Gateway changes (one named by a Gateway address, or Istio's default
+// "<gateway>-<gatewayClassName>"): its selector decides whether that Gateway, and so its
+// HTTPRoutes' hostnames, belong to the EPA. Other Services are ignored.
+func (r *ExternalProcessorAttachmentReconciler) findEPAsForGatewayService(ctx context.Context, obj client.Object) []reconcile.Request {
+	gatewayList := &gatewayv1.GatewayList{}
+	if err := r.List(ctx, gatewayList); err != nil {
+		return nil
+	}
+	if !ef.IsGatewayService(gatewayList, types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}) {
+		return nil
+	}
+	return r.findEPAsWithVirtualHosts(ctx, obj)
 }

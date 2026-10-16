@@ -181,3 +181,58 @@ func TestReconcile_VirtualHosts_Auto(t *testing.T) {
 		t.Fatal("virtual hosts EnvoyFilter must be deleted when the feature is turned off")
 	}
 }
+
+// A Service whose selector changes flips Gateway ownership: the watch must enqueue the
+// EPAs in Auto, and the next reconcile must stop managing the hostnames the now-owned
+// Gateway's HTTPRoutes serve (never a duplicate domain).
+func TestReconcile_VirtualHosts_ServiceChangesOwnership(t *testing.T) {
+	epa := testEPA(&crv1alpha1.VirtualHostsConfig{Mode: crv1alpha1.VirtualHostsModeAuto})
+	disabled := testEPA(nil)
+	disabled.Name = "other-epa"
+	addressType := gatewayv1.HostnameAddressType
+	gwNamespace := gatewayv1.Namespace("istio")
+	gw := &gatewayv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "stable", Namespace: "istio"},
+		Spec: gatewayv1.GatewaySpec{
+			GatewayClassName: "istio",
+			Addresses:        []gatewayv1.GatewaySpecAddress{{Type: &addressType, Value: "gw.istio.svc.cluster.local"}},
+			Listeners:        []gatewayv1.Listener{{Name: "proxy", Port: 80, Protocol: gatewayv1.HTTPProtocolType}},
+		},
+	}
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "istio"},
+		Spec:       corev1.ServiceSpec{Selector: map[string]string{"istio": "someone-else"}},
+	}
+	unrelated := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "app"}}
+	hr := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "console", Namespace: "keycloak"},
+		Spec: gatewayv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{{Name: "stable", Namespace: &gwNamespace}}},
+			Hostnames:       []gatewayv1.Hostname{"auth.example.com"},
+		},
+	}
+	cl, got := reconcileEPA(t, epa, disabled, gw, svc, unrelated, hr, testRoute("oidc", "auth.example.com"))
+	if want := []string{"auth.example.com"}; !reflect.DeepEqual(got.Status.ManagedVirtualHosts, want) {
+		t.Fatalf("foreign gateway: managed = %v, want %v", got.Status.ManagedVirtualHosts, want)
+	}
+
+	r := &ExternalProcessorAttachmentReconciler{Client: cl, Scheme: cl.Scheme()}
+	if reqs := r.findEPAsForGatewayService(context.Background(), unrelated); len(reqs) != 0 {
+		t.Fatalf("a Service that fronts no Gateway must not enqueue EPAs, got %v", reqs)
+	}
+	reqs := r.findEPAsForGatewayService(context.Background(), svc)
+	if len(reqs) != 1 || reqs[0].Name != epa.Name {
+		t.Fatalf("the Gateway's Service must enqueue only the EPAs in Auto, got %v", reqs)
+	}
+
+	svc.Spec.Selector = map[string]string{"istio": "gateway"}
+	if err := cl.Update(context.Background(), svc); err != nil {
+		t.Fatalf("Update Service: %v", err)
+	}
+	if _, err := r.Reconcile(context.Background(), reqs[0]); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if vhostsFilterExists(t, cl, epa) {
+		t.Fatal("once the Gateway is owned, auth.example.com belongs to its HTTPRoute: no automatic virtual host")
+	}
+}
