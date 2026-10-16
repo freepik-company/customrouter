@@ -59,16 +59,23 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileEnvoyFilters(
 	catchAllEntries := ef.CollectCatchAllEntries(routeList)
 	mergedEntries := ef.MergeCatchAllEntries(catchAllEntries, attachment)
 
-	if len(mergedEntries) > 0 {
-		hostnames := make([]string, 0, len(mergedEntries))
-		for _, e := range mergedEntries {
-			hostnames = append(hostnames, e.Hostname)
-		}
-		httpRouteList := &gatewayv1.HTTPRouteList{}
+	catchAllHostnames := make([]string, 0, len(mergedEntries))
+	for _, e := range mergedEntries {
+		catchAllHostnames = append(catchAllHostnames, e.Hostname)
+	}
+
+	// HTTPRoutes decide both how the catch-all is injected and which hostnames
+	// already own a virtual host (so no automatic one is added for them).
+	var httpRouteList *gatewayv1.HTTPRouteList
+	if len(mergedEntries) > 0 || ef.VirtualHostsEnabled(attachment) {
+		httpRouteList = &gatewayv1.HTTPRouteList{}
 		if err := r.List(ctx, httpRouteList); err != nil {
 			return fmt.Errorf("failed to list HTTPRoutes: %w", err)
 		}
-		hostnamesWithHTTPRoute := ef.CollectHostnamesWithHTTPRoute(httpRouteList, hostnames)
+	}
+
+	if len(mergedEntries) > 0 {
+		hostnamesWithHTTPRoute := ef.CollectHostnamesWithHTTPRoute(httpRouteList, catchAllHostnames)
 
 		envoyFilter, err := ef.BuildCatchAllEnvoyFilter(attachment, mergedEntries, hostnamesWithHTTPRoute)
 		if err != nil {
@@ -85,6 +92,10 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileEnvoyFilters(
 		if err := ef.DeleteEnvoyFilter(ctx, r.Client, key); err != nil {
 			return fmt.Errorf("failed to delete catch-all EnvoyFilter: %w", err)
 		}
+	}
+
+	if err := r.reconcileVirtualHostsEnvoyFilter(ctx, attachment, routeList, catchAllHostnames, httpRouteList); err != nil {
+		return err
 	}
 
 	mirrorEntries := ef.CollectMirrorEntries(routeList)
@@ -132,6 +143,42 @@ func (r *ExternalProcessorAttachmentReconciler) reconcileEnvoyFilters(
 		"mirrorEntries", len(mirrorEntries),
 		"corsEntries", len(corsEntries))
 
+	return nil
+}
+
+// reconcileVirtualHostsEnvoyFilter creates, updates or deletes the "-vhosts" EnvoyFilter
+// (spec.virtualHosts mode Auto) and records the managed hostnames in the status.
+func (r *ExternalProcessorAttachmentReconciler) reconcileVirtualHostsEnvoyFilter(
+	ctx context.Context,
+	attachment *v1alpha1.ExternalProcessorAttachment,
+	routeList *v1alpha1.CustomHTTPRouteList,
+	catchAllHostnames []string,
+	httpRouteList *gatewayv1.HTTPRouteList,
+) error {
+	plan := ef.PlanVirtualHosts(attachment, routeList, catchAllHostnames, httpRouteList)
+	attachment.Status.ManagedVirtualHosts = plan.Managed
+	r.updateConditionVirtualHosts(attachment, plan)
+
+	if len(plan.Managed) == 0 {
+		key := types.NamespacedName{
+			Name:      attachment.Name + ef.VirtualHostsFilterSuffix,
+			Namespace: attachment.Namespace,
+		}
+		if err := ef.DeleteEnvoyFilter(ctx, r.Client, key); err != nil {
+			return fmt.Errorf("failed to delete virtual hosts EnvoyFilter: %w", err)
+		}
+		return nil
+	}
+
+	envoyFilter, err := ef.BuildVirtualHostsEnvoyFilter(attachment, plan.Managed)
+	if err != nil {
+		return fmt.Errorf("failed to build virtual hosts EnvoyFilter: %w", err)
+	}
+	if err := ef.UpsertUnstructured(ctx, r.Client, envoyFilter); err != nil {
+		return fmt.Errorf("failed to reconcile virtual hosts EnvoyFilter: %w", err)
+	}
+	log.FromContext(ctx).Info("Virtual hosts EnvoyFilter reconciled",
+		"virtualHosts", len(plan.Managed), "skipped", len(plan.Skipped))
 	return nil
 }
 
@@ -292,6 +339,7 @@ func (r *ExternalProcessorAttachmentReconciler) deleteEnvoyFilters(
 		ef.CatchAllFilterSuffix,
 		ef.MirrorFilterSuffix,
 		ef.CORSFilterSuffix,
+		ef.VirtualHostsFilterSuffix,
 	}
 
 	for _, suffix := range suffixes {

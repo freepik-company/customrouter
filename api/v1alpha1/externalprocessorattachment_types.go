@@ -137,6 +137,55 @@ type CatchAllRouteConfig struct {
 	BackendRef BackendRef `json:"backendRef"`
 }
 
+// VirtualHostsMode selects whether the operator generates Envoy virtual hosts for the
+// hostnames declared by CustomHTTPRoutes.
+// +kubebuilder:validation:Enum=Disabled;Auto
+type VirtualHostsMode string
+
+const (
+	// VirtualHostsModeDisabled generates no virtual hosts (default).
+	VirtualHostsModeDisabled VirtualHostsMode = "Disabled"
+	// VirtualHostsModeAuto generates one virtual host per CustomHTTPRoute hostname that
+	// has no other owner on the gateway.
+	VirtualHostsModeAuto VirtualHostsMode = "Auto"
+)
+
+// VirtualHostsConfig configures automatic virtual hosts for CustomHTTPRoute hostnames.
+//
+// Without a virtual host for its domain, Envoy answers 404 (NR) before the ext_proc
+// filter runs, so a CustomHTTPRoute for a hostname that no HTTPRoute, catchAllRoute or
+// hand-written EnvoyFilter covers never matches. In Auto mode the operator adds, for each
+// such hostname, a virtual host with the header-gated dynamic route and a direct response
+// (defaultStatusCode) for every request no CustomHTTPRoute matches.
+//
+// A hostname is never given a virtual host when something else already owns its domain
+// (two virtual hosts with the same domain invalidate the gateway's route configuration):
+//   - it is covered by a catchAllRoute (exact or "*." wildcard),
+//   - an HTTPRoute declares it (exact or "*." wildcard): its virtual host already gets the
+//     dynamic route from the "<attachment>-routes" EnvoyFilter,
+//   - it is listed in excludeHostnames (owners the operator cannot see, such as a
+//     hand-written VIRTUAL_HOST EnvoyFilter).
+type VirtualHostsConfig struct {
+	// mode is Disabled (default: nothing is generated) or Auto.
+	// +optional
+	// +kubebuilder:default=Disabled
+	Mode VirtualHostsMode `json:"mode,omitempty"`
+
+	// defaultStatusCode is the status of the direct response for requests to a managed
+	// hostname that no CustomHTTPRoute matches. Defaults to 404.
+	// +optional
+	// +kubebuilder:default=404
+	// +kubebuilder:validation:Minimum=200
+	// +kubebuilder:validation:Maximum=599
+	DefaultStatusCode int32 `json:"defaultStatusCode,omitempty"`
+
+	// excludeHostnames are hostnames (exact or "*." wildcard) the operator must never
+	// give a virtual host, because another owner it cannot detect serves them.
+	// +optional
+	// +listType=set
+	ExcludeHostnames []string `json:"excludeHostnames,omitempty"`
+}
+
 // ExternalProcessorAttachmentSpec defines the desired state of ExternalProcessorAttachment
 type ExternalProcessorAttachmentSpec struct {
 	// gatewayRef identifies the Gateway workload to attach the external processor to
@@ -160,6 +209,11 @@ type ExternalProcessorAttachmentSpec struct {
 	// +optional
 	RetryPolicy *RetryPolicyConfig `json:"retryPolicy,omitempty"`
 
+	// virtualHosts configures automatic virtual hosts for the hostnames declared by
+	// CustomHTTPRoutes. When not specified (or mode Disabled), none are generated.
+	// +optional
+	VirtualHosts *VirtualHostsConfig `json:"virtualHosts,omitempty"`
+
 	// routeTimeout is the per-request timeout applied to all customrouter-managed
 	// Envoy routes. Must be a valid duration string (e.g., "30s", "5s", "1m").
 	// Defaults to "30s" when not specified.
@@ -174,6 +228,12 @@ type ExternalProcessorAttachmentStatus struct {
 	// observedGeneration is the most recent generation observed by the controller.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// managedVirtualHosts are the hostnames the operator currently gives a virtual host
+	// (virtualHosts mode Auto), sorted.
+	// +optional
+	// +listType=set
+	ManagedVirtualHosts []string `json:"managedVirtualHosts,omitempty"`
 
 	// conditions represent the current state of the ExternalProcessorAttachment resource.
 	// +listType=map

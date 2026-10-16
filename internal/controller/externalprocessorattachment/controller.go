@@ -132,6 +132,7 @@ func (r *ExternalProcessorAttachmentReconciler) SetupWithManager(mgr ctrl.Manage
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&crv1alpha1.ExternalProcessorAttachment{}).
 		Watches(&gatewayv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(r.findEPAsForHTTPRoute)).
+		Watches(&crv1alpha1.CustomHTTPRoute{}, handler.EnqueueRequestsFromMapFunc(r.findEPAsWithVirtualHosts)).
 		Named("externalprocessorattachment").
 		Complete(r)
 }
@@ -153,6 +154,28 @@ func (r *ExternalProcessorAttachmentReconciler) findEPAsForHTTPRoute(ctx context
 				Name:      epa.Name,
 				Namespace: epa.Namespace,
 			},
+		})
+	}
+	return requests
+}
+
+// findEPAsWithVirtualHosts enqueues the EPAs in virtualHosts mode Auto when a
+// CustomHTTPRoute changes: its hostnames decide which virtual hosts they generate.
+// EPAs without the feature do not depend on CustomHTTPRoutes here (their catch-all,
+// mirror and CORS filters are also driven by the CustomHTTPRoute controller).
+func (r *ExternalProcessorAttachmentReconciler) findEPAsWithVirtualHosts(ctx context.Context, _ client.Object) []reconcile.Request {
+	epaList := &crv1alpha1.ExternalProcessorAttachmentList{}
+	if err := r.List(ctx, epaList); err != nil {
+		return nil
+	}
+	var requests []reconcile.Request
+	for i := range epaList.Items {
+		epa := &epaList.Items[i]
+		if epa.Spec.VirtualHosts == nil || epa.Spec.VirtualHosts.Mode != crv1alpha1.VirtualHostsModeAuto {
+			continue
+		}
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: epa.Name, Namespace: epa.Namespace},
 		})
 	}
 	return requests
